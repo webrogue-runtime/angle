@@ -124,7 +124,8 @@ declare_args() {
     angle_64bit_current_cpu = true
   } else if (current_cpu == "arm" || current_cpu == "x86" ||
              current_cpu == "mipsel" || current_cpu == "s390" ||
-             current_cpu == "ppc" || current_cpu == "loong32") {
+             current_cpu == "ppc" || current_cpu == "loong32" || 
+             current_cpu == "wasm32") {
     angle_64bit_current_cpu = false
   } else {
     assert(false, "Unknown current CPU: $current_cpu")
@@ -253,7 +254,7 @@ if (!defined(checkout_angle_mesa)) {
 declare_args() {
   # Currently SwiftShader's Vulkan front-end doesn't build on Android.
   # Disabled by default on MSVC because of compiler warnings/errors.
-  angle_enable_swiftshader = angle_enable_vulkan && !is_android && is_clang
+  angle_enable_swiftshader = angle_enable_vulkan && !is_android && !is_wasi && is_clang
 
   # Translator backend support:
   angle_enable_hlsl = angle_enable_d3d9 || angle_enable_d3d11

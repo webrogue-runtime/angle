@@ -602,6 +602,12 @@ rx::DisplayImpl *CreateDisplayFromAttribs(EGLAttrib displayType,
                 impl = rx::CreateVulkanMacDisplay(state);
             }
             break;
+#    elif defined(ANGLE_PLATFORM_WEBROGUE)
+            if (rx::IsVulkanWebrogueDisplayAvailable())
+            {
+                impl = rx::CreateVulkanWebrogueDisplay(state);
+            }
+            break;
 #    else
 #        error Unsupported Vulkan platform.
 #    endif

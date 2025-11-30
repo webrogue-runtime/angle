@@ -515,6 +515,10 @@ angle::Result SyncHelperNativeFence::clientWait(ErrorContext *context,
 
 angle::Result SyncHelperNativeFence::serverWait(ContextVk *contextVk)
 {
+#ifdef __wasi__
+    ANGLE_VK_UNREACHABLE(contextVk);
+    return angle::Result::Stop;
+#else
     Renderer *renderer = contextVk->getRenderer();
 
     // If already signaled, no need to wait
@@ -544,6 +548,7 @@ angle::Result SyncHelperNativeFence::serverWait(ContextVk *contextVk)
                                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
     contextVk->addGarbage(&waitSemaphore.get());  // This releases the handle.
     return angle::Result::Continue;
+#endif
 }
 
 angle::Result SyncHelperNativeFence::getStatus(ErrorContext *context,
@@ -561,6 +566,9 @@ angle::Result SyncHelperNativeFence::getStatus(ErrorContext *context,
 
 angle::Result SyncHelperNativeFence::dupNativeFenceFD(ErrorContext *context, int *fdOut) const
 {
+#ifdef __wasi__
+    return angle::Result::Stop;
+#else
     if (mExternalFence->getFenceFd() == kInvalidFenceFd)
     {
         return angle::Result::Stop;
@@ -569,6 +577,7 @@ angle::Result SyncHelperNativeFence::dupNativeFenceFD(ErrorContext *context, int
     *fdOut = dup(mExternalFence->getFenceFd());
 
     return angle::Result::Continue;
+#endif
 }
 
 }  // namespace vk

@@ -47,6 +47,7 @@ void CloseZirconVmo(zx_handle_t handle)
 #endif
 }
 
+#ifndef __wasi__
 angle::Result DuplicateZirconVmo(ContextVk *contextVk, zx_handle_t handle, zx_handle_t *duplicate)
 {
 #if defined(ANGLE_PLATFORM_FUCHSIA)
@@ -73,6 +74,7 @@ VkExternalMemoryHandleTypeFlagBits ToVulkanHandleType(gl::HandleType handleType)
             return VK_EXTERNAL_MEMORY_HANDLE_TYPE_FLAG_BITS_MAX_ENUM;
     }
 }
+#endif
 
 }  // namespace
 
@@ -130,6 +132,10 @@ angle::Result MemoryObjectVk::importZirconHandle(gl::Context *context,
                                                  gl::HandleType handleType,
                                                  GLuint handle)
 {
+#ifdef __wasi__
+    UNREACHABLE();
+    return angle::Result::Stop;
+#else
     ContextVk *contextVk = vk::GetImpl(context);
 
     switch (handleType)
@@ -141,6 +147,7 @@ angle::Result MemoryObjectVk::importZirconHandle(gl::Context *context,
             UNREACHABLE();
             return angle::Result::Stop;
     }
+#endif
 }
 
 angle::Result MemoryObjectVk::importOpaqueFd(ContextVk *contextVk, GLuint64 size, GLint fd)
@@ -154,6 +161,7 @@ angle::Result MemoryObjectVk::importOpaqueFd(ContextVk *contextVk, GLuint64 size
     return angle::Result::Continue;
 }
 
+#ifndef __wasi__
 angle::Result MemoryObjectVk::importZirconVmo(ContextVk *contextVk, GLuint64 size, GLuint handle)
 {
     ASSERT(mHandleType == gl::HandleType::InvalidEnum);
@@ -164,6 +172,7 @@ angle::Result MemoryObjectVk::importZirconVmo(ContextVk *contextVk, GLuint64 siz
     mSize         = size;
     return angle::Result::Continue;
 }
+#endif
 
 angle::Result MemoryObjectVk::createImage(ContextVk *contextVk,
                                           gl::TextureType type,
@@ -176,6 +185,10 @@ angle::Result MemoryObjectVk::createImage(ContextVk *contextVk,
                                           GLbitfield usageFlags,
                                           const void *imageCreateInfoPNext)
 {
+#ifdef __wasi__
+    ANGLE_VK_UNREACHABLE(contextVk);
+    return angle::Result::Stop;
+#else
     vk::Renderer *renderer = contextVk->getRenderer();
 
     const vk::Format &vkFormat     = renderer->getFormat(internalFormat);
@@ -251,6 +264,7 @@ angle::Result MemoryObjectVk::createImage(ContextVk *contextVk,
                                         contextVk->getDeviceQueueIndex(), flags));
 
     return angle::Result::Continue;
+#endif
 }
 
 }  // namespace rx

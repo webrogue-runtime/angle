@@ -2281,6 +2281,13 @@ angle::Result Renderer::enableInstanceExtensions(vk::ErrorContext *context,
     return angle::Result::Continue;
 }
 
+#if defined(__wasi__)
+extern "C" PFN_vkVoidFunction vk_icdGetInstanceProcAddr(
+    VkInstance                                  instance,
+    const char*                                 pName
+);
+#endif
+
 angle::Result Renderer::initialize(vk::ErrorContext *context,
                                    vk::GlobalOps *globalOps,
                                    angle::vk::ICD desiredICD,
@@ -2299,12 +2306,16 @@ angle::Result Renderer::initialize(vk::ErrorContext *context,
 #if defined(ANGLE_SHARED_LIBVULKAN)
     {
         ANGLE_SCOPED_DISABLE_MSAN();
+#ifdef __wasi__
+        PFN_vkGetInstanceProcAddr vulkanLoaderGetInstanceProcAddr = vk_icdGetInstanceProcAddr;
+#else
         mLibVulkanLibrary = angle::vk::OpenLibVulkan();
         ANGLE_VK_CHECK(context, mLibVulkanLibrary, VK_ERROR_INITIALIZATION_FAILED);
 
         PFN_vkGetInstanceProcAddr vulkanLoaderGetInstanceProcAddr =
             reinterpret_cast<PFN_vkGetInstanceProcAddr>(
                 angle::GetLibrarySymbol(mLibVulkanLibrary, "vkGetInstanceProcAddr"));
+#endif
 
         // Set all vk* function ptrs
         volkInitializeCustom(vulkanLoaderGetInstanceProcAddr);

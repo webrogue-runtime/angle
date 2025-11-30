@@ -207,6 +207,15 @@ if (angle_use_wayland) {
   ]
 }
 
+if (is_wasi) {
+  vulkan_backend_sources += [
+    "webrogue/DisplayVkWebrogue.cpp",
+    "webrogue/DisplayVkWebrogue.h",
+    "webrogue/WindowSurfaceVkWebrogue.cpp",
+    "webrogue/WindowSurfaceVkWebrogue.h",
+  ]
+}
+
 if (angle_has_build && angle_use_gbm) {
   vulkan_backend_sources += [
     "linux/gbm/DisplayVkGbm.cpp",

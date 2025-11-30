@@ -1,0 +1,39 @@
+//
+// Copyright 2016 The ANGLE Project Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+//
+// DisplayVkWebrogue.h:
+//    Defines the class interface for DisplayVkWebrogue, implementing DisplayVk for Windows.
+//
+
+#ifndef LIBANGLE_RENDERER_VULKAN_WEBROGUE_DISPLAYVKWEBROGUE_H_
+#define LIBANGLE_RENDERER_VULKAN_WEBROGUE_DISPLAYVKWEBROGUE_H_
+
+#include "libANGLE/renderer/vulkan/DisplayVk.h"
+
+namespace rx
+{
+class DisplayVkWebrogue : public DisplayVk
+{
+  public:
+    DisplayVkWebrogue(const egl::DisplayState &state);
+    ~DisplayVkWebrogue() override;
+
+    egl::Error initialize(egl::Display *display) override;
+    void terminate() override;
+
+    bool isValidNativeWindow(EGLNativeWindowType window) const override;
+
+    SurfaceImpl *createWindowSurfaceVk(const egl::SurfaceState &state,
+                                       EGLNativeWindowType window) override;
+
+    egl::ConfigSet generateConfigs() override;
+    void checkConfigSupport(egl::Config *config) override;
+
+    const char *getWSIExtension() const override;
+};
+
+}  // namespace rx
+
+#endif  // LIBANGLE_RENDERER_VULKAN_WEBROGUE_DISPLAYVKWEBROGUE_H_

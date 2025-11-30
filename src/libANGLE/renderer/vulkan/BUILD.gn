@@ -136,6 +136,7 @@ template("angle_vulkan_backend_template") {
       deps += [ "$angle_root:angle_version_info" ]
     }
 
+    include_dirs = []
     # OpenCL on ANGLE needs both spirv-tools and clspv for compiler
     if (angle_enable_cl) {
       deps += [
@@ -143,7 +144,7 @@ template("angle_vulkan_backend_template") {
         "$angle_root/third_party/spirv-tools/src/:spvtools",
         "$angle_root/third_party/spirv-tools/src/:spvtools_opt",
       ]
-      include_dirs = [
+      include_dirs += [
         "$angle_root/third_party/spirv-tools/src/include",
         "$angle_root/third_party/clspv/src/include",
       ]
@@ -189,6 +190,12 @@ template("angle_vulkan_backend_template") {
 
     if (is_fuchsia) {
       public_deps += [ "$angle_root/src/common/fuchsia_egl:backend" ]
+    }
+
+    if (is_wasi) {
+      include_dirs += [
+        "//third_party/webroguegfx/include",
+      ]
     }
 
     # Include generated shaders.

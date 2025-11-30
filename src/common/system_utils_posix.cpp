@@ -17,15 +17,23 @@
 #include <iostream>
 
 #include <dlfcn.h>
+#ifndef __wasi__
 #include <grp.h>
+#endif
 #include <inttypes.h>
+#ifndef __wasi__
 #include <pwd.h>
+#endif
 #include <signal.h>
 #include <string.h>
+#ifndef __wasi__
 #include <sys/mman.h>
+#endif
 #include <sys/stat.h>
 #include <sys/types.h>
+#ifndef __wasi__
 #include <sys/wait.h>
+#endif
 #include <unistd.h>
 
 #include "common/string_utils.h"
@@ -34,7 +42,9 @@
 #    include <zircon/process.h>
 #    include <zircon/syscalls.h>
 #else
+#ifndef __wasi__
 #    include <sys/resource.h>
+#endif
 #endif
 
 namespace angle
@@ -44,6 +54,9 @@ namespace
 {
 std::string GetModulePath(void *moduleOrSymbol)
 {
+#ifdef __wasi__
+    __builtin_unreachable();
+#else
     Dl_info dlInfo;
     if (dladdr(moduleOrSymbol, &dlInfo) == 0)
     {
@@ -62,10 +75,14 @@ std::string GetModulePath(void *moduleOrSymbol)
 #endif
 
     return dlInfo.dli_fname;
+#endif
 }
 
 void *OpenPosixLibrary(const std::string &fullPath, int extraFlags, std::string *errorOut)
 {
+#ifdef __wasi__
+    __builtin_unreachable();
+#else
     void *module = dlopen(fullPath.c_str(), RTLD_NOW | extraFlags);
     if (module)
     {
@@ -111,11 +128,15 @@ void *OpenPosixLibrary(const std::string &fullPath, int extraFlags, std::string 
         }
     }
     return module;
+#endif
 }
 }  // namespace
 
 Optional<std::string> GetCWD()
 {
+#ifdef __wasi__
+    __builtin_unreachable();
+#else
     std::array<char, 4096> pathBuf;
     char *result = getcwd(pathBuf.data(), pathBuf.size());
     if (result == nullptr)
@@ -123,11 +144,16 @@ Optional<std::string> GetCWD()
         return Optional<std::string>::Invalid();
     }
     return std::string(pathBuf.data());
+#endif
 }
 
 bool SetCWD(const char *dirName)
 {
+#ifdef __wasi__
+    __builtin_unreachable();
+#else
     return (chdir(dirName) == 0);
+#endif
 }
 
 bool UnsetEnvironmentVar(const char *variableName)
@@ -230,7 +256,11 @@ void *GetLibrarySymbol(void *libraryHandle, const char *symbolName)
         return nullptr;
     }
 
+#ifdef __wasi__
+    __builtin_unreachable();
+#else
     return dlsym(libraryHandle, symbolName);
+#endif
 }
 
 std::string GetLibraryPath(void *libraryHandle)
@@ -247,7 +277,11 @@ void CloseSystemLibrary(void *libraryHandle)
 {
     if (libraryHandle)
     {
+#ifdef __wasi__
+        __builtin_unreachable();
+#else
         dlclose(libraryHandle);
+#endif
     }
 }
 
@@ -362,6 +396,9 @@ Optional<std::string> CreateTemporaryFileInDirectory(const std::string &director
 Optional<std::string> CreateTemporaryFileInDirectoryWithExtension(const std::string &directory,
                                                                   const std::string &extension)
 {
+#ifdef __wasi__
+    __builtin_unreachable();
+#else
     std::string tempFileTemplate = directory + "/.angle.XXXXXX" + extension;
 
     int fd = mkstemps(&tempFileTemplate[0], static_cast<int>(extension.size()));
@@ -373,10 +410,14 @@ Optional<std::string> CreateTemporaryFileInDirectoryWithExtension(const std::str
     }
 
     return Optional<std::string>::Invalid();
+#endif
 }
 
 double GetCurrentProcessCpuTime()
 {
+#ifdef __wasi__
+    __builtin_unreachable();
+#else
 #ifdef ANGLE_PLATFORM_FUCHSIA
     static zx_handle_t me = zx_process_self();
     zx_info_task_runtime_t task_runtime;
@@ -394,10 +435,12 @@ double GetCurrentProcessCpuTime()
     double systemTime = usage.ru_stime.tv_sec + usage.ru_stime.tv_usec * 1e-6;
     return userTime + systemTime;
 #endif
+#endif
 }
 
 namespace
 {
+#ifndef __wasi__
 bool SetMemoryProtection(uintptr_t start, size_t size, int protections)
 {
     int ret = mprotect(reinterpret_cast<void *>(start), size, protections);
@@ -407,6 +450,7 @@ bool SetMemoryProtection(uintptr_t start, size_t size, int protections)
     }
     return ret == 0;
 }
+#endif
 
 class PosixPageFaultHandler : public PageFaultHandler
 {
@@ -416,13 +460,16 @@ class PosixPageFaultHandler : public PageFaultHandler
 
     bool enable() override;
     bool disable() override;
+#ifndef __wasi__
     void handle(int sig, siginfo_t *info, void *unused);
 
   private:
     struct sigaction mDefaultBusAction  = {};
     struct sigaction mDefaultSegvAction = {};
+#endif
 };
 
+#ifndef __wasi__
 PosixPageFaultHandler *gPosixPageFaultHandler = nullptr;
 void SegfaultHandlerFunction(int sig, siginfo_t *info, void *unused)
 {
@@ -456,15 +503,23 @@ void PosixPageFaultHandler::handle(int sig, siginfo_t *info, void *unused)
         }
     }
 }
+#endif
 
 bool PosixPageFaultHandler::disable()
 {
+#ifdef __wasi__
+    __builtin_unreachable();
+#else
     return sigaction(SIGSEGV, &mDefaultSegvAction, nullptr) == 0 &&
            sigaction(SIGBUS, &mDefaultBusAction, nullptr) == 0;
+#endif
 }
 
 bool PosixPageFaultHandler::enable()
 {
+#ifdef __wasi__
+    __builtin_unreachable();
+#else
     struct sigaction sigAction = {};
     sigAction.sa_flags         = SA_SIGINFO;
     sigAction.sa_sigaction     = &SegfaultHandlerFunction;
@@ -473,23 +528,35 @@ bool PosixPageFaultHandler::enable()
     // Some POSIX implementations use SIGBUS for mprotect faults
     return sigaction(SIGSEGV, &sigAction, &mDefaultSegvAction) == 0 &&
            sigaction(SIGBUS, &sigAction, &mDefaultBusAction) == 0;
+#endif
 }
 }  // namespace
 
 // Set write protection
 bool ProtectMemory(uintptr_t start, size_t size)
 {
+#ifdef __wasi__
+    __builtin_unreachable();
+#else
     return SetMemoryProtection(start, size, PROT_READ);
+#endif
 }
 
 // Allow reading and writing
 bool UnprotectMemory(uintptr_t start, size_t size)
 {
+#ifdef __wasi__
+    __builtin_unreachable();
+#else
     return SetMemoryProtection(start, size, PROT_READ | PROT_WRITE);
+#endif
 }
 
 size_t GetPageSize()
 {
+#ifdef __wasi__
+    return 16 * 1024;
+#else
     long pageSize = sysconf(_SC_PAGE_SIZE);
     if (pageSize < 0)
     {
@@ -497,13 +564,16 @@ size_t GetPageSize()
         return 0;
     }
     return static_cast<size_t>(pageSize);
+#endif
 }
 
+#ifndef __wasi__
 PageFaultHandler *CreatePageFaultHandler(PageFaultCallback callback)
 {
     gPosixPageFaultHandler = new PosixPageFaultHandler(callback);
     return gPosixPageFaultHandler;
 }
+#endif
 
 uint64_t GetProcessMemoryUsageKB()
 {

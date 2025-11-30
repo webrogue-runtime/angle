@@ -151,6 +151,12 @@ typedef khronos_uintptr_t      EGLNativeDisplayType;
 typedef struct _screen_pixmap* EGLNativePixmapType;  /* screen_pixmap_t */
 typedef struct _screen_window* EGLNativeWindowType;  /* screen_window_t */
 
+#elif defined(__wasi__)
+
+typedef void *EGLNativeDisplayType;
+typedef void *EGLNativePixmapType;
+typedef void *EGLNativeWindowType;
+
 #else
 #error "Platform not recognized"
 #endif

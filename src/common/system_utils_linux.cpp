@@ -63,6 +63,10 @@ void SetCurrentThreadName(const char *name)
     // There's a 15-character (16 including '\0') limit.  If the name is too big (and ERANGE is
     // returned), name will be ignored.
     ASSERT(strlen(name) < 16);
+#ifdef __wasi__
+    // __builtin_unreachable();
+#else
     pthread_setname_np(pthread_self(), name);
+#endif
 }
 }  // namespace angle
