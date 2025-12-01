@@ -8,11 +8,13 @@
 extern "C" {
 #endif
 
-typedef uint32_t wr_window_handle;
+typedef struct wr_window_s wr_window_s;
+typedef wr_window_s* wr_window;
 
-void webroguegfx_make_window(wr_window_handle *out_window);
-void webroguegfx_window_size(wr_window_handle window, int *width, int *height);
-void webroguegfx_gl_size(wr_window_handle window, int *width, int *height);
+void webroguegfx_make_window(wr_window *out_window);
+void webroguegfx_window_size(wr_window window, int *width, int *height);
+void webroguegfx_gl_size(wr_window window, int *width, int *height);
+uint64_t webroguegfx_vulkan_make_surface(wr_window window, uint64_t vk_instance);
 
 // Events
 struct webrogue_event_mouse_button {
