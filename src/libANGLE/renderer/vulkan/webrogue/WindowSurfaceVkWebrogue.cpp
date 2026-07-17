@@ -26,7 +26,7 @@ angle::Result WindowSurfaceVkWebrogue::createSurfaceVk(vk::ErrorContext *context
 
     createInfo.sType     = VK_STRUCTURE_TYPE_SURFACE_CREATE_INFO_WEBROGUE;
     createInfo.flags     = 0;
-    createInfo.window    = mNativeWindowType;
+    createInfo.webrogue_window_id = webroguegfx_get_vulkan_window_id((wr_window)mNativeWindowType);
     auto pfn_vkCreateSurfaceWEBROGUE = (PFN_vkCreateSurfaceWEBROGUE)vkGetInstanceProcAddr(context->getRenderer()->getInstance(), "vkCreateSurfaceWEBROGUE");
     ANGLE_VK_CHECK(context, pfn_vkCreateSurfaceWEBROGUE, VK_ERROR_FEATURE_NOT_PRESENT);
     ANGLE_VK_TRY(context, pfn_vkCreateSurfaceWEBROGUE(context->getRenderer()->getInstance(),
