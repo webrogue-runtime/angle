@@ -56,7 +56,15 @@ egl::Error DisplayVkWebrogue::initialize(egl::Display *display)
 
 egl::ConfigSet DisplayVkWebrogue::generateConfigs()
 {
-    const std::array<GLenum, 1> kColorFormats = {GL_BGRA8_EXT}; // TODO {GL_RGBA8, GL_RGB8} on Android
+    std::vector<GLenum> kColorFormats;
+    switch (webroguegfx_get_os_family()) {
+        case WEBROGUE_OS_FAMILY_ANDROID:
+            kColorFormats = {GL_RGBA8, GL_RGB8};
+            break;
+        default:
+            kColorFormats = {GL_BGRA8_EXT};
+            break;
+    }
 
     std::vector<GLenum> depthStencilFormats(
         egl_vk::kConfigDepthStencilFormats,
