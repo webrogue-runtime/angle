@@ -11,6 +11,7 @@
 #include "libANGLE/renderer/wgpu/ContextWgpu.h"
 #include "libANGLE/renderer/wgpu/DisplayWgpu.h"
 #include "libANGLE/renderer/wgpu/wgpu_pipeline_state.h"
+#include "webgpu/webgpu.h"
 
 namespace rx
 {
@@ -73,7 +74,7 @@ PackedRenderPassColorAttachment CreateNewClearColorAttachment(const gl::ColorF &
     return colorAttachment;
 }
 
-PackedRenderPassDepthStencilAttachment CreateNewDepthStencilAttachment(
+PackedRenderPassDepthStencilAttachment CreateNewClearDepthStencilAttachment(
     float depthClearValue,
     uint32_t stencilClearValue,
     TextureViewHandle textureView,
@@ -98,6 +99,30 @@ PackedRenderPassDepthStencilAttachment CreateNewDepthStencilAttachment(
         depthStencilAttachment.stencilLoadOp     = WGPULoadOp_Clear;
         depthStencilAttachment.stencilStoreOp    = WGPUStoreOp_Store;
         depthStencilAttachment.stencilClearValue = stencilClearValue;
+    }
+
+    return depthStencilAttachment;
+}
+
+PackedRenderPassDepthStencilAttachment
+CreateNewDepthStencilAttachment(TextureViewHandle textureView, bool hasDepth, bool hasStencilValue)
+{
+    PackedRenderPassDepthStencilAttachment depthStencilAttachment;
+    depthStencilAttachment.view = textureView;
+    // WebGPU requires that depth/stencil attachments have a load op if the correlated ReadOnly
+    // value is set to false, so we make sure to set the value here to to support cases where only a
+    // depth or stencil mask is set.
+    depthStencilAttachment.depthReadOnly   = !hasDepth;
+    depthStencilAttachment.stencilReadOnly = !hasStencilValue;
+    if (hasDepth)
+    {
+        depthStencilAttachment.depthLoadOp  = WGPULoadOp_Load;
+        depthStencilAttachment.depthStoreOp = WGPUStoreOp_Store;
+    }
+    if (hasStencilValue)
+    {
+        depthStencilAttachment.stencilLoadOp  = WGPULoadOp_Load;
+        depthStencilAttachment.stencilStoreOp = WGPUStoreOp_Store;
     }
 
     return depthStencilAttachment;
@@ -236,6 +261,16 @@ void GenerateCaps(const WGPULimits &limitsWgpu,
     glExtensions->EGLImageExternalWrapModesEXT = true;
     glExtensions->requiredInternalformatOES    = true;
     glExtensions->copyTextureCHROMIUM          = true;
+
+    // Depth/stencil extensions
+    glExtensions->packedDepthStencilOES = true;
+
+    // Blit extensions
+    glExtensions->framebufferBlitANGLE = true;
+    glExtensions->framebufferBlitNV    = true;
+
+    // Explicit context entry points are supported.
+    glExtensions->explicitContextANGLE = true;
 
     // OpenGL ES caps
     glCaps->maxElementIndex       = std::numeric_limits<GLuint>::max() - 1;
@@ -785,7 +820,6 @@ WGPUTextureDimension GetWgpuTextureDimension(gl::TextureType glTextureType)
         case gl::TextureType::Buffer:
             return WGPUTextureDimension_2D;
         case gl::TextureType::_3D:
-        case gl::TextureType::VideoImage:
             return WGPUTextureDimension_3D;
         default:
             UNREACHABLE();

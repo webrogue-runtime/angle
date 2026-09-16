@@ -11,6 +11,7 @@ use crate::*;
 // Helper functions that perform constant folding per instruction
 mod const_fold {
     use crate::ir::*;
+    use crate::util;
 
     fn apply_unary_componentwise<FloatOp, IntOp, UintOp, BoolOp>(
         ir_meta: &mut IRMeta,
@@ -333,7 +334,7 @@ mod const_fold {
     pub fn vector_component_multi(
         ir_meta: &mut IRMeta,
         constant_id: ConstantId,
-        fields: &Vec<u32>,
+        fields: &[u32],
         result_type_id: TypeId,
     ) -> ConstantId {
         let composite_elements = ir_meta.get_constant(constant_id).value.get_composite_elements();
@@ -388,7 +389,13 @@ mod const_fold {
                 if let ConstantValue::Float(f) = constant.value {
                     match basic_type {
                         BasicType::Int => ir_meta.get_constant_int(f as i32),
-                        BasicType::Uint => ir_meta.get_constant_uint(f as u32),
+                        // Note: ESSL 3.00.6 section 5.4.1. It is undefined to convert a negative
+                        // floating-point value to an uint
+                        BasicType::Uint => ir_meta.get_constant_uint(if f < 0.0 {
+                            f as i32 as u32
+                        } else {
+                            f as u32
+                        }),
                         BasicType::Bool => ir_meta.get_constant_bool(f != 0.0),
                         _ => arg,
                     }
@@ -417,7 +424,7 @@ mod const_fold {
                     // This function is called on scalars, so `Composite` is impossible.
                     // Additionally, GLSL forbids type conversion to and from
                     // yuvCscStandardEXT.
-                    arg
+                    panic!("Internal error: Invalid constructor argument type");
                 }
             })
             .collect()
@@ -429,10 +436,14 @@ mod const_fold {
         arg: ConstantId,
         result_type_id: TypeId,
     ) -> ConstantId {
-        let type_info = ir_meta.get_type(result_type_id);
-        let vec_size = type_info.get_vector_size().unwrap();
-        let args = vec![arg; vec_size as usize];
-        ir_meta.get_constant_composite(result_type_id, args)
+        util::construct_vector_from_scalar(
+            ir_meta,
+            &mut (),
+            arg,
+            result_type_id,
+            None,
+            |ir_meta, _, type_id, args, _| ir_meta.get_constant_composite(type_id, args),
+        )
     }
 
     // Construct a matrix from a scalar by setting the diagonal elements with that scalar while
@@ -442,20 +453,15 @@ mod const_fold {
         arg: ConstantId,
         result_type_id: TypeId,
     ) -> ConstantId {
-        let type_info = ir_meta.get_type(result_type_id);
-        let &Type::Matrix(vector_type_id, column_count) = type_info else { unreachable!() };
-        let &Type::Vector(_, row_count) = ir_meta.get_type(vector_type_id) else { unreachable!() };
-
-        // Create columns where every component is 0 except the one at index = column_index.
-        let columns = (0..column_count)
-            .map(|column| {
-                let column_components = (0..row_count)
-                    .map(|row| if row == column { arg } else { CONSTANT_ID_FLOAT_ZERO })
-                    .collect();
-                ir_meta.get_constant_composite(vector_type_id, column_components)
-            })
-            .collect();
-        ir_meta.get_constant_composite(result_type_id, columns)
+        util::construct_matrix_from_scalar(
+            ir_meta,
+            &mut (),
+            arg,
+            result_type_id,
+            None,
+            CONSTANT_ID_FLOAT_ZERO,
+            |ir_meta, _, type_id, args, _| ir_meta.get_constant_composite(type_id, args),
+        )
     }
 
     // Construct a matrix from a matrix by starting with the identity matrix and overwriting it with
@@ -465,48 +471,23 @@ mod const_fold {
         arg: ConstantId,
         result_type_id: TypeId,
     ) -> ConstantId {
-        let type_info = ir_meta.get_type(result_type_id);
-        let &Type::Matrix(vector_type_id, column_count) = type_info else { unreachable!() };
-        let &Type::Vector(_, row_count) = ir_meta.get_type(vector_type_id) else { unreachable!() };
-
-        let input = ir_meta.get_constant(arg);
-        let input_columns = input.value.get_composite_elements();
-        let input_column_components: Vec<_> = input_columns
-            .iter()
-            .map(|&column_id| ir_meta.get_constant(column_id).value.get_composite_elements())
-            .collect();
-        let input_column_count = input_columns.len() as u32;
-        let input_row_count = input_column_components[0].len() as u32;
-
-        // Create columns where every component is taken from the input matrix, except if it's out
-        // of bounds.  In that case, the component is 1 on the diagonal and 0 elsewhere.
-        let columns: Vec<_> = (0..column_count)
-            .map(|column| {
-                (0..row_count)
-                    .map(|row| {
-                        if column < input_column_count && row < input_row_count {
-                            input_column_components[column as usize][row as usize]
-                        } else if row == column {
-                            CONSTANT_ID_FLOAT_ONE
-                        } else {
-                            CONSTANT_ID_FLOAT_ZERO
-                        }
-                    })
-                    .collect()
-            })
-            .collect();
-
-        let columns = columns
-            .into_iter()
-            .map(|column_components| {
-                ir_meta.get_constant_composite(vector_type_id, column_components)
-            })
-            .collect();
-        ir_meta.get_constant_composite(result_type_id, columns)
+        util::construct_matrix_from_matrix(
+            ir_meta,
+            &mut (),
+            arg,
+            result_type_id,
+            None,
+            CONSTANT_ID_FLOAT_ZERO,
+            CONSTANT_ID_FLOAT_ONE,
+            |ir_meta, _, constant_id| {
+                ir_meta.get_constant(constant_id).value.get_composite_elements().clone()
+            },
+            |ir_meta, _, type_id, args, _| ir_meta.get_constant_composite(type_id, args),
+        )
     }
 
     // Construct a vector from multiple components.
-    fn construct_vector_from_many(
+    fn construct_vector_from_multiple(
         ir_meta: &mut IRMeta,
         args: Vec<ConstantId>,
         result_type_id: TypeId,
@@ -515,23 +496,19 @@ mod const_fold {
     }
 
     // Construct a matrix from multiple components.
-    fn construct_matrix_from_many(
+    fn construct_matrix_from_multiple(
         ir_meta: &mut IRMeta,
         args: Vec<ConstantId>,
         result_type_id: TypeId,
     ) -> ConstantId {
-        let type_info = ir_meta.get_type(result_type_id);
-        let &Type::Matrix(vector_type_id, column_count) = type_info else { unreachable!() };
-        let &Type::Vector(_, row_count) = ir_meta.get_type(vector_type_id) else { unreachable!() };
-
-        let columns = (0..column_count)
-            .map(|column| {
-                let start = (column * row_count) as usize;
-                let end = start + row_count as usize;
-                ir_meta.get_constant_composite(vector_type_id, args[start..end].to_vec())
-            })
-            .collect();
-        ir_meta.get_constant_composite(result_type_id, columns)
+        util::construct_matrix_from_multiple(
+            ir_meta,
+            &mut (),
+            &args,
+            result_type_id,
+            None,
+            |ir_meta, _, type_id, args, _| ir_meta.get_constant_composite(type_id, args),
+        )
     }
 
     pub fn construct(
@@ -571,9 +548,9 @@ mod const_fold {
             } else if is_matrix && args.len() == 1 {
                 construct_matrix_from_scalar(ir_meta, args[0], result_type_id)
             } else if is_vector {
-                construct_vector_from_many(ir_meta, args, result_type_id)
+                construct_vector_from_multiple(ir_meta, args, result_type_id)
             } else if is_matrix {
-                construct_matrix_from_many(ir_meta, args, result_type_id)
+                construct_matrix_from_multiple(ir_meta, args, result_type_id)
             } else {
                 // The type cast is enough to satisfy scalar constructors.
                 args[0]
@@ -676,7 +653,9 @@ mod const_fold {
             rhs_constant_id,
             result_type_id,
             |_, _| panic!("Internal error: Cannot use % to calculate remainder of floats"),
-            |i1, i2| i1.checked_rem(i2).unwrap_or(0),
+            // ESSL 3.00.6 section 5.9: Results of modulus are undefined when either one of the
+            // operands is negative.
+            |i1, i2| if i1 < 0 || i2 < 0 { 0 } else { i1.checked_rem(i2).unwrap_or(0) },
             |u1, u2| u1.checked_rem(u2).unwrap_or(0),
             |_, _| panic!("Internal error: Cannot use % on bools"),
         )
@@ -718,7 +697,7 @@ mod const_fold {
             let column = ir_meta.get_constant(column_id).value.get_composite_elements();
             debug_assert!(column.len() == row_count as usize);
             column.iter().enumerate().for_each(|(row_index, &component)| {
-                transposed_data[row_index as usize].push(component);
+                transposed_data[row_index].push(component);
             });
         });
 
@@ -1124,9 +1103,9 @@ mod const_fold {
         constant_id: ConstantId,
         result_type_id: TypeId,
     ) -> ConstantId {
-        bitcast_helper(ir_meta, constant_id, result_type_id, |ir_meta, value| match value {
-            &ConstantValue::Int(i) => ir_meta.get_constant_int(i.count_ones() as i32),
-            &ConstantValue::Uint(u) => ir_meta.get_constant_int(u.count_ones() as i32),
+        bitcast_helper(ir_meta, constant_id, result_type_id, |ir_meta, value| match *value {
+            ConstantValue::Int(i) => ir_meta.get_constant_int(i.count_ones() as i32),
+            ConstantValue::Uint(u) => ir_meta.get_constant_int(u.count_ones() as i32),
             _ => {
                 panic!("Internal error: The bitCount() built-in only applies to [u]int types");
             }
@@ -1137,11 +1116,11 @@ mod const_fold {
         constant_id: ConstantId,
         result_type_id: TypeId,
     ) -> ConstantId {
-        bitcast_helper(ir_meta, constant_id, result_type_id, |ir_meta, value| match value {
-            &ConstantValue::Int(i) => {
+        bitcast_helper(ir_meta, constant_id, result_type_id, |ir_meta, value| match *value {
+            ConstantValue::Int(i) => {
                 ir_meta.get_constant_int(if i == 0 { -1 } else { i.trailing_zeros() as i32 })
             }
-            &ConstantValue::Uint(u) => {
+            ConstantValue::Uint(u) => {
                 ir_meta.get_constant_int(if u == 0 { -1 } else { u.trailing_zeros() as i32 })
             }
             _ => {
@@ -1155,8 +1134,8 @@ mod const_fold {
         result_type_id: TypeId,
     ) -> ConstantId {
         bitcast_helper(ir_meta, constant_id, result_type_id, |ir_meta, value| {
-            match value {
-                &ConstantValue::Int(i) => {
+            match *value {
+                ConstantValue::Int(i) => {
                     // Note: For negative numbers, look for zero instead of one in value. Using
                     // complement handles the intValue == -1 special case, where the return value
                     // needs to be -1.
@@ -1169,7 +1148,7 @@ mod const_fold {
                         31 - i.leading_zeros() as i32
                     })
                 }
-                &ConstantValue::Uint(u) => ir_meta.get_constant_int(if u == 0 {
+                ConstantValue::Uint(u) => ir_meta.get_constant_int(if u == 0 {
                     -1
                 } else {
                     31 - u.leading_zeros() as i32
@@ -1188,11 +1167,7 @@ mod const_fold {
         let constant = ir_meta.get_constant(constant_id);
         debug_assert!(result_type_id == TYPE_ID_BOOL);
 
-        let any = constant
-            .value
-            .get_composite_elements()
-            .iter()
-            .any(|&component_id| component_id == CONSTANT_ID_TRUE);
+        let any = constant.value.get_composite_elements().contains(&CONSTANT_ID_TRUE);
         ir_meta.get_constant_bool(any)
     }
     fn built_in_all(
@@ -1647,7 +1622,7 @@ mod const_fold {
         constant_id: ConstantId,
         result_type_id: TypeId,
     ) -> ConstantId {
-        pack2x16_helper(ir_meta, constant_id, result_type_id, |f| f32_to_unorm16(f))
+        pack2x16_helper(ir_meta, constant_id, result_type_id, f32_to_unorm16)
     }
     fn unorm16_to_f32(v: u16) -> f32 {
         v as f32 / 65535.
@@ -1657,7 +1632,7 @@ mod const_fold {
         constant_id: ConstantId,
         result_type_id: TypeId,
     ) -> ConstantId {
-        unpack2x16_helper(ir_meta, constant_id, result_type_id, |u| unorm16_to_f32(u))
+        unpack2x16_helper(ir_meta, constant_id, result_type_id, unorm16_to_f32)
     }
     fn f32_to_f16(v: f32) -> u16 {
         let v = v.to_bits();
@@ -1687,14 +1662,14 @@ mod const_fold {
         constant_id: ConstantId,
         result_type_id: TypeId,
     ) -> ConstantId {
-        pack2x16_helper(ir_meta, constant_id, result_type_id, |f| f32_to_f16(f))
+        pack2x16_helper(ir_meta, constant_id, result_type_id, f32_to_f16)
     }
     fn f16_to_f32(v: u16) -> f32 {
         // Based on http://www.fox-toolkit.org/ftp/fasthalffloatconversion.pdf
         // See also Float16ToFloat32.py, this is non-baked copy of that generator.
         let offset = v >> 10;
         let offset = if offset == 0 || offset == 32 { 0 } else { 1024 };
-        let offset = offset + v & 0x3FF;
+        let offset = offset + (v & 0x3FF);
 
         let mantissa = if offset == 0 {
             0
@@ -1703,7 +1678,7 @@ mod const_fold {
             let mut e = 0x38800000;
             while (m & 0x00800000) == 0 {
                 e -= 0x00800000;
-                m = m << 1;
+                m <<= 1;
             }
             m &= !0x00800000;
             m | e
@@ -1733,7 +1708,7 @@ mod const_fold {
         constant_id: ConstantId,
         result_type_id: TypeId,
     ) -> ConstantId {
-        unpack2x16_helper(ir_meta, constant_id, result_type_id, |u| f16_to_f32(u))
+        unpack2x16_helper(ir_meta, constant_id, result_type_id, f16_to_f32)
     }
     fn f32_to_snorm8(v: f32) -> i8 {
         (v.clamp(-1., 1.) * 127.).round() as i8
@@ -1763,7 +1738,7 @@ mod const_fold {
         constant_id: ConstantId,
         result_type_id: TypeId,
     ) -> ConstantId {
-        pack4x8_helper(ir_meta, constant_id, result_type_id, |f| f32_to_unorm8(f))
+        pack4x8_helper(ir_meta, constant_id, result_type_id, f32_to_unorm8)
     }
     fn unorm8_to_f32(v: u8) -> f32 {
         v as f32 / 255.
@@ -1773,7 +1748,7 @@ mod const_fold {
         constant_id: ConstantId,
         result_type_id: TypeId,
     ) -> ConstantId {
-        unpack4x8_helper(ir_meta, constant_id, result_type_id, |u| unorm8_to_f32(u))
+        unpack4x8_helper(ir_meta, constant_id, result_type_id, unorm8_to_f32)
     }
     pub fn built_in_unary(
         ir_meta: &mut IRMeta,
@@ -2091,11 +2066,24 @@ mod const_fold {
                     let rhs = ir_meta.get_constant(rhs_component_id).value.clone();
 
                     match lhs {
-                        ConstantValue::Float(lhs) => ir_meta.get_constant_bool(float_op(lhs, rhs.get_float())),
-                        ConstantValue::Int(lhs) => ir_meta.get_constant_bool(int_op(lhs, rhs.get_int())),
-                        ConstantValue::Uint(lhs) => ir_meta.get_constant_bool(uint_op(lhs, rhs.get_uint())),
-                        ConstantValue::Bool(lhs) => ir_meta.get_constant_bool(bool_op(lhs, rhs.get_bool())),
-                        _ => { panic!("Internal error: Comparison built-ins only valid on float, [u]int and bool values"); }
+                        ConstantValue::Float(lhs) => {
+                            ir_meta.get_constant_bool(float_op(lhs, rhs.get_float()))
+                        }
+                        ConstantValue::Int(lhs) => {
+                            ir_meta.get_constant_bool(int_op(lhs, rhs.get_int()))
+                        }
+                        ConstantValue::Uint(lhs) => {
+                            ir_meta.get_constant_bool(uint_op(lhs, rhs.get_uint()))
+                        }
+                        ConstantValue::Bool(lhs) => {
+                            ir_meta.get_constant_bool(bool_op(lhs, rhs.get_bool()))
+                        }
+                        _ => {
+                            panic!(
+                                "Internal error: Comparison built-ins only valid on float, [u]int \
+                                 and bool values"
+                            );
+                        }
                     }
                 })
                 .collect();
@@ -2207,7 +2195,7 @@ mod const_fold {
         )
     }
     fn ldexp_helper(ir_meta: &mut IRMeta, x: f32, exp: i32) -> ConstantId {
-        let result = if exp > 128 || exp < -126 { 0.0 } else { x * 2.0_f32.powi(exp) };
+        let result = if (-126..=128).contains(&exp) { x * 2.0_f32.powi(exp) } else { 0.0 };
         ir_meta.get_constant_float(result)
     }
     fn built_in_ldexp(
@@ -2404,7 +2392,7 @@ mod const_fold {
     }
     pub fn built_in_clamp(
         ir_meta: &mut IRMeta,
-        operands: &Vec<ConstantId>,
+        operands: &[ConstantId],
         result_type_id: TypeId,
     ) -> ConstantId {
         // clamp(x, min, max) either accepts scalars for min, max or a vector of matching size with
@@ -2480,7 +2468,7 @@ mod const_fold {
     }
     pub fn built_in_mix(
         ir_meta: &mut IRMeta,
-        operands: &Vec<ConstantId>,
+        operands: &[ConstantId],
         result_type_id: TypeId,
     ) -> ConstantId {
         // mix(x, y, a) either accepts scalar for a, or a vector of matching size with x and y.
@@ -2559,7 +2547,7 @@ mod const_fold {
     }
     pub fn built_in_smoothstep(
         ir_meta: &mut IRMeta,
-        operands: &Vec<ConstantId>,
+        operands: &[ConstantId],
         result_type_id: TypeId,
     ) -> ConstantId {
         // smoothstep(edge0, edge1, x) either accepts scalar for edge0 and edge1, or a vector of
@@ -2609,7 +2597,7 @@ mod const_fold {
     }
     pub fn built_in_fma(
         ir_meta: &mut IRMeta,
-        operands: &Vec<ConstantId>,
+        operands: &[ConstantId],
         result_type_id: TypeId,
     ) -> ConstantId {
         // fma(a, b, c) accepts scalar or vectors of float.
@@ -2648,7 +2636,7 @@ mod const_fold {
     }
     pub fn built_in_faceforward(
         ir_meta: &mut IRMeta,
-        operands: &Vec<ConstantId>,
+        operands: &[ConstantId],
         result_type_id: TypeId,
     ) -> ConstantId {
         // faceforward(N, I, Nref) accepts scalar or vectors of float.
@@ -2662,7 +2650,7 @@ mod const_fold {
     }
     pub fn built_in_refract(
         ir_meta: &mut IRMeta,
-        operands: &Vec<ConstantId>,
+        operands: &[ConstantId],
         result_type_id: TypeId,
     ) -> ConstantId {
         // refract(I, N, eta) accepts matching scalars or vectors of float for I and N, and float
@@ -2722,7 +2710,7 @@ mod const_fold {
     }
     pub fn built_in_bitfieldextract(
         ir_meta: &mut IRMeta,
-        operands: &Vec<ConstantId>,
+        operands: &[ConstantId],
         result_type_id: TypeId,
     ) -> ConstantId {
         // bitfieldExtract(value, offset, bits) accepts a scalar or vector integer for value, and a
@@ -2774,7 +2762,7 @@ mod const_fold {
     }
     pub fn built_in_bitfieldinsert(
         ir_meta: &mut IRMeta,
-        operands: &Vec<ConstantId>,
+        operands: &[ConstantId],
         result_type_id: TypeId,
     ) -> ConstantId {
         // bitfieldInsert(base, insert, offset, bits) accepts matching integer scalars or vectors
@@ -2804,14 +2792,14 @@ mod const_fold {
     }
     fn built_in_rgb_yuv_transform(r: f32, g: f32, b: f32, m: &[f32; 12]) -> [f32; 3] {
         [
-            r * m[0] + g * m[1] + b * m[2] + m[3],
-            r * m[4] + g * m[5] + b * m[6] + m[7],
-            r * m[8] + g * m[9] + b * m[10] + m[11],
+            r * m[0] + g * m[3] + b * m[6] + m[9],
+            r * m[1] + g * m[4] + b * m[7] + m[10],
+            r * m[2] + g * m[5] + b * m[8] + m[11],
         ]
     }
     pub fn built_in_rgb_yuv_helper(
         ir_meta: &mut IRMeta,
-        operands: &Vec<ConstantId>,
+        operands: &[ConstantId],
         itu601: &[f32; 12],
         itu601_full_range: &[f32; 12],
         itu709: &[f32; 12],
@@ -2844,7 +2832,7 @@ mod const_fold {
     }
     pub fn built_in_rgb_2_yuv(
         ir_meta: &mut IRMeta,
-        operands: &Vec<ConstantId>,
+        operands: &[ConstantId],
         result_type_id: TypeId,
     ) -> ConstantId {
         let itu601 = [
@@ -2873,7 +2861,7 @@ mod const_fold {
     }
     pub fn built_in_yuv_2_rgb(
         ir_meta: &mut IRMeta,
-        operands: &Vec<ConstantId>,
+        operands: &[ConstantId],
         result_type_id: TypeId,
     ) -> ConstantId {
         let itu601 = [
@@ -2882,8 +2870,8 @@ mod const_fold {
         ];
 
         let itu601_full_range = [
-            1.000000, 1.000000, 1.000000, 0.000000, -0.344100, 1.772000, 1.402000, -0.714100,
-            0.000000, -0.703749, 0.531175, -0.889475,
+            1.000000, 1.000000, 1.000000, 0.000000, -0.344100, 1.772, 1.402, -0.714100, 0.000000,
+            -0.703749, 0.531175, -0.889475,
         ];
 
         let itu709 = [
@@ -3181,7 +3169,6 @@ mod promote {
             | ImageDimension::Rect
             | ImageDimension::External
             | ImageDimension::ExternalY2Y
-            | ImageDimension::Video
             | ImageDimension::PixelLocal
             | ImageDimension::Subpass => {
                 if is_array {
@@ -3411,19 +3398,22 @@ mod promote {
 // Helper functions that derive the precision of an operation.
 pub mod precision {
     use crate::ir::*;
+    use crate::*;
 
     // Taking some precision and comparing it with another:
     //
     // * Upgrade to highp is either no-op or an upgrade, so it can unconditionally be done.
-    // * Upgrade to mediump is only necessary if the original precision was lowp.
-    // * Upgrade to lowp is never necessary.
+    // * Upgrade to mediump is only necessary if the original precision was lowp or unassigned.
+    // * Upgrade to lowp is only necessary if the original precision was unassigned.
     //
-    // If either precision is NotApplicable, use the other one.  This can happen with constants as
-    // they don't have a precision.
+    // If either precision is NotApplicable, use the other one.
     pub fn higher_precision(one: Precision, other: Precision) -> Precision {
         match one {
             Precision::High => Precision::High,
-            Precision::Medium if other == Precision::Low => Precision::Medium,
+            Precision::Medium if (other == Precision::Low || other == Precision::Unassigned) => {
+                Precision::Medium
+            }
+            Precision::Low if other == Precision::Unassigned => Precision::Low,
             _ => {
                 // The other's precision is at least as high as this one, unless it doesn't have a
                 // precision at all.
@@ -3433,20 +3423,21 @@ pub mod precision {
     }
 
     // Take a set of precisions and return the highest per `higher_precision`.
-    fn highest_precision(precisions: &mut impl Iterator<Item = Precision>) -> Precision {
-        precisions.reduce(|highest, precision| higher_precision(highest, precision)).unwrap()
+    pub fn highest_precision(precisions: &mut impl Iterator<Item = Precision>) -> Precision {
+        precisions.reduce(higher_precision).unwrap()
     }
 
-    // Constructor precision is derived from its parameters, except for structs.
+    // Constructor precision is derived from its parameters, except for structs and type_id where
+    // precision should be NotApplicable
     pub fn construct(
         ir_meta: &IRMeta,
         type_id: TypeId,
         args: &mut impl Iterator<Item = Precision>,
     ) -> Precision {
-        if ir_meta.get_type(type_id).is_struct() {
+        if !util::is_precision_applicable_to_type(ir_meta, type_id) {
             Precision::NotApplicable
         } else {
-            args.fold(Precision::NotApplicable, |accumulator, precision| {
+            args.fold(Precision::Unassigned, |accumulator, precision| {
                 higher_precision(accumulator, precision)
             })
         }
@@ -3749,7 +3740,7 @@ pub mod precision {
         precision: Precision,
         to_propagate: &mut Vec<(RegisterId, Precision)>,
     ) {
-        if id.precision == Precision::NotApplicable && precision != Precision::NotApplicable {
+        if id.precision == Precision::Unassigned && precision.is_assigned() {
             match id.id {
                 Id::Register(register_id) => {
                     id.precision = precision;
@@ -3771,6 +3762,17 @@ pub mod precision {
             propagate_to_id(id, precision, to_propagate);
         });
     }
+
+    pub fn propagate_by_matching_precision(
+        ids: &mut std::slice::IterMut<'_, TypedId>,
+        to_match: &[Precision],
+        to_propagate: &mut Vec<(RegisterId, Precision)>,
+    ) {
+        ids.zip(to_match.iter()).for_each(|(id, &expect)| {
+            propagate_to_id(id, expect, to_propagate);
+        });
+    }
+
     pub fn propagate(
         instruction: &mut Instruction,
         function_arg_precisions: &std::collections::HashMap<FunctionId, Vec<Precision>>,
@@ -3778,15 +3780,6 @@ pub mod precision {
         to_propagate: &mut Vec<(RegisterId, Precision)>,
     ) {
         let precision = instruction.result.precision;
-
-        let propagate_by_matching_precision =
-            |ids: &mut std::slice::IterMut<'_, TypedId>,
-             to_match: &Vec<Precision>,
-             to_propagate: &mut Vec<(RegisterId, Precision)>| {
-                ids.zip(to_match.iter()).for_each(|(id, &expect)| {
-                    propagate_to_id(id, expect, to_propagate);
-                });
-            };
 
         match instruction.op {
             OpCode::ExtractVectorComponentDynamic(ref mut indexed, ref mut index)
@@ -3941,9 +3934,9 @@ pub mod precision {
                         // Apply precision from one operand to the other, as the result does not
                         // have a precision.  If neither has a precision, precision cannot be
                         // derived, AST generation will assume highp.
-                        if lhs.precision != Precision::NotApplicable {
+                        if lhs.precision.is_assigned() {
                             propagate_to_id(rhs, lhs.precision, to_propagate);
-                        } else {
+                        } else if rhs.precision.is_assigned() {
                             propagate_to_id(lhs, rhs.precision, to_propagate);
                         }
                     }
@@ -4110,7 +4103,8 @@ pub mod precision {
             | OpCode::LoopIf(_)
             | OpCode::Switch(..)
             | OpCode::Store(..) => panic!(
-                "Internal error: Unexpected void instruction when propagating precision to constants"
+                "Internal error: Unexpected void instruction when propagating precision to \
+                 constants"
             ),
         }
     }
@@ -4129,10 +4123,10 @@ pub enum Result {
 
 impl Result {
     pub fn get_result_id(&self) -> TypedId {
-        match self {
-            &instruction::Result::Constant(id) => TypedId::from_typed_constant_id(id),
-            &instruction::Result::Register(id) => TypedId::from_register_id(id),
-            &instruction::Result::NoOp(id) => id,
+        match *self {
+            instruction::Result::Constant(id) => TypedId::from_typed_constant_id(id),
+            instruction::Result::Register(id) => TypedId::from_register_id(id),
+            instruction::Result::NoOp(id) => id,
             _ => panic!("Internal error: Expected instruction with value"),
         }
     }
@@ -4170,7 +4164,7 @@ impl Result {
 //     instruction::make!(negate, ir_meta, operand)
 //     instruction::make!(add, ir_meta, lhs, rhs)
 macro_rules! make {
-        ($func:ident, $ir_meta:expr, $($params:expr),*) => {
+        ($func:ident, $ir_meta:expr$(, $params:expr)*$(,)*) => {
             instruction::$func($ir_meta, $($params),*)
         }
     }
@@ -4179,9 +4173,9 @@ pub(crate) use make;
 //
 //     instruction::make_with_result_id!(negate, ir_meta, result_id, operand)
 macro_rules! make_with_result_id {
-        ($func:ident, $ir_meta:expr, $result:expr, $($params:expr),*) => {
+        ($func:ident, $ir_meta:expr, $result:expr$(, $params:expr)*$(,)*) => {
             {
-                let mut inst = instruction::$func($ir_meta, $($params),*);
+                let mut inst = instruction::$func($ir_meta $(, $params)*);
                 inst.override_result_id($ir_meta, $result);
                 inst
             }
@@ -4375,7 +4369,7 @@ pub fn vector_component(ir_meta: &mut IRMeta, vector: TypedId, component: u32) -
     )
 }
 
-fn merge_swizzle_components(components: &Vec<u32>, to_apply: &Vec<u32>) -> Vec<u32> {
+fn merge_swizzle_components(components: &[u32], to_apply: &[u32]) -> Vec<u32> {
     to_apply.iter().map(|&index| components[index as usize]).collect()
 }
 
@@ -4385,19 +4379,6 @@ pub fn vector_component_multi(
     vector: TypedId,
     components: Vec<u32>,
 ) -> Result {
-    // If the swizzle selects every element in order, optimize that out.
-    {
-        let mut type_info = ir_meta.get_type(vector.type_id);
-        if type_info.is_pointer() {
-            type_info = ir_meta.get_type(type_info.get_element_type_id().unwrap());
-        }
-        let vec_size = type_info.get_vector_size().unwrap() as usize;
-        let identity = [0, 1, 2, 3];
-        if components[..] == identity[0..vec_size] {
-            return Result::NoOp(vector);
-        }
-    }
-
     // To avoid swizzles of swizzles, like var.xyz.xz, check if the value being swizzled is
     // itself a swizzle, in which case the swizzle components can be folded and the swizzle
     // applied to the original vector.
@@ -4417,6 +4398,19 @@ pub fn vector_component_multi(
                 components = merge_swizzle_components(original_components, &components);
             }
             _ => (),
+        }
+    }
+
+    // If the swizzle selects every element in order, optimize that out.
+    {
+        let mut type_info = ir_meta.get_type(vector.type_id);
+        if type_info.is_pointer() {
+            type_info = ir_meta.get_type(type_info.get_element_type_id().unwrap());
+        }
+        let vec_size = type_info.get_vector_size().unwrap() as usize;
+        let identity = [0, 1, 2, 3];
+        if components[..] == identity[0..vec_size] {
+            return Result::NoOp(vector);
         }
     }
 
@@ -4446,6 +4440,20 @@ pub fn vector_component_multi(
 pub fn index(ir_meta: &mut IRMeta, indexed: TypedId, index: TypedId) -> Result {
     // Note: constant index on a vector should use vector_component() instead.
     debug_assert!(!(ir_meta.get_type(indexed.type_id).is_vector() && index.id.is_constant()));
+
+    // If selecting constant index of a constructed array, just return the element from the
+    // constructor. Note: the same could be done for constructed matrices if needed, but needs
+    // to handle a multitude of possible matrix constructors.  See
+    // `const_fold::construct_matrix_from_*`.
+    if let (Id::Register(indexed_register_id), Id::Constant(index_constant_id)) =
+        (indexed.id, index.id)
+    {
+        let indexed_instruction = ir_meta.get_instruction(indexed_register_id);
+        if let OpCode::ConstructArray(args) = &indexed_instruction.op {
+            let index = ir_meta.get_constant(index_constant_id).value.get_index();
+            return Result::NoOp(args[index as usize]);
+        }
+    }
 
     binary_op(
         ir_meta,
@@ -4492,6 +4500,14 @@ pub fn index(ir_meta: &mut IRMeta, indexed: TypedId, index: TypedId) -> Result {
 
 // Select a field of a struct, like `block.field`.
 pub fn struct_field(ir_meta: &mut IRMeta, struct_id: TypedId, field_index: u32) -> Result {
+    // If selecting field of a constructed type, just return the field from the constructor.
+    if let Id::Register(register_id) = struct_id.id {
+        let operand_instruction = ir_meta.get_instruction(register_id);
+        if let OpCode::ConstructStruct(args) = &operand_instruction.op {
+            return Result::NoOp(args[field_index as usize]);
+        }
+    }
+
     // Use the precision of the field itself on the result
     let mut struct_type_info = ir_meta.get_type(struct_id.type_id);
     if struct_type_info.is_pointer() {
@@ -4522,7 +4538,7 @@ pub fn struct_field(ir_meta: &mut IRMeta, struct_id: TypedId, field_index: u32) 
 fn verify_construct_arg_component_count(
     ir_meta: &mut IRMeta,
     type_id: TypeId,
-    args: &Vec<TypedId>,
+    args: &[TypedId],
 ) -> bool {
     let type_info = ir_meta.get_type(type_id);
     match type_info {
@@ -4553,14 +4569,36 @@ fn verify_construct_arg_component_count(
 }
 
 // Construct a value of a type from the given arguments.
-pub fn construct(ir_meta: &mut IRMeta, type_id: TypeId, args: Vec<TypedId>) -> Result {
+pub fn construct(
+    ir_meta: &mut IRMeta,
+    type_id: TypeId,
+    args: Vec<TypedId>,
+    precision_override: Option<Precision>,
+) -> Result {
     // Note: For vector and matrix constructors with multiple components, it is expected that
     // the total components in `args` matches the components needed for type_id.
     debug_assert!(verify_construct_arg_component_count(ir_meta, type_id, &args));
 
-    // Constructor precision is derived from its parameters, except for structs.
-    let promoted_precision =
-        precision::construct(ir_meta, type_id, &mut args.iter().map(|id| id.precision));
+    // Constructor precision is derived from its parameters, except for structs and type_id where
+    // precision is not applicable, e.g. bool.
+
+    // Override the promoted_precision with precision_override if precision_override is assigned.
+    // This is needed when doing the following conversions:
+    //     r3  (int[3], mediump) = ConstructVectorFromScalar r2 (bool) - old
+    // To
+    //     r7  (int, mediump) = ConstructScalarFromScalar r2 (bool) - new1
+    //     r3  (int[3], mediump) = ConstructVectorFromMultiple (r7, r7, r7) - new2
+    // Note that when constructing new1, type_id is int and arg is a single bool,
+    // propomoted_precision is Unassigned. However, we need the promoted_precision to be Medium
+    // in order to preserve the Medium precision for r3.
+    let promoted_precision = if let Some(precision_override) = precision_override
+        && precision_override.is_assigned()
+    {
+        debug_assert!(util::is_precision_applicable_to_type(ir_meta, type_id));
+        precision_override
+    } else {
+        precision::construct(ir_meta, type_id, &mut args.iter().map(|id| id.precision))
+    };
 
     // If the type of the first argument is the same as the result, the rest of the arguments
     // will be stripped (if any) and the cast is a no-op.  In that case, push args[0] back to
@@ -4579,7 +4617,7 @@ pub fn construct(ir_meta: &mut IRMeta, type_id: TypeId, args: Vec<TypedId>) -> R
     if all_constants {
         let folded = const_fold::construct(
             ir_meta,
-            &mut args.iter().map(|id| id.id.get_constant().unwrap()),
+            &mut args.iter().map(|id| id.id.get_constant()),
             type_id,
         );
         make_constant(folded, type_id, promoted_precision)
@@ -5175,7 +5213,7 @@ pub fn built_in(ir_meta: &mut IRMeta, op: BuiltInOpCode, operands: Vec<TypedId>)
         // Note: No built-in that returns `void` can possibly take all-constant arguments.
         debug_assert!(result_type_id != TYPE_ID_VOID);
 
-        let constants = operands.iter().map(|id| id.id.get_constant().unwrap()).collect();
+        let constants = operands.iter().map(|id| id.id.get_constant()).collect();
         let folded = const_fold::built_in(ir_meta, op, constants, result_type_id);
         make_constant(folded, result_type_id, precision.unwrap())
     } else {
@@ -5204,7 +5242,7 @@ pub fn built_in_texture(
     let result_type_id = promote::built_in_texture(ir_meta, &op, sampler.type_id);
 
     // Constant folding is impossible, as the sampler cannot be a constant.
-    debug_assert!(sampler.id.get_constant().is_none());
+    debug_assert!(!sampler.id.is_constant());
 
     // Make an instruction
     let precision = precision::built_in_texture(&op, sampler.precision);

@@ -34,7 +34,7 @@ struct TestIdentifier
     static bool ParseFromString(const std::string &str, TestIdentifier *idOut);
 
     bool valid() const { return !testName.empty(); }
-    void snprintfName(char *outBuffer, size_t maxLen) const;
+    std::string fullName() const;
 
     std::string testSuiteName;
     std::string testName;
@@ -195,6 +195,7 @@ class TestSuite
     void dumpTestExpectationsErrorMessages();
     int getSlowTestTimeout() const;
     void writeOutputFiles(bool interrupted);
+    void WriteTestListJSON(const std::string &path) const;
 
     static TestSuite *mInstance;
 
@@ -204,6 +205,7 @@ class TestSuite
     std::string mFilterFile;
     std::string mResultsDirectory;
     std::string mResultsFile;
+    std::string mGTestOutput;
     std::string mHistogramJsonFile;
     int mShardCount;
     int mShardIndex;

@@ -14,7 +14,6 @@
 #include <GLSLANG/ShaderVars.h>
 
 #include "common/PackedEnums.h"
-#include "common/hash_containers.h"
 #include "common/span.h"
 #include "compiler/translator/BaseTypes.h"
 #include "compiler/translator/Common.h"
@@ -67,7 +66,7 @@ inline bool IsVariableIdValid(VariableId id)
 class Builder
 {
   public:
-    Builder(gl::ShaderType shaderType);
+    Builder(gl::ShaderType shaderType, const ShCompileOptions &options);
     static IR destroy(Builder &&builder);
 
     void onError() { mHasError = true; }
@@ -82,6 +81,7 @@ class Builder
     TypeId getArrayTypeId(TypeId elementTypeId, const angle::Span<const unsigned int> &arraySizes);
 
     void setEarlyFragmentTests(bool value);
+    void setNumViews(uint32_t value);
     void setAdvancedBlendEquations(uint32_t value);
     void setTcsVertices(uint32_t value);
     void setTesPrimitive(TLayoutTessEvaluationType value);
@@ -99,6 +99,7 @@ class Builder
                                         const TType &type,
                                         DeclarationSource source);
     VariableId declareTempVariable(const ImmutableString &name, TypeId typeId, const TType &type);
+    void rescopeAsForLoopVariable(VariableId id);
     void markVariableInvariant(VariableId id);
     void markVariablePrecise(VariableId id);
     void initialize(VariableId id);
@@ -111,7 +112,10 @@ class Builder
     void updateFunctionParamNames(FunctionId id,
                                   const angle::Span<ImmutableString> &paramNames,
                                   const angle::Span<VariableId> &paramIdsOut);
-    VariableId declareFunctionParam(const ImmutableString &name, TypeId typeId, const TType &type);
+    VariableId declareFunctionParam(const ImmutableString &name,
+                                    TypeId typeId,
+                                    const TType &type,
+                                    TQualifier direction);
     void beginFunction(FunctionId id);
     void endFunction();
 
@@ -122,10 +126,10 @@ class Builder
     void endIf();
 
     void beginTernaryTrueExpression();
-    void endTernaryTrueExpression();
+    void endTernaryTrueExpression(TBasicType basicType);
     void beginTernaryFalseExpression();
-    void endTernaryFalseExpression();
-    void endTernary();
+    void endTernaryFalseExpression(TBasicType basicType);
+    void endTernary(TBasicType basicType);
 
     void beginShortCircuitOr();
     void endShortCircuitOr();
@@ -202,7 +206,7 @@ inline bool IsVariableIdValid(VariableId id)
 class Builder
 {
   public:
-    Builder(gl::ShaderType shaderType) {}
+    Builder(gl::ShaderType shaderType, const ShCompileOptions &options) {}
     static IR destroy(Builder &&builder) { return nullptr; }
 
     void onError() {}
@@ -226,6 +230,7 @@ class Builder
     }
 
     void setEarlyFragmentTests(bool value) {}
+    void setNumViews(uint32_t value) {}
     void setAdvancedBlendEquations(uint32_t value) {}
     void setTcsVertices(uint32_t value) {}
     void setTesPrimitive(TLayoutTessEvaluationType value) {}
@@ -249,6 +254,7 @@ class Builder
     {
         return 0;
     }
+    void rescopeAsForLoopVariable(VariableId id) {}
     void markVariableInvariant(VariableId id) {}
     void markVariablePrecise(VariableId id) {}
     void initialize(VariableId id) {}
@@ -265,7 +271,10 @@ class Builder
                                   const angle::Span<ImmutableString> &paramNames,
                                   const angle::Span<VariableId> &paramIdsOut)
     {}
-    VariableId declareFunctionParam(const ImmutableString &name, TypeId typeId, const TType &type)
+    VariableId declareFunctionParam(const ImmutableString &name,
+                                    TypeId typeId,
+                                    const TType &type,
+                                    TQualifier direction)
     {
         return 0;
     }
@@ -279,10 +288,10 @@ class Builder
     void endIf() {}
 
     void beginTernaryTrueExpression() {}
-    void endTernaryTrueExpression() {}
+    void endTernaryTrueExpression(TBasicType) {}
     void beginTernaryFalseExpression() {}
-    void endTernaryFalseExpression() {}
-    void endTernary() {}
+    void endTernaryFalseExpression(TBasicType) {}
+    void endTernary(TBasicType) {}
 
     void beginShortCircuitOr() {}
     void endShortCircuitOr() {}

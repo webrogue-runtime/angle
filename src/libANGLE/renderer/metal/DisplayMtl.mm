@@ -6,15 +6,12 @@
 
 // DisplayMtl.mm: Metal implementation of DisplayImpl
 
-#ifdef UNSAFE_BUFFERS_BUILD
-#    pragma allow_unsafe_buffers
-#endif
-
 #include "libANGLE/renderer/metal/DisplayMtl.h"
 #include <sys/param.h>
 
 #include "common/apple_platform_utils.h"
 #include "common/system_utils.h"
+#include "common/unsafe_buffers.h"
 #include "gpu_info_util/SystemInfo.h"
 #include "libANGLE/Context.h"
 #include "libANGLE/Display.h"
@@ -168,10 +165,10 @@ void DisplayMtl::terminate()
 {
     mUtils = nullptr;
     mCmdQueue.reset();
-    mDefaultShaders = nil;
-    mMetalDevice    = nil;
+    mDefaultShaders      = nil;
+    mMetalDevice         = nil;
     mSharedEventListener = nil;
-    mCapsInitialized = false;
+    mCapsInitialized     = false;
 
     mMetalDeviceVendorId = 0;
     mComputedAMDBronze   = false;
@@ -280,7 +277,9 @@ angle::ObjCPtr<id<MTLDevice>> DisplayMtl::getMetalDeviceMatchingAttribute(
         for (id<MTLDevice> device in discreteGPUs.get())
         {
             if (![device isHeadless])
+            {
                 return device;
+            }
         }
     }
     else if (attribs.get(EGL_POWER_PREFERENCE_ANGLE, 0) == EGL_LOW_POWER_ANGLE)
@@ -289,7 +288,9 @@ angle::ObjCPtr<id<MTLDevice>> DisplayMtl::getMetalDeviceMatchingAttribute(
         for (id<MTLDevice> device in integratedGPUs.get())
         {
             if (![device isHeadless])
+            {
                 return device;
+            }
         }
     }
 
@@ -333,11 +334,10 @@ egl::Error DisplayMtl::waitNative(const gl::Context *context, EGLint engine)
 
 egl::Error DisplayMtl::waitUntilWorkScheduled()
 {
-    for (auto context : mState.contextMap)
-    {
-        auto contextMtl = GetImplAs<ContextMtl>(context.second);
+    mState.contextMap.forEach([](gl::Context *context) {
+        auto contextMtl = GetImplAs<ContextMtl>(context);
         contextMtl->flushCommandBuffer(mtl::WaitUntilScheduled);
-    }
+    });
     return egl::NoError();
 }
 
@@ -431,7 +431,7 @@ gl::Version DisplayMtl::getMaxSupportedESVersion() const
     // FIXME: None of the feature conditions are checked for simulator support.
     return gl::Version(3, 0);
 #else
-    if (supportsEitherGPUFamily(3, 1))
+    if (supportsEitherGPUFamily(4, 1))
     {
         return mtl::kMaxSupportedGLVersion;
     }
@@ -464,6 +464,7 @@ egl::Error DisplayMtl::makeCurrent(egl::Display *display,
 
 void DisplayMtl::generateExtensions(egl::DisplayExtensions *outExtensions) const
 {
+    outExtensions->createContextRobustness    = true;
     outExtensions->iosurfaceClientBuffer      = true;
     outExtensions->surfacelessContext         = true;
     outExtensions->noConfigContext            = true;
@@ -508,6 +509,8 @@ void DisplayMtl::initializeFrontendFeatures(angle::FrontendFeatures *features) c
     // The Metal backend's handling of compile and link is thread-safe
     ANGLE_FEATURE_CONDITION(features, compileJobIsThreadSafe, true);
     ANGLE_FEATURE_CONDITION(features, linkJobIsThreadSafe, true);
+
+    ANGLE_FEATURE_CONDITION(features, setNeedInitOnInvalidation, true);
 }
 
 void DisplayMtl::populateFeatureList(angle::FeatureList *features)
@@ -794,6 +797,15 @@ void DisplayMtl::ensureCapsInitialized() const
         mMaxColorTargetBits = mNativeCaps.maxColorAttachments * 32;
     }
 
+    if (!mFeatures.limitMaxVisibilityQueryOffset.enabled && supportsAppleGPUFamily(7))
+    {
+        mMaxVisibilityQueryOffset = 262136;
+    }
+    else
+    {
+        mMaxVisibilityQueryOffset = 65528;
+    }
+
     // MSAA
     mNativeCaps.maxSamples             = mFormatTable.getMaxSamples();
     mNativeCaps.maxSampleMaskWords     = 1;
@@ -859,7 +871,7 @@ void DisplayMtl::ensureCapsInitialized() const
     // Fill in additional limits for UBOs and SSBOs.
     mNativeCaps.maxUniformBufferBindings = mNativeCaps.maxCombinedUniformBlocks;
     static_assert(mtl::kMaxUBOSize <= gl::IMPLEMENTATION_MAX_UNIFORM_BLOCK_SIZE);
-    mNativeCaps.maxUniformBlockSize      = mtl::kMaxUBOSize;  // Default according to GLES 3.0 spec.
+    mNativeCaps.maxUniformBlockSize = mtl::kMaxUBOSize;  // Default according to GLES 3.0 spec.
     if (supportsAppleGPUFamily(1))
     {
         mNativeCaps.uniformBufferOffsetAlignment =
@@ -902,8 +914,20 @@ void DisplayMtl::ensureCapsInitialized() const
     // Metal doesn't support GL_TEXTURE_COMPARE_MODE=GL_NONE for shadow samplers
     mNativeLimitations.noShadowSamplerCompareModeNone = true;
 
-    // Apple platforms require PVRTC1 textures to be squares.
-    mNativeLimitations.squarePvrtc1 = true;
+    if (mFeatures.disableProgrammableBlending.enabled || !supportsAppleGPUFamily(1))
+    {
+        const MTLReadWriteTextureTier readWriteTextureTier = [mMetalDevice readWriteTextureSupport];
+        if (readWriteTextureTier != MTLReadWriteTextureTierNone)
+        {
+            const bool rasterOrderGroupsSupported = !mFeatures.disableRasterOrderGroups.enabled &&
+                                                    [mMetalDevice areRasterOrderGroupsSupported];
+
+            if (rasterOrderGroupsSupported && isAMD())
+            {
+                mNativeLimitations.noRasterOrderGroupWithoutAttachmentZero = true;
+            }
+        }
+    }
 }
 
 void DisplayMtl::initializeExtensions() const
@@ -933,6 +957,7 @@ void DisplayMtl::initializeExtensions() const
     mNativeExtensions.copyCompressedTextureCHROMIUM = false;
     mNativeExtensions.textureMirrorClampToEdgeEXT   = true;
     mNativeExtensions.depthClampEXT                 = true;
+    mNativeExtensions.rgbxInternalFormatANGLE       = mFeatures.hasTextureSwizzle.enabled;
 
     // EXT_debug_marker is not implemented yet, but the entry points must be exposed for the
     // Metal backend to be used in Chrome (http://anglebug.com/42263519)
@@ -1036,6 +1061,8 @@ void DisplayMtl::initializeExtensions() const
 
     mNativeExtensions.packReverseRowOrderANGLE = true;
 
+    mNativeExtensions.framebufferFlipYMESA = true;
+
     if (mFeatures.hasEvents.enabled)
     {
         // MTLSharedEvent is only available since Metal 2.1
@@ -1102,15 +1129,6 @@ void DisplayMtl::initializeExtensions() const
                 !mFeatures.disableRWTextureTier2Support.enabled &&
                 readWriteTextureTier == MTLReadWriteTextureTier2;
 
-            if (rasterOrderGroupsSupported && isAMD())
-            {
-                // anglebug.com/42266263 -- [[raster_order_group()]] does not work for read_write
-                // textures on AMD when the render pass doesn't have a color attachment on slot 0.
-                // To work around this we attach one of the PLS textures to GL_COLOR_ATTACHMENT0, if
-                // there isn't one already.
-                mNativePLSOptions.renderPassNeedsAMDRasterOrderGroupsWorkaround = true;
-            }
-
             mNativeExtensions.shaderPixelLocalStorageANGLE         = true;
             mNativeExtensions.shaderPixelLocalStorageCoherentANGLE = rasterOrderGroupsSupported;
 
@@ -1128,6 +1146,11 @@ void DisplayMtl::initializeExtensions() const
             mNativeCaps.maxImageUnits = gl::IMPLEMENTATION_MAX_PIXEL_LOCAL_STORAGE_PLANES;
         }
     }
+
+    // Apple Silicon doesn't support image memory barriers, so we ignore the PLS "noncoherent"
+    // qualifier on that hardware.
+    mNativePLSOptions.supportsNoncoherent = !supportsAppleGPUFamily(1);
+
     // "The GPUs in Apple3 through Apple8 families only support memory barriers for compute command
     // encoders, and for vertex-to-vertex and vertex-to-fragment stages of render command encoders."
     mHasFragmentMemoryBarriers = !supportsAppleGPUFamily(3);
@@ -1173,12 +1196,6 @@ void DisplayMtl::initializeTextureCaps() const
     // Disable all depth buffer and stencil buffer readback extensions until we need them
     mNativeExtensions.readDepthNV         = false;
     mNativeExtensions.readStencilNV       = false;
-    mNativeExtensions.depthBufferFloat2NV = false;
-}
-
-void DisplayMtl::initializeLimitations()
-{
-    mNativeLimitations.noVertexAttributeAliasing = true;
 }
 
 void DisplayMtl::initializeFeatures()
@@ -1195,6 +1212,11 @@ void DisplayMtl::initializeFeatures()
     }
 
     ANGLE_FEATURE_CONDITION((&mFeatures), allowGenMultipleMipsPerPass, true);
+
+    // TODO(anglebug.com/537661068): using visibility query offset > 65528 causes bugs in the Apple
+    // Silicon driver.
+    ANGLE_FEATURE_CONDITION((&mFeatures), limitMaxVisibilityQueryOffset, true);
+
     ANGLE_FEATURE_CONDITION((&mFeatures), forceBufferGPUStorage, false);
     ANGLE_FEATURE_CONDITION((&mFeatures), hasExplicitMemBarrier, (isOSX || isCatalyst) && !isARM);
     ANGLE_FEATURE_CONDITION((&mFeatures), hasDepthAutoResolve, supportsEitherGPUFamily(3, 2));
@@ -1306,23 +1328,16 @@ void DisplayMtl::initializeFeatures()
            mFeatures.allowSamplerCompareGradient.enabled);
 
     // Metal compiler optimizations may remove infinite loops causing crashes later in shader
-    // execution. http://crbug.com/1513738
-    ANGLE_FEATURE_CONDITION((&mFeatures), ensureLoopForwardProgress, false);
-
-    // Once not used, injectAsmStatementIntoLoopBodies should be removed and
-    // ensureLoopForwardProgress should default to true.
-    // http://crbug.com/1522730
-    bool shouldUseInjectAsmIntoLoopBodies = !mFeatures.ensureLoopForwardProgress.enabled;
-    ANGLE_FEATURE_CONDITION((&mFeatures), injectAsmStatementIntoLoopBodies,
-                            shouldUseInjectAsmIntoLoopBodies);
+    // execution. http://crbug.com/41486305
+    ANGLE_FEATURE_CONDITION((&mFeatures), ensureLoopForwardProgress, true);
 }
 
 angle::Result DisplayMtl::initializeShaderLibrary()
 {
     angle::ObjCPtr<NSError> err;
 #if ANGLE_METAL_XCODE_BUILDS_SHADERS || ANGLE_METAL_HAS_PREBUILT_INTERNAL_SHADERS
-    mDefaultShaders = mtl::CreateShaderLibraryFromStaticBinary(getMetalDevice(), gDefaultMetallib,
-                                                               std::size(gDefaultMetallib), &err);
+    mDefaultShaders =
+        mtl::CreateShaderLibraryFromStaticBinary(getMetalDevice(), gDefaultMetallib, &err);
 #else
     const bool disableFastMath = false;
     const bool usesInvariance  = true;
@@ -1420,7 +1435,7 @@ bool DisplayMtl::isAMDBronzeDriver() const
 
     for (size_t i = 0; i < ArraySize(kMTLBronzeDeviceNames); ++i)
     {
-        if ([[mMetalDevice name] hasSuffix:kMTLBronzeDeviceNames[i]])
+        if (ANGLE_UNSAFE_TODO([[mMetalDevice name] hasSuffix:kMTLBronzeDeviceNames[i]]))
         {
             mIsAMDBronze = true;
             break;

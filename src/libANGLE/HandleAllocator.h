@@ -10,6 +10,9 @@
 #ifndef LIBANGLE_HANDLEALLOCATOR_H_
 #define LIBANGLE_HANDLEALLOCATOR_H_
 
+#include <deque>
+#include <vector>
+
 #include "common/angleutils.h"
 
 #include "angle_gl.h"
@@ -20,7 +23,7 @@ namespace gl
 class HandleAllocator final : angle::NonCopyable
 {
   public:
-    explicit HandleAllocator(GLuint maximumHandleValue);
+    explicit HandleAllocator(GLuint maximumHandleValue, GLuint minimumReleasedToKeep = 0);
 
     ~HandleAllocator();
 
@@ -34,6 +37,7 @@ class HandleAllocator final : angle::NonCopyable
 
   private:
     const GLuint mMaxValue;
+    const GLuint mMinimumReleasedToKeep;
 
     // Represents an inclusive range [begin, end]
     struct HandleRange
@@ -50,7 +54,7 @@ class HandleAllocator final : angle::NonCopyable
     // as ranges, and handles that were previously allocated and
     // released, stored in a heap.
     std::vector<HandleRange> mUnallocatedList;
-    std::vector<GLuint> mReleasedList;
+    std::deque<GLuint> mReleasedList;
 
     bool mLoggingEnabled;
 };

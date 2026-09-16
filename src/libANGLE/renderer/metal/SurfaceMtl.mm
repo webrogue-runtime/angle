@@ -483,7 +483,7 @@ egl::Error WindowSurfaceMtl::initialize(const egl::Display *display)
 egl::Error WindowSurfaceMtl::swap(const gl::Context *context, SurfaceSwapFeedback *feedback)
 {
     ANGLE_TO_EGL_TRY(swapImpl(context));
-
+    feedback->swapChainImageChanged = true;
     return egl::NoError();
 }
 
@@ -531,8 +531,7 @@ egl::Error WindowSurfaceMtl::attachToFramebuffer(const gl::Context *context,
 {
     FramebufferMtl *framebufferMtl = GetImplAs<FramebufferMtl>(framebuffer);
     ASSERT(!framebufferMtl->getBackbuffer());
-    framebufferMtl->setBackbuffer(this);
-    framebufferMtl->setFlipY(true);
+    framebufferMtl->setBackbuffer(this, true);
     return egl::NoError();
 }
 
@@ -541,8 +540,7 @@ egl::Error WindowSurfaceMtl::detachFromFramebuffer(const gl::Context *context,
 {
     FramebufferMtl *framebufferMtl = GetImplAs<FramebufferMtl>(framebuffer);
     ASSERT(framebufferMtl->getBackbuffer() == this);
-    framebufferMtl->setBackbuffer(nullptr);
-    framebufferMtl->setFlipY(false);
+    framebufferMtl->setBackbuffer(nullptr, false);
     return egl::NoError();
 }
 

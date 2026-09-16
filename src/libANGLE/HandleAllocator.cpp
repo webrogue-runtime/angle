@@ -10,7 +10,6 @@
 #include "libANGLE/HandleAllocator.h"
 
 #include <algorithm>
-#include <functional>
 #include <limits>
 
 #include "common/debug.h"
@@ -24,22 +23,23 @@ struct HandleAllocator::HandleRangeComparator
     bool operator()(const HandleRange &range, GLuint handle) const { return (range.end < handle); }
 };
 
-HandleAllocator::HandleAllocator(GLuint maximumHandleValue)
-    : mMaxValue(maximumHandleValue), mLoggingEnabled(false)
+HandleAllocator::HandleAllocator(GLuint maximumHandleValue, GLuint minimumReleasedToKeep)
+    : mMaxValue(maximumHandleValue),
+      mMinimumReleasedToKeep(minimumReleasedToKeep),
+      mLoggingEnabled(false)
 {
     mUnallocatedList.push_back(HandleRange(1, mMaxValue));
 }
 
-HandleAllocator::~HandleAllocator() {}
+HandleAllocator::~HandleAllocator() = default;
 
 bool HandleAllocator::allocate(GLuint *outId)
 {
-    // Allocate from released list, logarithmic time for pop_heap.
-    if (!mReleasedList.empty())
+    // Allocate from released list, constant time for FIFO pop_front.
+    if (mReleasedList.size() > mMinimumReleasedToKeep)
     {
-        std::pop_heap(mReleasedList.begin(), mReleasedList.end(), std::greater<GLuint>());
-        GLuint reusedHandle = mReleasedList.back();
-        mReleasedList.pop_back();
+        GLuint reusedHandle = mReleasedList.front();
+        mReleasedList.pop_front();
 
         if (mLoggingEnabled)
         {
@@ -53,38 +53,55 @@ bool HandleAllocator::allocate(GLuint *outId)
         return true;
     }
 
-    if (mUnallocatedList.empty())
+    if (!mUnallocatedList.empty())
     {
-        return false;
+        // Allocate from unallocated list, constant time.
+        auto listIt = mUnallocatedList.begin();
+
+        GLuint freeListHandle = listIt->begin;
+        ASSERT(freeListHandle > 0);
+
+        if (listIt->begin == listIt->end)
+        {
+            mUnallocatedList.erase(listIt);
+        }
+        else
+        {
+            angle::CheckedNumeric<GLuint> checkedBegin = listIt->begin;
+            checkedBegin++;
+            listIt->begin = checkedBegin.ValueOrDie();
+        }
+
+        if (mLoggingEnabled)
+        {
+            WARN() << "HandleAllocator::allocate allocating " << freeListHandle << std::endl;
+        }
+
+        if (outId)
+        {
+            *outId = freeListHandle;
+        }
+        return true;
     }
 
-    // Allocate from unallocated list, constant time.
-    auto listIt = mUnallocatedList.begin();
-
-    GLuint freeListHandle = listIt->begin;
-    ASSERT(freeListHandle > 0);
-
-    if (listIt->begin == listIt->end)
+    if (!mReleasedList.empty())
     {
-        mUnallocatedList.erase(listIt);
-    }
-    else
-    {
-        angle::CheckedNumeric<GLuint> checkedBegin = listIt->begin;
-        checkedBegin++;
-        listIt->begin = checkedBegin.ValueOrDie();
-    }
+        GLuint reusedHandle = mReleasedList.front();
+        mReleasedList.pop_front();
 
-    if (mLoggingEnabled)
-    {
-        WARN() << "HandleAllocator::allocate allocating " << freeListHandle << std::endl;
+        if (mLoggingEnabled)
+        {
+            WARN() << "HandleAllocator::allocate reusing " << reusedHandle << std::endl;
+        }
+
+        if (outId)
+        {
+            *outId = reusedHandle;
+        }
+        return true;
     }
 
-    if (outId)
-    {
-        *outId = freeListHandle;
-    }
-    return true;
+    return false;
 }
 
 void HandleAllocator::release(GLuint handle)
@@ -119,9 +136,8 @@ void HandleAllocator::release(GLuint handle)
         }
     }
 
-    // Add to released list, logarithmic time for push_heap.
+    // Add to released list, constant time for FIFO push_back.
     mReleasedList.push_back(handle);
-    std::push_heap(mReleasedList.begin(), mReleasedList.end(), std::greater<GLuint>());
 }
 
 void HandleAllocator::reserve(GLuint handle)
@@ -145,7 +161,6 @@ void HandleAllocator::reserve(GLuint handle)
         if (releasedIt != mReleasedList.end())
         {
             mReleasedList.erase(releasedIt);
-            std::make_heap(mReleasedList.begin(), mReleasedList.end(), std::greater<GLuint>());
             return;
         }
     }

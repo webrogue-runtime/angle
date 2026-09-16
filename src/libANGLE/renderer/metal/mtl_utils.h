@@ -16,6 +16,7 @@
 #include "angle_gl.h"
 #include "common/MemoryBuffer.h"
 #include "common/PackedEnums.h"
+#include "common/span.h"
 #include "libANGLE/Context.h"
 #include "libANGLE/Texture.h"
 #include "libANGLE/angletypes.h"
@@ -46,24 +47,27 @@ bool PreferStagedTextureUploads(const gl::Context *context,
                                 const Format &textureObjFormat,
                                 const StagingPurpose purpose);
 
-// Initialize texture content to black.
+// Initialize texture content to black (or non-zero if requested).
 angle::Result InitializeTextureContents(const gl::Context *context,
                                         const TextureRef &texture,
                                         const Format &textureObjFormat,
-                                        const ImageNativeIndex &index);
-// Same as above but using GPU clear operation instead of CPU.forma
+                                        const ImageNativeIndex &index,
+                                        bool toNonZero = false);
+// Same as above but using GPU clear operation instead of CPU.
 // - channelsToInit parameter controls which channels will get their content initialized.
 angle::Result InitializeTextureContentsGPU(const gl::Context *context,
                                            const TextureRef &texture,
                                            const Format &textureObjFormat,
                                            const ImageNativeIndex &index,
-                                           MTLColorWriteMask channelsToInit);
+                                           MTLColorWriteMask channelsToInit,
+                                           bool toNonZero = false);
 
 // Same as above but for a depth/stencil texture.
 angle::Result InitializeDepthStencilTextureContentsGPU(const gl::Context *context,
                                                        const TextureRef &texture,
                                                        const Format &textureObjFormat,
-                                                       const ImageNativeIndex &index);
+                                                       const ImageNativeIndex &index,
+                                                       bool toNonZero = false);
 
 // Unified texture's per slice/depth texel reading function
 angle::Result ReadTexturePerSliceBytes(const gl::Context *context,
@@ -72,7 +76,7 @@ angle::Result ReadTexturePerSliceBytes(const gl::Context *context,
                                        const gl::Rectangle &fromRegion,
                                        const MipmapNativeLevel &mipLevel,
                                        uint32_t sliceOrDepth,
-                                       uint8_t *dataOut);
+                                       angle::Span<uint8_t> dataOut);
 
 angle::Result ReadTexturePerSliceBytesToBuffer(const gl::Context *context,
                                                const TextureRef &texture,
@@ -108,13 +112,11 @@ angle::ObjCPtr<id<MTLLibrary>> CreateShaderLibrary(
     angle::ObjCPtr<NSError> *error);
 
 angle::ObjCPtr<id<MTLLibrary>> CreateShaderLibraryFromBinary(id<MTLDevice> metalDevice,
-                                                             const uint8_t *data,
-                                                             size_t length,
+                                                             angle::Span<const uint8_t> data,
                                                              angle::ObjCPtr<NSError> *error);
 
 angle::ObjCPtr<id<MTLLibrary>> CreateShaderLibraryFromStaticBinary(id<MTLDevice> metalDevice,
-                                                                   const uint8_t *data,
-                                                                   size_t length,
+                                                                   angle::Span<const uint8_t> data,
                                                                    angle::ObjCPtr<NSError> *error);
 
 // Compiles a shader library into a metallib file, returning the path to it.
@@ -154,7 +156,6 @@ MTLStencilOperation GetStencilOp(GLenum op);
 
 MTLWinding GetFrontfaceWinding(GLenum frontFaceMode, bool invert);
 
-MTLPrimitiveTopologyClass GetPrimitiveTopologyClass(gl::PrimitiveMode mode);
 MTLPrimitiveType GetPrimitiveType(gl::PrimitiveMode mode);
 MTLIndexType GetIndexType(gl::DrawElementsType type);
 

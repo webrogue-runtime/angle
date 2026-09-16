@@ -167,6 +167,25 @@ impl CFGBuilder {
     fn add_variable_declaration(&mut self, variable_id: VariableId) {
         if !self.current_block.new_instructions_are_dead_code {
             self.current_block.block.add_variable_declaration(variable_id);
+        } else {
+            // GLSL supports declaring a variable in one case and using it in the next, even if the
+            // declaration is in dead code!  To support this, the variable declaration is added to
+            // the block anyway if inside a switch case.
+            let mut non_merge_blocks =
+                self.interm_blocks.iter().rev().filter(|&block| !block.is_merge_block);
+            // If this is the first block of the first `case`, the parent would be the `switch`.
+            let parent_is_switch = matches!(
+                non_merge_blocks.next().unwrap().block.get_terminating_op(),
+                OpCode::Switch(..)
+            );
+            // Otherwise the grandparent is the `switch`.
+            let grandparent = non_merge_blocks.next();
+            let grandparent_is_switch = grandparent
+                .map(|block| matches!(block.block.get_terminating_op(), OpCode::Switch(..)))
+                .unwrap_or(false);
+            if parent_is_switch || grandparent_is_switch {
+                self.current_block.block.add_variable_declaration(variable_id);
+            }
         }
     }
 
@@ -270,7 +289,8 @@ impl CFGBuilder {
 
         // If the condition of the if is a constant, it can be constant-folded.
         let mut if_block = self.interm_blocks.pop().unwrap();
-        let if_condition = if_block.block.get_terminating_op().get_if_condition().id.get_constant();
+        let if_condition =
+            if_block.block.get_terminating_op().get_if_condition().id.get_if_constant();
 
         match if_condition {
             Some(condition) => {
@@ -307,7 +327,7 @@ impl CFGBuilder {
                     // merge block.
                     self.interm_blocks.push(if_block);
                     self.current_block.is_merge_block = true;
-                    self.current_block.block.input = input.map(|id| id.to_register_id());
+                    self.current_block.block.input = input.map(|id| id.as_register_id());
                     None
                 }
             }
@@ -331,7 +351,7 @@ impl CFGBuilder {
                 // If there was a merge parameter, replace the merge input with this id directly.
                 let last_block = self.current_block.block.get_merge_chain_last_block_mut();
                 let terminating_op = last_block.get_terminating_op();
-                let merge_param = if matches!(terminating_op, OpCode::Merge(..)) {
+                if matches!(terminating_op, OpCode::Merge(..)) {
                     let merge_param = terminating_op.get_merge_parameter();
                     last_block.unterminate();
                     merge_param
@@ -340,9 +360,7 @@ impl CFGBuilder {
                     // dead code.
                     self.current_block.new_instructions_are_dead_code = true;
                     None
-                };
-
-                merge_param
+                }
             }
             None => {
                 // The if should be entirely eliminated, as there is nothing to replace it with.
@@ -432,7 +450,7 @@ impl CFGBuilder {
             .get_merge_chain_terminating_op()
             .get_loop_condition()
             .id
-            .get_constant();
+            .get_if_constant();
 
         match loop_condition {
             Some(condition) if condition == CONSTANT_ID_FALSE => {
@@ -542,7 +560,11 @@ impl CFGBuilder {
                     // To support this, pull the variable declaration to the parent scope so it's
                     // not declared only in one case block.
                     let switch_block = &mut self.interm_blocks.last_mut().unwrap().block;
-                    switch_block.variables.append(&mut std::mem::take(&mut case_block.variables));
+                    let mut case_block_iter = Some(&mut case_block);
+                    while let Some(block) = case_block_iter {
+                        switch_block.variables.append(&mut std::mem::take(&mut block.variables));
+                        case_block_iter = block.merge_block.as_mut().map(|block| block.as_mut());
+                    }
                     switch_block.add_switch_case_block(case_block);
                 }
             }
@@ -565,7 +587,7 @@ impl CFGBuilder {
     }
 
     fn begin_case(&mut self, value: TypedId) {
-        self.begin_case_impl(value.id.get_constant());
+        self.begin_case_impl(value.id.get_if_constant());
     }
 
     fn begin_default(&mut self) {
@@ -585,7 +607,7 @@ impl CFGBuilder {
 
         // If the expression is constant, but no matching cases (or default) exists, the switch is
         // a no-op.
-        if let Some(switch_expr) = switch_expr.id.get_constant() {
+        if let Some(switch_expr) = switch_expr.id.get_if_constant() {
             // First check if there's an exact match
             let any_exact = switch_cases
                 .iter()
@@ -599,7 +621,7 @@ impl CFGBuilder {
         }
 
         // Expression is not a constant, assume the switch is not no-op.
-        return (true, None);
+        (true, None)
     }
 
     fn end_switch(&mut self) {
@@ -701,10 +723,12 @@ impl CFGBuilder {
 // A helper to build the IR from scratch.  The helper is invoked while parsing the shader, and
 // its main purpose is to maintain in-progress items until completed, and adapt the incoming GLSL
 // syntax to the IR.
-#[cfg_attr(debug_assertions, derive(Debug))]
 pub struct Builder {
     // The IR being built
     ir: IR,
+
+    // Flags controlling the IR generation
+    options: Options,
 
     // The current function that is being built (if any).
     current_function: Option<FunctionId>,
@@ -739,18 +763,27 @@ pub struct Builder {
     // with it.
     gl_clip_distance_length_var_id: Option<VariableId>,
     gl_cull_distance_length_var_id: Option<VariableId>,
+
+    // Whether `main()` should be wrapped to simplify transformations is decided by whether it ends
+    // in a single `return` (don't wrap) or if it has early `return`s or any `discard`s (do
+    // wrap).
+    main_discard_count: u32,
+    main_return_count: u32,
 }
 
 impl Builder {
-    pub fn new(shader_type: ShaderType) -> Builder {
+    pub fn new(shader_type: ShaderType, options: Options) -> Builder {
         Builder {
             ir: IR::new(shader_type),
+            options,
             current_function: None,
             current_function_cfg: CFGBuilder::new(),
             global_initializers_cfg: CFGBuilder::new(),
             interm_ids: Vec::new(),
             gl_clip_distance_length_var_id: None,
             gl_cull_distance_length_var_id: None,
+            main_discard_count: 0,
+            main_return_count: 0,
         }
     }
 
@@ -758,6 +791,7 @@ impl Builder {
     // initialization code to the beginning of `main()`.
     pub fn finish(&mut self) {
         debug_assert!(self.ir.meta.get_main_function_id().is_some());
+        let main_id = self.ir.meta.get_main_function_id().unwrap();
 
         if !self.global_initializers_cfg.is_empty() {
             self.global_initializers_cfg.current_block.block.terminate(OpCode::NextBlock);
@@ -770,19 +804,51 @@ impl Builder {
             util::calculate_function_decl_order(&self.ir.meta, &self.ir.function_entries);
         let function_count = self.ir.function_entries.len();
         // Take all entry blocks out ...
-        let mut function_entries = std::mem::replace(&mut self.ir.function_entries, vec![]);
+        let mut function_entries = std::mem::take(&mut self.ir.function_entries);
         self.ir.function_entries.resize_with(function_count, || None);
         // ... and only place back the ones that are reachable from `main` (i.e. are in the DAG).
         for function_id in function_decl_order {
             let id = function_id.id as usize;
-            self.ir.function_entries[id] = std::mem::replace(&mut function_entries[id], None);
+            self.ir.function_entries[id] = function_entries[id].take();
         }
 
         // `main()` is always reachable from `main()`!
-        debug_assert!(
-            self.ir.function_entries[self.ir.meta.get_main_function_id().unwrap().id as usize]
-                .is_some()
-        );
+        debug_assert!(self.ir.function_entries[main_id.id as usize].is_some());
+
+        // If `main()` has an early `return`, wrap it and create a new `main` that calls that.
+        // This helps transformations run things at the end of the shader, by appending code right
+        // before `main`'s terminating branch (typically `return`).
+        // If `main()` has `discard`, similarly wrap it so that the behavior of transformations is
+        // identical for a `main()` that ends in `discard`, regardless of whether it's wrapped or
+        // not; if `main()` is not wrapped, appending code would either be placed before the
+        // terminating `discard` (and would run instead of being eliminated), or would be dropped
+        // by the transformation (in which case helper lanes don't run it).
+
+        // `main` has an early `return` if more than one `return` is encountered.  If `main` ends
+        // in `discard` and has only one `return`, it's still an early return, but it's wrapped
+        // because of having `discard` anyway.
+        let main_has_early_return = self.main_return_count > 1;
+        let main_has_discard = self.main_discard_count > 0;
+        if main_has_early_return || main_has_discard {
+            let wrapped_main = Function::new(
+                "wrapped_main",
+                vec![],
+                TYPE_ID_VOID,
+                Precision::NotApplicable,
+                false,
+                Decorations::new_none(),
+            );
+            let wrapped_main = self.ir.add_function(wrapped_main);
+
+            // Move the body of `main` to `wrapped_main`.
+            self.ir.function_entries.swap(wrapped_main.id as usize, main_id.id as usize);
+
+            // Set a new body for `main` that calls `wrapped_main`.
+            let mut body = Block::new();
+            body.add_void_instruction(OpCode::Call(wrapped_main, vec![]));
+            body.terminate(OpCode::Return(None));
+            self.ir.function_entries[main_id.id as usize] = Some(body);
+        }
     }
 
     // Called at the end of the shader after it has failed validation.  At this point, the IR is no
@@ -804,31 +870,107 @@ impl Builder {
         std::mem::replace(&mut self.ir, IR::new(ShaderType::Vertex))
     }
 
+    fn variable_is_private_and_can_be_initialized(
+        &self,
+        type_id: TypeId,
+        decorations: &Decorations,
+        built_in: Option<BuiltIn>,
+    ) -> bool {
+        let type_info = self.ir.meta.get_type(type_id);
+        debug_assert!(!type_info.is_pointer());
+
+        // Some variables cannot be initialized, like uniforms, inputs, etc.
+        !(type_info.is_image()
+            || type_info.is_unsized_array()
+            || built_in.is_some()
+            || decorations.has(Decoration::Input)
+            || decorations.has(Decoration::Output)
+            || decorations.has(Decoration::InputOutput)
+            || decorations.has(Decoration::Uniform)
+            || decorations.has(Decoration::Buffer)
+            || decorations.has(Decoration::Shared))
+    }
+
+    fn built_in_is_output(&self, built_in: BuiltIn) -> bool {
+        // gl_PrimitiveID is an output in geometry shaders, but input in tessellation and fragment
+        // shaders.  gl_Layer is an output in geometry shaders, but input in vertex shaders (for
+        // multiview).
+        //
+        // gl_ClipDistance and gl_CullDistance are inputs in fragment shader, output otherwise.
+        //
+        // gl_TessLevelOuter and gl_TessLevelInner are outputs in tessellation control shaders, but
+        // input in tessellation evaluation shaders.
+        match built_in {
+            BuiltIn::FragColor
+            | BuiltIn::FragData
+            | BuiltIn::FragDepth
+            | BuiltIn::SecondaryFragColorEXT
+            | BuiltIn::SecondaryFragDataEXT
+            | BuiltIn::SampleMask
+            | BuiltIn::Position
+            | BuiltIn::PointSize
+            | BuiltIn::PrimitiveShadingRateEXT
+            | BuiltIn::BoundingBoxOES
+            | BuiltIn::PerVertexOut => true,
+            BuiltIn::PrimitiveID | BuiltIn::LayerOut => {
+                self.ir.meta.get_shader_type() == ShaderType::Geometry
+            }
+            BuiltIn::ClipDistance | BuiltIn::CullDistance => {
+                self.ir.meta.get_shader_type() != ShaderType::Fragment
+            }
+            BuiltIn::TessLevelOuter | BuiltIn::TessLevelInner => {
+                self.ir.meta.get_shader_type() == ShaderType::TessellationControl
+            }
+            _ => false,
+        }
+    }
+
+    fn variable_is_output(&self, decorations: &Decorations, built_in: Option<BuiltIn>) -> bool {
+        decorations.has(Decoration::Output)
+            || built_in.is_some_and(|built_in| self.built_in_is_output(built_in))
+    }
+
     // Internal helper to declare a new variable.
     fn declare_variable(
         &mut self,
         name: Name,
         type_id: TypeId,
         precision: Precision,
+        precise: bool,
         decorations: Decorations,
         built_in: Option<BuiltIn>,
         scope: VariableScope,
     ) -> VariableId {
-        let variable_id = self.ir.meta.declare_variable(
-            name,
-            type_id,
-            precision,
-            decorations,
-            built_in,
-            None,
-            scope,
-        );
+        // The declared variable may be uninitialized.  If the build flags indicate the need,
+        // the variable is marked such that it is zero-initialized before output generation.  Note
+        // that function parameters are handled in declare_function_param.
+        let needs_zero_initialization = scope != VariableScope::FunctionParam
+            && ((self.options.initialize_uninitialized_variables
+                && self.variable_is_private_and_can_be_initialized(
+                    type_id,
+                    &decorations,
+                    built_in,
+                ))
+                || (self.options.initialize_output_variables
+                    && self.variable_is_output(&decorations, built_in))
+                || (self.options.initialize_gl_position
+                    && matches!(built_in, Some(BuiltIn::Position))));
+
+        let variable_id = self
+            .ir
+            .meta
+            .declare_variable(name, type_id, precision, precise, decorations, built_in, None, scope)
+            .0;
 
         // Add the variable to the list of local variables in this scope, if not global.  Function
         // parameters are part of the `Function` and so don't need to be explicitly marked as
         // needing declaration.
         if scope == VariableScope::Local {
             self.current_function_cfg.add_variable_declaration(variable_id);
+        }
+
+        if needs_zero_initialization {
+            self.ir.meta.require_variable_zero_initialization(variable_id);
         }
 
         variable_id
@@ -840,6 +982,7 @@ impl Builder {
         built_in: BuiltIn,
         type_id: TypeId,
         precision: Precision,
+        precise: bool,
         decorations: Decorations,
     ) -> VariableId {
         // Note: the name of the built-in is not derived.  For text-based generators, the name can
@@ -851,6 +994,7 @@ impl Builder {
             Name::new_exact(""),
             type_id,
             precision,
+            precise,
             decorations,
             Some(built_in),
             VariableScope::Global,
@@ -864,12 +1008,14 @@ impl Builder {
         name: &'static str,
         type_id: TypeId,
         precision: Precision,
+        precise: bool,
         decorations: Decorations,
     ) -> VariableId {
         self.declare_variable(
             Name::new_interface(name),
             type_id,
             precision,
+            precise,
             decorations,
             None,
             VariableScope::Global,
@@ -883,6 +1029,7 @@ impl Builder {
         name: &'static str,
         type_id: TypeId,
         precision: Precision,
+        precise: bool,
         decorations: Decorations,
     ) -> VariableId {
         let scope = if self.current_function.is_none() {
@@ -891,12 +1038,35 @@ impl Builder {
             VariableScope::Local
         };
 
-        self.declare_variable(Name::new_temp(name), type_id, precision, decorations, None, scope)
+        self.declare_variable(
+            Name::new_temp(name),
+            type_id,
+            precision,
+            precise,
+            decorations,
+            None,
+            scope,
+        )
     }
 
     // Declare a const temporary variable.  The name of this variable is ultimately unused.
-    pub fn declare_const_variable(&mut self, type_id: TypeId, precision: Precision) -> VariableId {
-        self.ir.meta.declare_const_variable(Name::new_temp(""), type_id, precision)
+    pub fn declare_const_variable(
+        &mut self,
+        type_id: TypeId,
+        precision: Precision,
+        precise: bool,
+    ) -> VariableId {
+        self.ir.meta.declare_const_variable(Name::new_temp(""), type_id, precision, precise)
+    }
+
+    // Rescope a temporary variable to a `for` loop variable declared in its initializer
+    // expression.  This is nearly identically treated as a `Local` variable, except it's easier to
+    // identify its scope by the generators, since the variable declaration is otherwise moved to
+    // the block leading to the `for` loop.
+    pub fn rescope_as_for_loop_variable(&mut self, variable_id: VariableId) {
+        let variable = self.ir.meta.get_variable_mut(variable_id);
+        debug_assert!(variable.scope == VariableScope::Local);
+        variable.scope = VariableScope::ForLoopVariable;
     }
 
     // In GLSL, it's possible to mark a variable as invariant or precise in a separate line,
@@ -906,7 +1076,7 @@ impl Builder {
         self.ir.meta.get_variable_mut(variable_id).decorations.add_invariant();
     }
     fn mark_variable_precise(&mut self, variable_id: VariableId) {
-        self.ir.meta.get_variable_mut(variable_id).decorations.add_precise();
+        self.ir.meta.get_variable_mut(variable_id).precise = true;
     }
 
     // When a function prototype is encountered, the following functions are called:
@@ -932,10 +1102,17 @@ impl Builder {
         params: Vec<FunctionParam>,
         return_type_id: TypeId,
         return_precision: Precision,
+        return_precise: bool,
         return_decorations: Decorations,
     ) -> FunctionId {
-        let function =
-            Function::new(name, params, return_type_id, return_precision, return_decorations);
+        let function = Function::new(
+            name,
+            params,
+            return_type_id,
+            return_precision,
+            return_precise,
+            return_decorations,
+        );
         let is_main = name == "main";
 
         let id = self.ir.add_function(function);
@@ -978,16 +1155,27 @@ impl Builder {
         name: &'static str,
         type_id: TypeId,
         precision: Precision,
+        precise: bool,
         decorations: Decorations,
+        direction: FunctionParamDirection,
     ) -> VariableId {
-        self.declare_variable(
+        let variable_id = self.declare_variable(
             Name::new_temp(name),
             type_id,
             precision,
+            precise,
             decorations,
             None,
             VariableScope::FunctionParam,
-        )
+        );
+
+        if self.options.initialize_uninitialized_variables
+            && direction == FunctionParamDirection::Output
+        {
+            self.ir.meta.require_variable_zero_initialization(variable_id);
+        }
+
+        variable_id
     }
 
     // Once the entire function body is visited, `end_function` puts the graph in the function.
@@ -1059,13 +1247,20 @@ impl Builder {
     pub fn initialize(&mut self, id: VariableId) {
         let value = self.load();
 
-        match value.id {
-            Id::Constant(constant_id) => self.ir.meta.set_variable_initializer(id, constant_id),
-            _ => {
-                let id = TypedId::from_variable_id(&self.ir.meta, id);
-                self.scope().add_void_instruction(OpCode::Store(id, value))
-            }
-        };
+        // For some generators, non-const global variables cannot have an initializer.
+        let initializer_allowed = self.options.initializer_allowed_on_non_const_global_variables
+            || self.current_function.is_some()
+            || self.ir.meta.get_variable(id).is_const;
+
+        if let Id::Constant(constant_id) = value.id
+            && initializer_allowed
+        {
+            self.ir.meta.set_variable_initializer(id, constant_id);
+        } else {
+            self.ir.meta.on_variable_initialized(id);
+            let id = TypedId::from_variable_id(&self.ir.meta, id);
+            self.scope().add_void_instruction(OpCode::Store(id, value));
+        }
     }
 
     // Flow control helpers.
@@ -1119,10 +1314,11 @@ impl Builder {
     //
     // In the end, the result id is found in the input of the merge block of the if/else used to
     // implement it.
+    //
+    // If the expressions are `void`, then end_ternary_true_expression_void,
+    // end_ternary_false_expression_void, and end_ternary_void are called.
     pub fn begin_ternary_true_expression(&mut self) {
-        // The condition must be at the top of the stack.
-        let condition = self.load();
-        self.scope().begin_if_true_block(condition);
+        self.begin_if_true_block();
     }
     pub fn end_ternary_true_expression(&mut self) {
         let true_value = self.load();
@@ -1135,8 +1331,11 @@ impl Builder {
             self.ir.meta.new_register(OpCode::MergeInput, true_value.type_id, true_value.precision);
         self.interm_ids.push(TypedId::from_register_id(new_id));
     }
+    pub fn end_ternary_true_expression_void(&mut self) {
+        self.end_if_true_block();
+    }
     pub fn begin_ternary_false_expression(&mut self) {
-        self.scope().begin_if_false_block();
+        self.begin_if_false_block();
     }
     pub fn end_ternary_false_expression(&mut self) {
         let false_value = self.load();
@@ -1149,11 +1348,17 @@ impl Builder {
         self.ir.meta.get_instruction_mut(result.id.get_register()).result.precision =
             result.precision;
     }
+    pub fn end_ternary_false_expression_void(&mut self) {
+        self.end_if_false_block();
+    }
     pub fn end_ternary(&mut self) {
         let merge_input = self.interm_ids.pop().unwrap();
         let constant_folded_merge_input = self.scope().end_if(Some(merge_input));
         let result = constant_folded_merge_input.unwrap_or(merge_input);
         self.interm_ids.push(TypedId::new(result.id, merge_input.type_id, merge_input.precision));
+    }
+    pub fn end_ternary_void(&mut self) {
+        self.end_if();
     }
 
     // Short circuit support is implemented over ?: and uses the same mechanism:
@@ -1272,9 +1477,15 @@ impl Builder {
 
     pub fn branch_discard(&mut self) {
         self.add_instruction(instruction::branch_discard());
+        if self.ir.meta.get_main_function_id() == self.current_function {
+            self.main_discard_count += 1;
+        }
     }
     pub fn branch_return(&mut self) {
         self.add_instruction(instruction::branch_return(None));
+        if self.ir.meta.get_main_function_id() == self.current_function {
+            self.main_return_count += 1;
+        }
     }
     pub fn branch_return_value(&mut self) {
         let value = self.load();
@@ -1290,7 +1501,7 @@ impl Builder {
     // Called when a constant expression used as an array size is evaluated.  The result is found
     // on the stack, but is not used by an instruction; it's returned to the parser instead.
     pub fn pop_array_size(&mut self) -> u32 {
-        let size_id = self.interm_ids.pop().unwrap().id.get_constant().unwrap();
+        let size_id = self.interm_ids.pop().unwrap().id.get_constant();
         // Use get_index() because the expression may either be int or uint, both of which are
         // acceptable; get_index() returns a u32 for either case.
         self.ir.meta.get_constant(size_id).value.get_index()
@@ -1316,7 +1527,11 @@ impl Builder {
 
     // Called when constant scalar values are visited.
     fn push_constant(&mut self, id: ConstantId, type_id: TypeId) {
-        self.push_id(Id::new_constant(id), type_id, Precision::NotApplicable);
+        self.push_id(
+            Id::new_constant(id),
+            type_id,
+            util::unassigned_precision(&self.ir.meta, type_id),
+        );
     }
     pub fn push_constant_float(&mut self, value: f32) {
         let id = self.ir.meta.get_constant_float(value);
@@ -1468,6 +1683,22 @@ impl Builder {
     // The struct whose field is being selected is expected to be found at the top of the stack.
     pub fn struct_field(&mut self, field_index: u32) {
         let struct_id = self.interm_ids.pop().unwrap();
+        let is_nameless_variable = matches!(struct_id.id, Id::Variable(variable_id) if self.ir.meta.get_variable(variable_id).name.name.is_empty());
+        if is_nameless_variable {
+            let struct_type_info = self.ir.meta.get_type_mut(struct_id.type_id);
+            if let Type::Struct(name, fields, StructSpecialization::InterfaceBlock) =
+                struct_type_info
+                && name.name.is_empty()
+            {
+                // Mark the field as statically used during parse.  This is only needed for nameless
+                // interface blocks, because in that case the fields are separately reflected to the
+                // API.
+                //
+                // This _has_ to be done during parse because static use in dead code is still
+                // considered static use by GLSL.
+                fields[field_index as usize].is_static_use = true;
+            }
+        }
 
         let result = instruction::struct_field(&mut self.ir.meta, struct_id, field_index);
         self.add_instruction(result);
@@ -1490,6 +1721,7 @@ impl Builder {
                     self.interm_ids.push(TypedId::from_constant_id(
                         self.ir.meta.get_constant_uint(row),
                         TYPE_ID_UINT,
+                        Precision::Unassigned,
                     ));
                     self.index();
                     matrix_expanded_args.push(self.load());
@@ -1596,7 +1828,7 @@ impl Builder {
         // simplicity.
         let args = self.trim_constructor_args(type_id, args);
 
-        let result = instruction::construct(&mut self.ir.meta, type_id, args);
+        let result = instruction::construct(&mut self.ir.meta, type_id, args, None);
         self.add_instruction(result);
     }
 
@@ -1611,6 +1843,7 @@ impl Builder {
                 name,
                 TYPE_ID_INT,
                 Precision::Low,
+                false,
                 Decorations::new_none(),
                 None,
                 VariableScope::Global,
@@ -1625,10 +1858,7 @@ impl Builder {
         length_variable: Option<VariableId>,
     ) {
         let type_id = self.ir.meta.get_variable(id).type_id;
-        let type_info = self.ir.meta.get_type(type_id);
-        debug_assert!(type_info.is_pointer());
-
-        let type_id = type_info.get_element_type_id().unwrap();
+        let type_id = self.ir.meta.get_pointee_type(type_id);
         let type_info = self.ir.meta.get_type(type_id);
         debug_assert!(type_info.is_unsized_array());
 
@@ -1641,7 +1871,7 @@ impl Builder {
 
         if let Some(length_variable_id) = length_variable {
             let length = self.ir.meta.get_constant_int(length as i32);
-            self.ir.meta.get_variable_mut(length_variable_id).initializer = Some(length);
+            self.ir.meta.set_variable_initializer(length_variable_id, length);
         }
     }
 
@@ -1667,8 +1897,8 @@ impl Builder {
             (false, false)
         };
 
-        match type_info {
-            &Type::Pointer(type_id) => {
+        match *type_info {
+            Type::Pointer(type_id) => {
                 let array_type_info = self.ir.meta.get_type(type_id);
                 if let &Type::Array(_, size) = array_type_info {
                     // The length is a constant, so push that on the stack.
@@ -1704,7 +1934,7 @@ impl Builder {
                     self.add_instruction(result);
                 }
             }
-            &Type::Array(_, size) => {
+            Type::Array(_, size) => {
                 self.push_constant_int(size as i32);
             }
             _ => panic!("Internal error: length() called on non-array"),
@@ -2589,6 +2819,18 @@ impl Builder {
 
 #[cxx::bridge(namespace = "sh::ir::ffi")]
 pub mod ffi {
+    // Flags controlling the way the IR is built, applying transformations during IR generation.
+    struct BuildOptions {
+        // Whether uninitialized local and global variables should be zero-initialized.
+        initialize_uninitialized_variables: bool,
+        // Whether non-const global variables are allowed to have an initializer.
+        initializer_allowed_on_non_const_global_variables: bool,
+        // Whether output variables should be zero-initialized.
+        initialize_output_variables: bool,
+        // Whether gl_Position should be zero-initialized.
+        initialize_gl_position: bool,
+    }
+
     // The following enums and types must be identical to what's found in BaseTypes.h.  This
     // duplication is not ideal, but necessary during the transition to IR.  Once the translator
     // switches over to IR completely, it can directly use the types exported from here (or better
@@ -2645,33 +2887,23 @@ pub mod ffi {
         USampler2DRect,
         USamplerBuffer,
         USamplerCubeArray,
-        SamplerVideoWEBGL,
         Image2D,
         Image3D,
         Image2DArray,
         ImageCube,
-        Image2DMS,
-        Image2DMSArray,
         ImageCubeArray,
-        ImageRect,
         ImageBuffer,
         IImage2D,
         IImage3D,
         IImage2DArray,
         IImageCube,
-        IImage2DMS,
-        IImage2DMSArray,
         IImageCubeArray,
-        IImageRect,
         IImageBuffer,
         UImage2D,
         UImage3D,
         UImage2DArray,
         UImageCube,
-        UImage2DMS,
-        UImage2DMSArray,
         UImageCubeArray,
-        UImageRect,
         UImageBuffer,
         PixelLocalANGLE,
         IPixelLocalANGLE,
@@ -2721,6 +2953,7 @@ pub mod ffi {
         SecondaryFragColorEXT,
         SecondaryFragDataEXT,
         ViewIDOVR,
+        EmulatedViewIDOVR,
         ClipDistance,
         CullDistance,
         LastFragColor,
@@ -2790,7 +3023,6 @@ pub mod ffi {
         TessEvaluationOut,
         TessCoord,
         SpecConst,
-        PixelLocalEXT,
     }
 
     #[derive(Copy, Clone)]
@@ -2898,7 +3130,6 @@ pub mod ffi {
         offset: i32,
         depth: ASTLayoutDepth,
         image_internal_format: ASTLayoutImageInternalFormat,
-        num_views: i32,
         yuv: bool,
         index: i32,
         noncoherent: bool,
@@ -2965,7 +3196,7 @@ pub mod ffi {
         #[derive(ExternType)]
         type IR;
 
-        fn builder_new(shader_type: ASTShaderType) -> Box<BuilderWrapper>;
+        fn builder_new(shader_type: ASTShaderType, options: BuildOptions) -> Box<BuilderWrapper>;
         fn builder_finish(mut builder: Box<BuilderWrapper>) -> Box<IR>;
         fn builder_fail(mut builder: Box<BuilderWrapper>) -> Box<IR>;
 
@@ -2985,6 +3216,7 @@ pub mod ffi {
 
         // Helpers to set global metadata.
         fn set_early_fragment_tests(self: &mut BuilderWrapper, value: bool);
+        fn set_num_views(self: &mut BuilderWrapper, value: u32);
         fn set_advanced_blend_equations(self: &mut BuilderWrapper, value: u32);
         fn set_tcs_vertices(self: &mut BuilderWrapper, value: u32);
         fn set_tes_primitive(self: &mut BuilderWrapper, value: ASTLayoutTessEvaluationType);
@@ -3007,6 +3239,7 @@ pub mod ffi {
             name: &'static str,
             ast_type: &ASTType,
         ) -> VariableId;
+        fn rescope_as_for_loop_variable(self: &mut BuilderWrapper, variable_id: VariableId);
         fn mark_variable_invariant(self: &mut BuilderWrapper, variable_id: VariableId);
         fn mark_variable_precise(self: &mut BuilderWrapper, variable_id: VariableId);
         fn new_function(
@@ -3028,6 +3261,7 @@ pub mod ffi {
             name: &'static str,
             type_id: TypeId,
             ast_type: &ASTType,
+            direction: ASTQualifier,
         ) -> VariableId;
         fn begin_function(self: &mut BuilderWrapper, id: FunctionId);
         fn end_function(self: &mut BuilderWrapper);
@@ -3039,10 +3273,10 @@ pub mod ffi {
         fn end_if_false_block(self: &mut BuilderWrapper);
         fn end_if(self: &mut BuilderWrapper);
         fn begin_ternary_true_expression(self: &mut BuilderWrapper);
-        fn end_ternary_true_expression(self: &mut BuilderWrapper);
+        fn end_ternary_true_expression(self: &mut BuilderWrapper, is_void: bool);
         fn begin_ternary_false_expression(self: &mut BuilderWrapper);
-        fn end_ternary_false_expression(self: &mut BuilderWrapper);
-        fn end_ternary(self: &mut BuilderWrapper);
+        fn end_ternary_false_expression(self: &mut BuilderWrapper, is_void: bool);
+        fn end_ternary(self: &mut BuilderWrapper, is_void: bool);
         fn begin_short_circuit_or(self: &mut BuilderWrapper);
         fn end_short_circuit_or(self: &mut BuilderWrapper);
         fn begin_short_circuit_and(self: &mut BuilderWrapper);
@@ -3282,6 +3516,8 @@ pub mod ffi {
     }
 }
 
+pub use ffi::BuildOptions as Options;
+
 impl From<TypeId> for ffi::TypeId {
     fn from(id: TypeId) -> Self {
         ffi::TypeId { id: id.id }
@@ -3409,7 +3645,7 @@ impl From<ffi::ASTLayoutPrimitiveType> for GeometryPrimitive {
     }
 }
 
-fn builder_new(shader_type: ffi::ASTShaderType) -> Box<BuilderWrapper> {
+fn builder_new(shader_type: ffi::ASTShaderType, options: ffi::BuildOptions) -> Box<BuilderWrapper> {
     let shader_type = match shader_type {
         ffi::ASTShaderType::Vertex => ShaderType::Vertex,
         ffi::ASTShaderType::TessControl => ShaderType::TessellationControl,
@@ -3419,7 +3655,7 @@ fn builder_new(shader_type: ffi::ASTShaderType) -> Box<BuilderWrapper> {
         ffi::ASTShaderType::Compute => ShaderType::Compute,
         _ => panic!("Internal error: Impossible shader type enum value"),
     };
-    Box::new(BuilderWrapper { builder: Builder::new(shader_type) })
+    Box::new(BuilderWrapper { builder: Builder::new(shader_type, options) })
 }
 
 fn builder_finish(mut builder: Box<BuilderWrapper>) -> Box<IR> {
@@ -3427,7 +3663,9 @@ fn builder_finish(mut builder: Box<BuilderWrapper>) -> Box<IR> {
 
     // Propagate precision to constant
     let mut ir = builder.builder.take_ir();
-    transform::propagate_precision::run(&mut ir);
+    transform::run!(propagate_precision, &mut ir);
+    #[cfg(debug_assertions)]
+    validator::validate_glsl_precision_rules(&ir, "propagate_precision");
 
     Box::new(ir)
 }
@@ -3492,15 +3730,11 @@ impl BuilderWrapper {
                         | ffi::ASTBasicType::SamplerBuffer
                         | ffi::ASTBasicType::SamplerCubeArray
                         | ffi::ASTBasicType::SamplerCubeArrayShadow
-                        | ffi::ASTBasicType::SamplerVideoWEBGL
                         | ffi::ASTBasicType::Image2D
                         | ffi::ASTBasicType::Image3D
                         | ffi::ASTBasicType::Image2DArray
                         | ffi::ASTBasicType::ImageCube
-                        | ffi::ASTBasicType::Image2DMS
-                        | ffi::ASTBasicType::Image2DMSArray
                         | ffi::ASTBasicType::ImageCubeArray
-                        | ffi::ASTBasicType::ImageRect
                         | ffi::ASTBasicType::ImageBuffer
                         | ffi::ASTBasicType::PixelLocalANGLE
                         | ffi::ASTBasicType::SubpassInput
@@ -3521,10 +3755,7 @@ impl BuilderWrapper {
                         | ffi::ASTBasicType::IImage3D
                         | ffi::ASTBasicType::IImage2DArray
                         | ffi::ASTBasicType::IImageCube
-                        | ffi::ASTBasicType::IImage2DMS
-                        | ffi::ASTBasicType::IImage2DMSArray
                         | ffi::ASTBasicType::IImageCubeArray
-                        | ffi::ASTBasicType::IImageRect
                         | ffi::ASTBasicType::IImageBuffer
                         | ffi::ASTBasicType::IPixelLocalANGLE
                         | ffi::ASTBasicType::ISubpassInput
@@ -3546,10 +3777,7 @@ impl BuilderWrapper {
                             | ffi::ASTBasicType::UImage3D
                             | ffi::ASTBasicType::UImage2DArray
                             | ffi::ASTBasicType::UImageCube
-                            | ffi::ASTBasicType::UImage2DMS
-                            | ffi::ASTBasicType::UImage2DMSArray
                             | ffi::ASTBasicType::UImageCubeArray
-                            | ffi::ASTBasicType::UImageRect
                             | ffi::ASTBasicType::UImageBuffer
                             | ffi::ASTBasicType::UPixelLocalANGLE
                             | ffi::ASTBasicType::USubpassInput
@@ -3575,16 +3803,10 @@ impl BuilderWrapper {
                         | ffi::ASTBasicType::USampler2DMSArray
                         | ffi::ASTBasicType::Image2D
                         | ffi::ASTBasicType::Image2DArray
-                        | ffi::ASTBasicType::Image2DMS
-                        | ffi::ASTBasicType::Image2DMSArray
                         | ffi::ASTBasicType::IImage2D
                         | ffi::ASTBasicType::IImage2DArray
-                        | ffi::ASTBasicType::IImage2DMS
-                        | ffi::ASTBasicType::IImage2DMSArray
                         | ffi::ASTBasicType::UImage2D
                         | ffi::ASTBasicType::UImage2DArray
-                        | ffi::ASTBasicType::UImage2DMS
-                        | ffi::ASTBasicType::UImage2DMSArray
                 ) {
                     ImageDimension::D2
                 } else if matches!(
@@ -3624,9 +3846,6 @@ impl BuilderWrapper {
                     ffi::ASTBasicType::Sampler2DRect
                         | ffi::ASTBasicType::ISampler2DRect
                         | ffi::ASTBasicType::USampler2DRect
-                        | ffi::ASTBasicType::ImageRect
-                        | ffi::ASTBasicType::IImageRect
-                        | ffi::ASTBasicType::UImageRect
                 ) {
                     ImageDimension::Rect
                 } else if matches!(
@@ -3639,8 +3858,6 @@ impl BuilderWrapper {
                         | ffi::ASTBasicType::UImageBuffer
                 ) {
                     ImageDimension::Buffer
-                } else if matches!(basic_type, ffi::ASTBasicType::SamplerVideoWEBGL) {
-                    ImageDimension::Video
                 } else if matches!(
                     basic_type,
                     ffi::ASTBasicType::PixelLocalANGLE
@@ -3675,7 +3892,6 @@ impl BuilderWrapper {
                         | ffi::ASTBasicType::SamplerBuffer
                         | ffi::ASTBasicType::SamplerCubeArray
                         | ffi::ASTBasicType::SamplerCubeArrayShadow
-                        | ffi::ASTBasicType::SamplerVideoWEBGL
                         | ffi::ASTBasicType::ISampler2D
                         | ffi::ASTBasicType::ISampler3D
                         | ffi::ASTBasicType::ISamplerCube
@@ -3704,19 +3920,16 @@ impl BuilderWrapper {
                         | ffi::ASTBasicType::SamplerCubeArray
                         | ffi::ASTBasicType::SamplerCubeArrayShadow
                         | ffi::ASTBasicType::Image2DArray
-                        | ffi::ASTBasicType::Image2DMSArray
                         | ffi::ASTBasicType::ImageCubeArray
                         | ffi::ASTBasicType::ISampler2DArray
                         | ffi::ASTBasicType::ISampler2DMSArray
                         | ffi::ASTBasicType::ISamplerCubeArray
                         | ffi::ASTBasicType::IImage2DArray
-                        | ffi::ASTBasicType::IImage2DMSArray
                         | ffi::ASTBasicType::IImageCubeArray
                         | ffi::ASTBasicType::USampler2DArray
                         | ffi::ASTBasicType::USampler2DMSArray
                         | ffi::ASTBasicType::USamplerCubeArray
                         | ffi::ASTBasicType::UImage2DArray
-                        | ffi::ASTBasicType::UImage2DMSArray
                         | ffi::ASTBasicType::UImageCubeArray
                 );
 
@@ -3724,16 +3937,10 @@ impl BuilderWrapper {
                     basic_type,
                     ffi::ASTBasicType::Sampler2DMS
                         | ffi::ASTBasicType::Sampler2DMSArray
-                        | ffi::ASTBasicType::Image2DMS
-                        | ffi::ASTBasicType::Image2DMSArray
                         | ffi::ASTBasicType::ISampler2DMS
                         | ffi::ASTBasicType::ISampler2DMSArray
-                        | ffi::ASTBasicType::IImage2DMS
-                        | ffi::ASTBasicType::IImage2DMSArray
                         | ffi::ASTBasicType::USampler2DMS
                         | ffi::ASTBasicType::USampler2DMSArray
-                        | ffi::ASTBasicType::UImage2DMS
-                        | ffi::ASTBasicType::UImage2DMSArray
                 );
 
                 let is_shadow = matches!(
@@ -3779,6 +3986,9 @@ impl BuilderWrapper {
             ffi::ASTQualifier::SecondaryFragColorEXT => Some(BuiltIn::SecondaryFragColorEXT),
             ffi::ASTQualifier::SecondaryFragDataEXT => Some(BuiltIn::SecondaryFragDataEXT),
             ffi::ASTQualifier::ViewIDOVR => Some(BuiltIn::ViewIDOVR),
+            ffi::ASTQualifier::EmulatedViewIDOVR => {
+                panic!("Internal error: gl_ViewID_OVR emulation happens during transformations")
+            }
             ffi::ASTQualifier::ClipDistance => Some(BuiltIn::ClipDistance),
             ffi::ASTQualifier::CullDistance => Some(BuiltIn::CullDistance),
             ffi::ASTQualifier::LastFragColor => Some(BuiltIn::LastFragColor),
@@ -3794,7 +4004,9 @@ impl BuilderWrapper {
             ffi::ASTQualifier::SampleMask => Some(BuiltIn::SampleMask),
             ffi::ASTQualifier::NumSamples => Some(BuiltIn::NumSamples),
             ffi::ASTQualifier::NumWorkGroups => Some(BuiltIn::NumWorkGroups),
-            ffi::ASTQualifier::WorkGroupSize => Some(BuiltIn::WorkGroupSize),
+            ffi::ASTQualifier::WorkGroupSize => {
+                panic!("Internal error: gl_WorkGroupSize should be constant folded")
+            }
             ffi::ASTQualifier::WorkGroupID => Some(BuiltIn::WorkGroupID),
             ffi::ASTQualifier::LocalInvocationID => Some(BuiltIn::LocalInvocationID),
             ffi::ASTQualifier::GlobalInvocationID => Some(BuiltIn::GlobalInvocationID),
@@ -3811,7 +4023,6 @@ impl BuilderWrapper {
             ffi::ASTQualifier::TessLevelInner => Some(BuiltIn::TessLevelInner),
             ffi::ASTQualifier::TessCoord => Some(BuiltIn::TessCoord),
             ffi::ASTQualifier::BoundingBox => Some(BuiltIn::BoundingBoxOES),
-            ffi::ASTQualifier::PixelLocalEXT => Some(BuiltIn::PixelLocalEXT),
             _ => None,
         }
     }
@@ -3942,15 +4153,11 @@ impl BuilderWrapper {
             }
             ffi::ASTQualifier::PatchIn => vec![Decoration::Input, Decoration::Patch],
 
-            ffi::ASTQualifier::PixelLocalEXT => unimplemented!(),
             _ => panic!("Internal error: Unexpected qualifier"),
         });
 
         if ast_type.invariant {
             decorations.decorations.push(Decoration::Invariant);
-        }
-        if ast_type.precise {
-            decorations.decorations.push(Decoration::Precise);
         }
         if ast_type.interpolant {
             decorations.decorations.push(Decoration::Interpolant);
@@ -3990,13 +4197,8 @@ impl BuilderWrapper {
                 .decorations
                 .push(Decoration::Offset(ast_type.layout_qualifier.offset as u32));
         }
-        if ast_type.layout_qualifier.num_views >= 0 {
-            decorations
-                .decorations
-                .push(Decoration::NumViews(ast_type.layout_qualifier.num_views as u32));
-        }
         if ast_type.layout_qualifier.yuv {
-            decorations.decorations.push(Decoration::YUV);
+            decorations.decorations.push(Decoration::Yuv);
         }
         if ast_type.layout_qualifier.noncoherent {
             decorations.decorations.push(Decoration::NonCoherent);
@@ -4093,43 +4295,41 @@ impl BuilderWrapper {
     }
 
     fn get_struct_type_id(&mut self, struct_info: &ffi::ASTStruct) -> ffi::TypeId {
+        let is_internal = struct_info.is_internal;
+        let is_part_of_interface = !is_internal && struct_info.is_at_global_scope;
+
         let fields = struct_info
             .fields
             .iter()
             .map(|field| {
                 Field::new(
-                    if struct_info.is_internal {
+                    if is_internal {
                         Name::new_exact(field.name)
+                    } else if is_part_of_interface {
+                        Name::new_interface(field.name)
                     } else {
                         Name::new_temp(field.name)
                     },
                     field.ast_type.type_id.into(),
                     field.ast_type.precision.into(),
+                    field.ast_type.precise,
                     Self::ast_type_decorations(&field.ast_type),
                 )
             })
             .collect::<Vec<_>>();
 
-        let (name, specialization) = if struct_info.is_interface_block {
-            (
-                if struct_info.is_internal {
-                    Name::new_exact(struct_info.name)
-                } else {
-                    Name::new_interface(struct_info.name)
-                },
-                StructSpecialization::InterfaceBlock,
-            )
+        let name = if is_internal {
+            Name::new_exact(struct_info.name)
+        } else if is_part_of_interface {
+            Name::new_interface(struct_info.name)
         } else {
-            (
-                if struct_info.is_internal {
-                    Name::new_exact(struct_info.name)
-                } else if struct_info.is_at_global_scope {
-                    Name::new_interface(struct_info.name)
-                } else {
-                    Name::new_temp(struct_info.name)
-                },
-                StructSpecialization::Struct,
-            )
+            Name::new_temp(struct_info.name)
+        };
+
+        let specialization = if struct_info.is_interface_block {
+            StructSpecialization::InterfaceBlock
+        } else {
+            StructSpecialization::Struct
         };
 
         self.builder.ir().meta.get_struct_type_id(name, fields, specialization).into()
@@ -4154,6 +4354,10 @@ impl BuilderWrapper {
 
     fn set_early_fragment_tests(&mut self, value: bool) {
         self.builder.ir().meta.set_early_fragment_tests(value);
+    }
+
+    fn set_num_views(&mut self, value: u32) {
+        self.builder.ir().meta.set_num_views(value);
     }
 
     fn set_advanced_blend_equations(&mut self, value: u32) {
@@ -4272,12 +4476,13 @@ impl BuilderWrapper {
         ast_type: &ffi::ASTType,
         is_declaration_internal: bool,
     ) -> ffi::VariableId {
-        if let Some(built_in) = Self::ast_type_built_in(&ast_type) {
+        if let Some(built_in) = Self::ast_type_built_in(ast_type) {
             let variable_id = self.builder.declare_built_in_variable(
                 built_in,
                 ast_type.type_id.into(),
                 ast_type.precision.into(),
-                Self::ast_type_decorations(&ast_type),
+                ast_type.precise,
+                Self::ast_type_decorations(ast_type),
             );
 
             if !is_declaration_internal {
@@ -4299,7 +4504,8 @@ impl BuilderWrapper {
                 name,
                 ast_type.type_id.into(),
                 ast_type.precision.into(),
-                Self::ast_type_decorations(&ast_type),
+                ast_type.precise,
+                Self::ast_type_decorations(ast_type),
             )
         }
         .into()
@@ -4311,16 +4517,25 @@ impl BuilderWrapper {
         ast_type: &ffi::ASTType,
     ) -> ffi::VariableId {
         if ast_type.qualifier == ffi::ASTQualifier::Const {
-            self.builder.declare_const_variable(ast_type.type_id.into(), ast_type.precision.into())
+            self.builder.declare_const_variable(
+                ast_type.type_id.into(),
+                ast_type.precision.into(),
+                ast_type.precise,
+            )
         } else {
             self.builder.declare_temp_variable(
                 name,
                 ast_type.type_id.into(),
                 ast_type.precision.into(),
-                Self::ast_type_decorations(&ast_type),
+                ast_type.precise,
+                Self::ast_type_decorations(ast_type),
             )
         }
         .into()
+    }
+
+    fn rescope_as_for_loop_variable(&mut self, variable_id: ffi::VariableId) {
+        self.builder.rescope_as_for_loop_variable(variable_id.into());
     }
 
     fn mark_variable_invariant(&mut self, variable_id: ffi::VariableId) {
@@ -4364,7 +4579,8 @@ impl BuilderWrapper {
                 params,
                 return_type_id.into(),
                 return_ast_type.precision.into(),
-                Self::ast_type_decorations(&return_ast_type),
+                return_ast_type.precise,
+                Self::ast_type_decorations(return_ast_type),
             )
             .into()
     }
@@ -4386,13 +4602,16 @@ impl BuilderWrapper {
         name: &'static str,
         type_id: ffi::TypeId,
         ast_type: &ffi::ASTType,
+        direction: ffi::ASTQualifier,
     ) -> ffi::VariableId {
         self.builder
             .declare_function_param(
                 name,
                 type_id.into(),
                 ast_type.precision.into(),
-                Self::ast_type_decorations(&ast_type),
+                ast_type.precise,
+                Self::ast_type_decorations(ast_type),
+                Self::function_param_direction(direction),
             )
             .into()
     }
@@ -4437,20 +4656,32 @@ impl BuilderWrapper {
         self.builder.begin_ternary_true_expression();
     }
 
-    fn end_ternary_true_expression(&mut self) {
-        self.builder.end_ternary_true_expression();
+    fn end_ternary_true_expression(&mut self, is_void: bool) {
+        if is_void {
+            self.builder.end_ternary_true_expression_void();
+        } else {
+            self.builder.end_ternary_true_expression();
+        }
     }
 
     fn begin_ternary_false_expression(&mut self) {
         self.builder.begin_ternary_false_expression();
     }
 
-    fn end_ternary_false_expression(&mut self) {
-        self.builder.end_ternary_false_expression();
+    fn end_ternary_false_expression(&mut self, is_void: bool) {
+        if is_void {
+            self.builder.end_ternary_false_expression_void();
+        } else {
+            self.builder.end_ternary_false_expression();
+        }
     }
 
-    fn end_ternary(&mut self) {
-        self.builder.end_ternary();
+    fn end_ternary(&mut self, is_void: bool) {
+        if is_void {
+            self.builder.end_ternary_void();
+        } else {
+            self.builder.end_ternary();
+        }
     }
 
     fn begin_short_circuit_or(&mut self) {

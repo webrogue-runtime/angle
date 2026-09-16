@@ -338,6 +338,18 @@ struct FeaturesMtl : FeatureSetBase
         &members,
     };
 
+    FeatureInfo allocateNonZeroTextures = {
+        "allocateNonZeroTextures",
+        FeatureCategory::MetalFeatures,
+        &members,
+    };
+
+    FeatureInfo limitMaxVisibilityQueryOffset = {
+        "limitMaxVisibilityQueryOffset",
+        FeatureCategory::MetalFeatures,
+        &members,
+    };
+
 };
 
 inline FeaturesMtl::FeaturesMtl()  = default;

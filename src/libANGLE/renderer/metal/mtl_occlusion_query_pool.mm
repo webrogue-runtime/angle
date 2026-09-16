@@ -36,10 +36,20 @@ void OcclusionQueryPool::destroy(ContextMtl *contextMtl)
     mAllocatedQueries.clear();
 }
 
+bool OcclusionQueryPool::canAllocateQueryOffset(ContextMtl *contextMtl) const
+{
+    uint32_t currentOffset =
+        static_cast<uint32_t>(mAllocatedQueries.size()) * kOcclusionQueryResultSize;
+    return currentOffset + kOcclusionQueryResultSize <=
+           contextMtl->getDisplay()->getMaxVisibilityQueryOffset();
+}
+
 angle::Result OcclusionQueryPool::allocateQueryOffset(ContextMtl *contextMtl,
                                                       QueryMtl *query,
                                                       bool clearOldValue)
 {
+    CHECK(canAllocateQueryOffset(contextMtl));
+
     // Only query that already has allocated offset or first query of the render pass is allowed to
     // keep old value. Other queries must be reset to zero before counting the samples visibility in
     // draw calls.
@@ -52,16 +62,15 @@ angle::Result OcclusionQueryPool::allocateQueryOffset(ContextMtl *contextMtl,
     {
         ASSERT(!mUsed);
         // First allocation
-        ANGLE_TRY(Buffer::MakeBufferWithStorageMode(contextMtl, MTLStorageModePrivate,
-                                                    kOcclusionQueryResultSize, nullptr,
-                                                    &mRenderPassResultsPool));
+        ANGLE_TRY(Buffer::MakeBufferWithStorageMode(
+            contextMtl, MTLStorageModePrivate, kOcclusionQueryResultSize, &mRenderPassResultsPool));
         mRenderPassResultsPool->get().label = @"OcclusionQueryPool";
     }
     else if (currentOffset + kOcclusionQueryResultSize > mRenderPassResultsPool->size())
     {
         // Double the capacity
         ANGLE_TRY(Buffer::MakeBufferWithStorageMode(contextMtl, MTLStorageModePrivate,
-                                                    mRenderPassResultsPool->size() * 2, nullptr,
+                                                    mRenderPassResultsPool->size() * 2,
                                                     &mRenderPassResultsPool));
         mUsed                               = false;
         mRenderPassResultsPool->get().label = @"OcclusionQueryPool";

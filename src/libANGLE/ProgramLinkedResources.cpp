@@ -1669,15 +1669,15 @@ PixelLocalStorageLinker::PixelLocalStorageLinker() = default;
 PixelLocalStorageLinker::~PixelLocalStorageLinker() = default;
 
 void PixelLocalStorageLinker::init(
-    std::vector<ShPixelLocalStorageFormat> *pixelLocalStorageFormatsOut)
+    std::vector<ShPixelLocalStorageLayout> *pixelLocalStorageLayoutsOut)
 {
-    mPixelLocalStorageFormatsOut = pixelLocalStorageFormatsOut;
+    mPixelLocalStorageLayoutsOut = pixelLocalStorageLayoutsOut;
 }
 
 void PixelLocalStorageLinker::link(
-    const std::vector<ShPixelLocalStorageFormat> &pixelLocalStorageFormats) const
+    const std::vector<ShPixelLocalStorageLayout> &pixelLocalStorageLayouts) const
 {
-    *mPixelLocalStorageFormatsOut = pixelLocalStorageFormats;
+    *mPixelLocalStorageLayoutsOut = pixelLocalStorageLayouts;
 }
 
 LinkingVariables::LinkingVariables()  = default;
@@ -1724,14 +1724,14 @@ void ProgramLinkedResources::init(
     std::vector<InterfaceBlock> *shaderStorageBlocksOut,
     std::vector<BufferVariable> *bufferVariablesOut,
     std::vector<AtomicCounterBuffer> *atomicCounterBuffersOut,
-    std::vector<ShPixelLocalStorageFormat> *pixelLocalStorageFormatsOut)
+    std::vector<ShPixelLocalStorageLayout> *pixelLocalStorageLayoutsOut)
 {
     uniformBlockLinker.init(uniformBlocksOut, uniformsOut, uniformNamesOut, uniformMappedNamesOut,
                             &unusedInterfaceBlocks);
     shaderStorageBlockLinker.init(shaderStorageBlocksOut, bufferVariablesOut,
                                   &unusedInterfaceBlocks);
     atomicCounterBufferLinker.init(atomicCounterBuffersOut);
-    pixelLocalStorageLinker.init(pixelLocalStorageFormatsOut);
+    pixelLocalStorageLinker.init(pixelLocalStorageLayoutsOut);
 }
 
 void ProgramLinkedResourcesLinker::linkResources(const ProgramState &programState,
@@ -1797,7 +1797,7 @@ void ProgramLinkedResourcesLinker::linkResources(const ProgramState &programStat
         programState.getAttachedShader(gl::ShaderType::Fragment);
     if (fragmentShader != nullptr)
     {
-        resources.pixelLocalStorageLinker.link(fragmentShader->pixelLocalStorageFormats);
+        resources.pixelLocalStorageLinker.link(fragmentShader->pixelLocalStorageLayouts);
     }
 }
 
@@ -2371,6 +2371,10 @@ LinkMismatchError AreMatchingInterfaceBlocks(const sh::InterfaceBlock &interface
     if (interfaceBlock1.instanceName.empty() != interfaceBlock2.instanceName.empty())
     {
         return LinkMismatchError::INSTANCE_NAME_MISMATCH;
+    }
+    if (interfaceBlock1.isRowMajorLayout != interfaceBlock2.isRowMajorLayout)
+    {
+        return LinkMismatchError::MATRIX_PACKING_MISMATCH;
     }
     const unsigned int numBlockMembers = static_cast<unsigned int>(interfaceBlock1.fields.size());
     for (unsigned int blockMemberIndex = 0; blockMemberIndex < numBlockMembers; blockMemberIndex++)

@@ -5,7 +5,10 @@
 // The IR itself, consisting of a number of enums and structs.
 
 use super::instruction;
-use std::collections::HashMap;
+use super::reflection;
+use super::util;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 
 // Strong types for ids that refer to constants, registers, variables, types etc.  They are used to
 // look information up in different tables.  In all cases, 0 means no applicable ID.
@@ -40,6 +43,7 @@ pub struct TypeId {
 }
 
 // Fixed enums for faster type lookup
+// Note: if more types are added here or the values are changed, adjust MAX_PREDEFINED_TYPE_ID.
 // TODO(http://anglebug.com/349994211): In the future, we can duplicate the reserved ids in an
 // enum, so that static types, autogen'ed symbols etc already know their (type) ids.
 pub const TYPE_ID_VOID: TypeId = TypeId { id: 0 };
@@ -72,9 +76,12 @@ pub const TYPE_ID_MAT3X4: TypeId = TypeId { id: 24 };
 pub const TYPE_ID_MAT4X2: TypeId = TypeId { id: 25 };
 pub const TYPE_ID_MAT4X3: TypeId = TypeId { id: 26 };
 pub const TYPE_ID_MAT4: TypeId = TypeId { id: 27 };
+pub const MAX_PREDEFINED_TYPE_ID: u32 = TYPE_ID_MAT4.id;
 
 // Fixed enums for bool constants to avoid tracking whether they are defined or not, plus other
 // constants for convenience.
+// Note: if more constants are added here or the values are changed, adjust
+// MAX_PREDEFINED_CONSTANT_ID.
 pub const CONSTANT_ID_FALSE: ConstantId = ConstantId { id: 0 };
 pub const CONSTANT_ID_TRUE: ConstantId = ConstantId { id: 1 };
 pub const CONSTANT_ID_FLOAT_ZERO: ConstantId = ConstantId { id: 2 };
@@ -86,18 +93,51 @@ pub const CONSTANT_ID_UINT_ONE: ConstantId = ConstantId { id: 7 };
 pub const CONSTANT_ID_YUV_CSC_ITU601: ConstantId = ConstantId { id: 8 };
 pub const CONSTANT_ID_YUV_CSC_ITU601_FULL_RANGE: ConstantId = ConstantId { id: 9 };
 pub const CONSTANT_ID_YUV_CSC_ITU709: ConstantId = ConstantId { id: 10 };
+const MAX_PREDEFINED_CONSTANT_ID: u32 = CONSTANT_ID_YUV_CSC_ITU709.id;
+
+// Typed variant of the above constants.
+pub const TYPED_CONSTANT_ID_FALSE: TypedId =
+    TypedId::from_constant_id(CONSTANT_ID_FALSE, TYPE_ID_BOOL, Precision::NotApplicable);
+pub const TYPED_CONSTANT_ID_TRUE: TypedId =
+    TypedId::from_constant_id(CONSTANT_ID_TRUE, TYPE_ID_BOOL, Precision::NotApplicable);
+pub const TYPED_CONSTANT_ID_FLOAT_ZERO: TypedId =
+    TypedId::from_constant_id(CONSTANT_ID_FLOAT_ZERO, TYPE_ID_FLOAT, Precision::Low);
+pub const TYPED_CONSTANT_ID_FLOAT_ONE: TypedId =
+    TypedId::from_constant_id(CONSTANT_ID_FLOAT_ONE, TYPE_ID_FLOAT, Precision::Low);
+pub const TYPED_CONSTANT_ID_INT_ZERO: TypedId =
+    TypedId::from_constant_id(CONSTANT_ID_INT_ZERO, TYPE_ID_INT, Precision::Low);
+pub const TYPED_CONSTANT_ID_INT_ONE: TypedId =
+    TypedId::from_constant_id(CONSTANT_ID_INT_ONE, TYPE_ID_INT, Precision::Low);
+pub const TYPED_CONSTANT_ID_UINT_ZERO: TypedId =
+    TypedId::from_constant_id(CONSTANT_ID_UINT_ZERO, TYPE_ID_UINT, Precision::Low);
+pub const TYPED_CONSTANT_ID_UINT_ONE: TypedId =
+    TypedId::from_constant_id(CONSTANT_ID_UINT_ONE, TYPE_ID_UINT, Precision::Low);
+pub const TYPED_CONSTANT_ID_YUV_CSC_ITU601: TypedId = TypedId::from_constant_id(
+    CONSTANT_ID_YUV_CSC_ITU601,
+    TYPE_ID_YUV_CSC_STANDARD,
+    Precision::NotApplicable,
+);
+pub const TYPED_CONSTANT_ID_YUV_CSC_ITU601_FULL_RANGE: TypedId = TypedId::from_constant_id(
+    CONSTANT_ID_YUV_CSC_ITU601_FULL_RANGE,
+    TYPE_ID_YUV_CSC_STANDARD,
+    Precision::NotApplicable,
+);
+pub const TYPED_CONSTANT_ID_YUV_CSC_ITU709: TypedId = TypedId::from_constant_id(
+    CONSTANT_ID_YUV_CSC_ITU709,
+    TYPE_ID_YUV_CSC_STANDARD,
+    Precision::NotApplicable,
+);
 
 // Prefixes used for symbols.
-pub const USER_SYMBOL_PREFIX: &str = "_u";
+pub const USER_VARIABLE_PREFIX: &str = "_u";
+pub const USER_BLOCK_PREFIX: &str = "_b";
 pub const TEMP_VARIABLE_PREFIX: &str = "t";
 pub const TEMP_FUNCTION_PREFIX: &str = "f";
 pub const TEMP_STRUCT_PREFIX: &str = "s";
 pub const TEMP_STRUCT_FIELD_PREFIX: &str = "m";
-// Make sure ANGLE symbols start with this to avoid collision with the user symbol prefixes above.
-pub const ANGLE_SYMBOL_PREFIX: &str = "ANGLE";
 
 // An ID that can be referred to by an operand of an instruction.
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub enum Id {
     Register(RegisterId),
@@ -106,13 +146,13 @@ pub enum Id {
 }
 
 impl Id {
-    pub fn new_register(id: RegisterId) -> Id {
+    pub const fn new_register(id: RegisterId) -> Id {
         Id::Register(id)
     }
-    pub fn new_constant(id: ConstantId) -> Id {
+    pub const fn new_constant(id: ConstantId) -> Id {
         Id::Constant(id)
     }
-    pub fn new_variable(id: VariableId) -> Id {
+    pub const fn new_variable(id: VariableId) -> Id {
         Id::Variable(id)
     }
 
@@ -135,10 +175,28 @@ impl Id {
         }
     }
 
-    pub fn get_constant(&self) -> Option<ConstantId> {
+    pub fn get_if_constant(&self) -> Option<ConstantId> {
         match self {
             &Id::Constant(id) => Some(id),
             _ => None,
+        }
+    }
+
+    pub fn get_constant(&self) -> ConstantId {
+        match self {
+            &Id::Constant(id) => id,
+            _ => {
+                panic!("Internal error: unexpected non-constant id");
+            }
+        }
+    }
+
+    pub fn get_variable(&self) -> VariableId {
+        match self {
+            &Id::Variable(id) => id,
+            _ => {
+                panic!("Internal error: unexpected non-variable id");
+            }
         }
     }
 }
@@ -152,14 +210,18 @@ pub struct TypedId {
 }
 
 impl TypedId {
-    pub fn new(id: Id, type_id: TypeId, precision: Precision) -> TypedId {
+    pub const fn new(id: Id, type_id: TypeId, precision: Precision) -> TypedId {
         TypedId { id, type_id, precision }
     }
 
-    pub fn from_constant_id(id: ConstantId, type_id: TypeId) -> TypedId {
-        TypedId { id: Id::new_constant(id), type_id, precision: Precision::NotApplicable }
+    pub const fn from_constant_id(
+        id: ConstantId,
+        type_id: TypeId,
+        precision: Precision,
+    ) -> TypedId {
+        TypedId { id: Id::new_constant(id), type_id, precision }
     }
-    pub fn from_typed_constant_id(constant_id: TypedConstantId) -> TypedId {
+    pub const fn from_typed_constant_id(constant_id: TypedConstantId) -> TypedId {
         TypedId {
             id: Id::new_constant(constant_id.id),
             type_id: constant_id.type_id,
@@ -167,7 +229,7 @@ impl TypedId {
         }
     }
 
-    pub fn from_register_id(register_id: TypedRegisterId) -> TypedId {
+    pub const fn from_register_id(register_id: TypedRegisterId) -> TypedId {
         TypedId {
             id: Id::new_register(register_id.id),
             type_id: register_id.type_id,
@@ -175,7 +237,7 @@ impl TypedId {
         }
     }
 
-    pub fn to_register_id(&self) -> TypedRegisterId {
+    pub fn as_register_id(&self) -> TypedRegisterId {
         TypedRegisterId {
             id: self.id.get_register(),
             type_id: self.type_id,
@@ -183,8 +245,12 @@ impl TypedId {
         }
     }
 
-    pub fn from_bool_variable_id(id: VariableId) -> TypedId {
-        Self::new(Id::new_variable(id), TYPE_ID_BOOL, Precision::NotApplicable)
+    pub fn from_bool_variable_id(ir_meta: &mut IRMeta, id: VariableId) -> TypedId {
+        Self::new(
+            Id::new_variable(id),
+            ir_meta.get_pointer_type_id(TYPE_ID_BOOL),
+            Precision::NotApplicable,
+        )
     }
 
     pub fn from_variable_id(ir_meta: &IRMeta, id: VariableId) -> TypedId {
@@ -208,7 +274,7 @@ impl TypedId {
 pub enum UnaryOpCode {
     // Get the array length of a pointer.  The result is an `int` per GLSL.
     //   %result = ArrayLength %ptr
-    ArrayLength,
+    ArrayLength, // The parameter is a pointer
 
     // Calculate -operand.
     //   %result = Negate %operand
@@ -222,8 +288,7 @@ pub enum UnaryOpCode {
     //   %result = BitwiseNot %operand
     BitwiseNot,
 
-    // Calculate ++operand, --operand, operand++ and operand--.  The operand must be an access
-    // chain.
+    // Calculate ++operand, --operand, operand++ and operand--.  The operand must be a pointer.
     //   %result = PrefixIncrement %operand
     //   %result = PrefixDecrement %operand
     //   %result = PostfixIncrement %operand
@@ -294,9 +359,9 @@ pub enum UnaryOpCode {
     DFdy,
     Fwidth,
     InterpolateAtCentroid,
-    AtomicCounter,
-    AtomicCounterIncrement,
-    AtomicCounterDecrement,
+    AtomicCounter,          // The parameter is a pointer
+    AtomicCounterIncrement, // The parameter is a pointer
+    AtomicCounterDecrement, // The parameter is a pointer
     ImageSize,
     PixelLocalLoadANGLE,
 }
@@ -382,8 +447,8 @@ pub enum BinaryOpCode {
     Min,
     Max,
     Step,
-    Modf,
-    Frexp,
+    Modf,  // Second parameter is a pointer
+    Frexp, // Second paarameter is a pointer
     Ldexp,
     Distance,
     Dot,
@@ -399,13 +464,13 @@ pub enum BinaryOpCode {
     NotEqualVec,
     InterpolateAtSample,
     InterpolateAtOffset,
-    AtomicAdd,
-    AtomicMin,
-    AtomicMax,
-    AtomicAnd,
-    AtomicOr,
-    AtomicXor,
-    AtomicExchange,
+    AtomicAdd,      // First parameter is a pointer
+    AtomicMin,      // First parameter is a pointer
+    AtomicMax,      // First parameter is a pointer
+    AtomicAnd,      // First parameter is a pointer
+    AtomicOr,       // First parameter is a pointer
+    AtomicXor,      // First parameter is a pointer
+    AtomicExchange, // First parameter is a pointer
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -423,17 +488,17 @@ pub enum BuiltInOpCode {
     Refract,
     BitfieldExtract,
     BitfieldInsert,
-    UaddCarry,
-    UsubBorrow,
-    UmulExtended,
-    ImulExtended,
+    UaddCarry,    // The third parameter is a pointer
+    UsubBorrow,   // The third parameter is a pointer
+    UmulExtended, // The third and fourth parameters are pointers
+    ImulExtended, // The third and fourth parameters are pointers
     TextureSize,
     TextureQueryLod,
     TexelFetch,
     TexelFetchOffset,
     Rgb2Yuv,
     Yuv2Rgb,
-    AtomicCompSwap,
+    AtomicCompSwap, // The first parameter is a pointer
     ImageStore,
     ImageLoad,
     ImageAtomicAdd,
@@ -767,6 +832,76 @@ impl OpCode {
             _ => panic!("Internal error: Expected switch"),
         };
     }
+
+    // Whether an instruction is considered to have a side effect.  These instructions must execute
+    // exactly once; i.e. cannot be dead-code eliminated even if their result is never used, and
+    // cannot be evaluated twice in the generated output.
+    //
+    // Branch instructions are excluded, as they always have a side effect (flow control).
+    pub fn has_side_effect(&self) -> bool {
+        matches!(
+            self,
+            // TODO(http://anglebug.com/349994211): for now, assume every function call has a side
+            // effect.  This can be optimized with a prepass going over functions and checking if
+            // they have side effect.  AST assumes user functions have side effects, and mostly
+            // uses isKnownNotToHaveSideEffects for built-ins, which are separately
+            // checked here.  Some internal transformations mark a function as no-side
+            // effect, but no real benefit comes from that IMO.  This is probably fine
+            // as-is.
+            OpCode::Call(..)
+            // Instructions that produce a register:
+            | OpCode::Unary(UnaryOpCode::PrefixIncrement, _)
+            | OpCode::Unary(UnaryOpCode::PrefixDecrement, _)
+            | OpCode::Unary(UnaryOpCode::PostfixIncrement, _)
+            | OpCode::Unary(UnaryOpCode::PostfixDecrement, _)
+            | OpCode::Unary(UnaryOpCode::AtomicCounter, _)
+            | OpCode::Unary(UnaryOpCode::AtomicCounterIncrement, _)
+            | OpCode::Unary(UnaryOpCode::AtomicCounterDecrement, _)
+            | OpCode::Unary(UnaryOpCode::PixelLocalLoadANGLE, _)
+            | OpCode::Binary(BinaryOpCode::Modf, _, _)
+            | OpCode::Binary(BinaryOpCode::Frexp, _, _)
+            | OpCode::Binary(BinaryOpCode::AtomicAdd, _, _)
+            | OpCode::Binary(BinaryOpCode::AtomicMin, _, _)
+            | OpCode::Binary(BinaryOpCode::AtomicMax, _, _)
+            | OpCode::Binary(BinaryOpCode::AtomicAnd, _, _)
+            | OpCode::Binary(BinaryOpCode::AtomicOr, _, _)
+            | OpCode::Binary(BinaryOpCode::AtomicXor, _, _)
+            | OpCode::Binary(BinaryOpCode::AtomicExchange, _, _)
+            | OpCode::BuiltIn(BuiltInOpCode::UaddCarry, _)
+            | OpCode::BuiltIn(BuiltInOpCode::UsubBorrow, _)
+            | OpCode::BuiltIn(BuiltInOpCode::UmulExtended, _)
+            | OpCode::BuiltIn(BuiltInOpCode::ImulExtended, _)
+            | OpCode::BuiltIn(BuiltInOpCode::AtomicCompSwap, _)
+            | OpCode::BuiltIn(BuiltInOpCode::ImageLoad, _)
+            | OpCode::BuiltIn(BuiltInOpCode::ImageAtomicAdd, _)
+            | OpCode::BuiltIn(BuiltInOpCode::ImageAtomicMin, _)
+            | OpCode::BuiltIn(BuiltInOpCode::ImageAtomicMax, _)
+            | OpCode::BuiltIn(BuiltInOpCode::ImageAtomicAnd, _)
+            | OpCode::BuiltIn(BuiltInOpCode::ImageAtomicOr, _)
+            | OpCode::BuiltIn(BuiltInOpCode::ImageAtomicXor, _)
+            | OpCode::BuiltIn(BuiltInOpCode::ImageAtomicExchange, _)
+            | OpCode::BuiltIn(BuiltInOpCode::ImageAtomicCompSwap, _)
+            // Void instructions:
+            | OpCode::Store(..)
+            | OpCode::BuiltIn(BuiltInOpCode::ImageStore, _)
+            | OpCode::BuiltIn(BuiltInOpCode::PixelLocalStoreANGLE, _)
+            | OpCode::BuiltIn(BuiltInOpCode::MemoryBarrier, _)
+            | OpCode::BuiltIn(BuiltInOpCode::MemoryBarrierAtomicCounter, _)
+            | OpCode::BuiltIn(BuiltInOpCode::MemoryBarrierBuffer, _)
+            | OpCode::BuiltIn(BuiltInOpCode::MemoryBarrierImage, _)
+            | OpCode::BuiltIn(BuiltInOpCode::Barrier, _)
+            | OpCode::BuiltIn(BuiltInOpCode::MemoryBarrierShared, _)
+            | OpCode::BuiltIn(BuiltInOpCode::GroupMemoryBarrier, _)
+            | OpCode::BuiltIn(BuiltInOpCode::EmitVertex, _)
+            | OpCode::BuiltIn(BuiltInOpCode::EndPrimitive, _)
+            | OpCode::BuiltIn(BuiltInOpCode::BeginInvocationInterlockNV, _)
+            | OpCode::BuiltIn(BuiltInOpCode::EndInvocationInterlockNV, _)
+            | OpCode::BuiltIn(BuiltInOpCode::BeginFragmentShaderOrderingINTEL, _)
+            | OpCode::BuiltIn(BuiltInOpCode::BeginInvocationInterlockARB, _)
+            | OpCode::BuiltIn(BuiltInOpCode::EndInvocationInterlockARB, _)
+            | OpCode::BuiltIn(BuiltInOpCode::LoopForwardProgress, _)
+        )
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -976,6 +1111,10 @@ impl Block {
         self.set_sub_block1(block);
     }
 
+    pub fn has_if_true_block(&self) -> bool {
+        self.block1.is_some()
+    }
+
     pub fn set_if_false_block(&mut self, block: Block) {
         self.set_sub_block2(block);
     }
@@ -984,13 +1123,31 @@ impl Block {
         debug_assert!(self.loop_condition.is_none());
         self.loop_condition = Some(Box::new(block));
     }
+    pub fn get_loop_condition_block(&self) -> &Block {
+        self.loop_condition.as_ref().unwrap()
+    }
 
     pub fn set_loop_body_block(&mut self, block: Block) {
         self.set_sub_block1(block);
     }
+    pub fn get_loop_body_block(&self) -> &Block {
+        self.block1.as_ref().unwrap()
+    }
+    pub fn get_loop_body_block_mut(&mut self) -> &mut Block {
+        self.block1.as_mut().unwrap()
+    }
+    pub fn has_loop_body_block(&self) -> bool {
+        self.block1.is_some()
+    }
 
     pub fn set_loop_continue_block(&mut self, block: Block) {
         self.set_sub_block2(block);
+    }
+    pub fn has_loop_continue_block(&self) -> bool {
+        self.block2.is_some()
+    }
+    pub fn get_loop_continue_block(&self) -> &Block {
+        self.block2.as_ref().unwrap()
     }
 
     pub fn set_switch_case_blocks(&mut self, blocks: Vec<Block>) {
@@ -1079,6 +1236,45 @@ impl Block {
         self.instructions.rotate_right(1);
     }
 
+    pub fn prepend_code(&mut self, mut block: Block) {
+        // Prepend the code in `block` to the code in `self`.  There may be other blocks that
+        // reference `self`, so this operation simply makes `self` the merge block of `block`, then
+        // swaps the contents of `self` and `block` to make existing references effectively point
+        // to the new code being prepended.
+        std::mem::swap(self, &mut block);
+        // If there's a merge input, it should remain in place.
+        std::mem::swap(&mut self.input, &mut block.input);
+
+        let last_block = self.get_merge_chain_last_block_mut();
+        if last_block.is_terminated() {
+            // This is possible during IR generation.
+            debug_assert!(matches!(last_block.get_terminating_op(), OpCode::NextBlock));
+        } else {
+            last_block.terminate(OpCode::NextBlock);
+        }
+        // Note: after the above swap, `block` now contains what was previously in `self`.
+        last_block.set_merge_block(block);
+    }
+
+    pub fn append_code(&mut self, block: Block) {
+        // Append the code in `block` to the code in `self`.  This is done by setting `block` as
+        // the merge block of this block (merged with `NextBlock`), and moving the original
+        // terminator to `block`.
+        //
+        // This utility is used during transformations, where every block is already terminated, so
+        // the end of the merge chain is usually the end of the GLSL block.
+        let self_last_block = self.get_merge_chain_last_block_mut();
+        debug_assert!(self_last_block.is_terminated());
+        let original_terminator =
+            std::mem::replace(self_last_block.get_terminating_op_mut(), OpCode::NextBlock);
+        debug_assert!(self_last_block.merge_block.is_none());
+        self_last_block.set_merge_block(block);
+
+        let block_last_block = self.get_merge_chain_last_block_mut();
+        debug_assert!(!block_last_block.is_terminated());
+        block_last_block.terminate(original_terminator);
+    }
+
     // Whether the block is already terminated.  This is used for assertions, but also ensures that
     // dead code after return/break/continue/etc is dropped automatically.
     pub fn is_terminated(&self) -> bool {
@@ -1092,6 +1288,7 @@ impl Block {
     }
 
     pub fn terminate(&mut self, op: OpCode) {
+        debug_assert!(!self.is_terminated());
         self.add_void_instruction(op);
     }
     pub fn unterminate(&mut self) {
@@ -1140,10 +1337,10 @@ impl Block {
     where
         Visit: Fn(&mut State, &Self),
     {
-        self.loop_condition.as_ref().inspect(|sub_block| visit(state, &*sub_block));
-        self.block1.as_ref().inspect(|sub_block| visit(state, &*sub_block));
-        self.block2.as_ref().inspect(|sub_block| visit(state, &*sub_block));
-        self.case_blocks.iter().for_each(|sub_block| visit(state, &*sub_block));
+        self.loop_condition.as_ref().inspect(|sub_block| visit(state, sub_block));
+        self.block1.as_ref().inspect(|sub_block| visit(state, sub_block));
+        self.block2.as_ref().inspect(|sub_block| visit(state, sub_block));
+        self.case_blocks.iter().for_each(|sub_block| visit(state, sub_block));
     }
     pub fn for_each_sub_block_mut<State, Transform>(
         &mut self,
@@ -1182,44 +1379,44 @@ pub enum ConstantValue {
 
 impl ConstantValue {
     pub fn get_float(&self) -> f32 {
-        match self {
-            &ConstantValue::Float(f) => f,
+        match *self {
+            ConstantValue::Float(f) => f,
             _ => panic!("Internal error: Expected a float constant"),
         }
     }
 
     pub fn get_int(&self) -> i32 {
-        match self {
-            &ConstantValue::Int(i) => i,
+        match *self {
+            ConstantValue::Int(i) => i,
             _ => panic!("Internal error: Expected an int constant"),
         }
     }
 
     pub fn get_uint(&self) -> u32 {
-        match self {
-            &ConstantValue::Uint(u) => u,
+        match *self {
+            ConstantValue::Uint(u) => u,
             _ => panic!("Internal error: Expected an unsigned int constant"),
         }
     }
 
     pub fn get_bool(&self) -> bool {
-        match self {
-            &ConstantValue::Bool(b) => b,
+        match *self {
+            ConstantValue::Bool(b) => b,
             _ => panic!("Internal error: Expected a bool constant"),
         }
     }
 
     pub fn get_yuv_csc(&self) -> YuvCscStandard {
-        match self {
-            &ConstantValue::YuvCsc(s) => s,
+        match *self {
+            ConstantValue::YuvCsc(s) => s,
             _ => panic!("Internal error: Expected a yuvCscStandardEXT constant"),
         }
     }
 
     pub fn get_index(&self) -> u32 {
-        match self {
-            &ConstantValue::Int(i) => i as u32,
-            &ConstantValue::Uint(u) => u,
+        match *self {
+            ConstantValue::Int(i) => i as u32,
+            ConstantValue::Uint(u) => u,
             _ => panic!("Internal error: Expected an index constant"),
         }
     }
@@ -1241,31 +1438,56 @@ impl ConstantValue {
 pub struct Constant {
     pub type_id: TypeId,
     pub value: ConstantValue,
+    pub is_dead_code_eliminated: bool,
 }
 
 impl Constant {
     pub fn new_bool(value: bool) -> Constant {
-        Constant { type_id: TYPE_ID_BOOL, value: ConstantValue::Bool(value) }
+        Constant {
+            type_id: TYPE_ID_BOOL,
+            value: ConstantValue::Bool(value),
+            is_dead_code_eliminated: false,
+        }
     }
     pub fn new_int(value: i32) -> Constant {
-        Constant { type_id: TYPE_ID_INT, value: ConstantValue::Int(value) }
+        Constant {
+            type_id: TYPE_ID_INT,
+            value: ConstantValue::Int(value),
+            is_dead_code_eliminated: false,
+        }
     }
     pub fn new_uint(value: u32) -> Constant {
-        Constant { type_id: TYPE_ID_UINT, value: ConstantValue::Uint(value) }
+        Constant {
+            type_id: TYPE_ID_UINT,
+            value: ConstantValue::Uint(value),
+            is_dead_code_eliminated: false,
+        }
     }
     pub fn new_float(value: f32) -> Constant {
-        Constant { type_id: TYPE_ID_FLOAT, value: ConstantValue::Float(value) }
+        Constant {
+            type_id: TYPE_ID_FLOAT,
+            value: ConstantValue::Float(value),
+            is_dead_code_eliminated: false,
+        }
     }
     pub fn new_yuv_csc(value: YuvCscStandard) -> Constant {
-        Constant { type_id: TYPE_ID_YUV_CSC_STANDARD, value: ConstantValue::YuvCsc(value) }
+        Constant {
+            type_id: TYPE_ID_YUV_CSC_STANDARD,
+            value: ConstantValue::YuvCsc(value),
+            is_dead_code_eliminated: false,
+        }
     }
     pub fn new_composite(type_id: TypeId, params: Vec<ConstantId>) -> Constant {
-        Constant { type_id, value: ConstantValue::Composite(params) }
+        Constant {
+            type_id,
+            value: ConstantValue::Composite(params),
+            is_dead_code_eliminated: false,
+        }
     }
 }
 
 // Where a name came from.  This affects how it is output.
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub enum NameSource {
     // A name in the shader itself, which corresponds to an interface variable (input, output,
@@ -1282,7 +1504,7 @@ pub enum NameSource {
 }
 
 // A name associated with a variable, struct, struct field etc.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub struct Name {
     // This is a slice into the shader source, a static name, or otherwise an empty string.  Either
@@ -1292,6 +1514,10 @@ pub struct Name {
     // should never really access this, and having Unicode in the mix will either cause trouble or
     // add binary size for no good reason.
     pub name: &'static str,
+    // A suffix used for generated shader interface names, for example extracted samplers.  Having
+    // this be separate allows `name` to continue to be a `&'static` string instead of one that's
+    // built.
+    pub suffix: Option<u32>,
     // Whether the name has any significance other than being debug info.  For example, it may be a
     // name that needs to be output exactly in text because the backend/driver looks for it.
     pub source: NameSource,
@@ -1302,17 +1528,20 @@ impl Name {
     // example, it's a temporary helper variable etc).  Duplicate names are allowed, and will be
     // made distinguishable if generating text.  Temp names are optional, and might as well be "".
     pub fn new_temp(name: &'static str) -> Name {
-        Name { name, source: NameSource::Temporary }
+        Name { name, suffix: None, source: NameSource::Temporary }
     }
     // A name that must be preserved in some predictable form in the output.  This is useful for
     // backends that reference this name directly, such as with OpenGL.
     pub fn new_interface(name: &'static str) -> Name {
-        Name { name, source: NameSource::ShaderInterface }
+        Name { name, suffix: None, source: NameSource::ShaderInterface }
     }
     // A name that must be preserved exactly in the output, for example `main`, or ANGLE internal
     // interface variables.
     pub fn new_exact(name: &'static str) -> Name {
-        Name { name, source: NameSource::Internal }
+        Name { name, suffix: None, source: NameSource::Internal }
+    }
+    pub fn new_exact_with_suffix(name: &'static str, suffix: u32) -> Name {
+        Name { name, suffix: Some(suffix), source: NameSource::Internal }
     }
 }
 
@@ -1321,6 +1550,7 @@ impl Name {
 pub enum VariableScope {
     Global,
     Local,
+    ForLoopVariable,
     FunctionParam,
 }
 
@@ -1330,6 +1560,7 @@ pub struct Variable {
     pub name: Name,
     pub type_id: TypeId,
     pub precision: Precision,
+    pub precise: bool,
     pub decorations: Decorations,
     pub built_in: Option<BuiltIn>,
     pub initializer: Option<ConstantId>,
@@ -1337,6 +1568,7 @@ pub struct Variable {
     // Reflection info
     pub is_const: bool,
     pub is_static_use: bool,
+    pub is_dead_code_eliminated: bool,
 }
 
 impl Variable {
@@ -1344,6 +1576,7 @@ impl Variable {
         name: Name,
         type_id: TypeId,
         precision: Precision,
+        precise: bool,
         decorations: Decorations,
         built_in: Option<BuiltIn>,
         initializer: Option<ConstantId>,
@@ -1353,30 +1586,43 @@ impl Variable {
             name,
             type_id,
             precision,
+            precise,
             decorations,
             built_in,
             initializer,
             scope,
             is_const: false,
             is_static_use: false,
+            is_dead_code_eliminated: false,
         }
     }
 
     // Const variables are only created during parse.  They are replaced by constants and never
     // referenced, and only serve the purpose of holding the assigned precision to the constant.
     // That precision affects the precision of operations they are involved in.
-    pub fn new_const(name: Name, type_id: TypeId, precision: Precision) -> Variable {
+    pub fn new_const(name: Name, type_id: TypeId, precision: Precision, precise: bool) -> Variable {
         Variable {
             name,
             type_id,
             precision,
+            precise,
             decorations: Decorations::new_none(),
             built_in: None,
             initializer: None,
             scope: VariableScope::Global,
             is_const: true,
             is_static_use: false,
+            is_dead_code_eliminated: false,
         }
+    }
+
+    pub fn is_built_in(&self) -> bool {
+        self.built_in.is_some()
+    }
+
+    pub fn is_interface_variable(&self) -> bool {
+        self.scope == VariableScope::Global
+            && (self.is_built_in() || !self.decorations.decorations.is_empty())
     }
 }
 
@@ -1386,6 +1632,9 @@ pub enum BuiltIn {
     // The BuiltIn enum value X corresponds to gl_X in GLSL.
     InstanceID,
     VertexID,
+    // InstanceIndex and VertexIndex are used internally to implement InstanceID and VertexID.
+    InstanceIndex,
+    VertexIndex,
     Position,
     PointSize,
     BaseVertex,
@@ -1416,7 +1665,6 @@ pub enum BuiltIn {
     SampleMask,
     NumSamples,
     NumWorkGroups,
-    WorkGroupSize,
     WorkGroupID,
     LocalInvocationID,
     GlobalInvocationID,
@@ -1426,7 +1674,7 @@ pub enum BuiltIn {
     PrimitiveIDIn,
     InvocationID,
     PrimitiveID,
-    // gl_Layer as GS output
+    // gl_Layer as GS output (or VS output, used internally to emulate multiview)
     LayerOut,
     // gl_Layer as FS input
     LayerIn,
@@ -1435,11 +1683,10 @@ pub enum BuiltIn {
     TessLevelInner,
     TessCoord,
     BoundingBoxOES,
-    PixelLocalEXT,
 }
 
 // Whether a function parameter is `in`, `out` or `inout`.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq)]
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub enum FunctionParamDirection {
     Input,
@@ -1447,6 +1694,7 @@ pub enum FunctionParamDirection {
     InputOutput,
 }
 
+#[derive(Copy, Clone)]
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub struct FunctionParam {
     pub variable_id: VariableId,
@@ -1467,6 +1715,7 @@ pub struct Function {
     pub params: Vec<FunctionParam>,
     pub return_type_id: TypeId,
     pub return_precision: Precision,
+    pub return_precise: bool,
     pub return_decorations: Decorations,
 }
 
@@ -1476,6 +1725,7 @@ impl Function {
         params: Vec<FunctionParam>,
         return_type_id: TypeId,
         return_precision: Precision,
+        return_precise: bool,
         return_decorations: Decorations,
     ) -> Function {
         Function {
@@ -1484,6 +1734,7 @@ impl Function {
             params,
             return_type_id,
             return_precision,
+            return_precise,
             return_decorations,
         }
     }
@@ -1504,9 +1755,16 @@ pub enum ShaderType {
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub enum Precision {
     NotApplicable,
+    Unassigned,
     Low,
     Medium,
     High,
+}
+
+impl Precision {
+    pub fn is_assigned(&self) -> bool {
+        *self != Precision::NotApplicable && *self != Precision::Unassigned
+    }
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -1593,11 +1851,17 @@ pub enum TessellationOrdering {
 
 #[derive(Copy, Clone, PartialEq)]
 #[cfg_attr(debug_assertions, derive(Debug))]
+pub enum EmulatedMultiDraw {
+    DrawID,
+    BaseVertex,
+    BaseInstance,
+}
+
+#[derive(Copy, Clone, PartialEq)]
+#[cfg_attr(debug_assertions, derive(Debug))]
 pub enum Decoration {
     // Corresponding to GLSL qualifiers with the same name
     Invariant,
-    Precise,
-    Interpolant,
     Smooth,
     Flat,
     NoPerspective,
@@ -1614,9 +1878,7 @@ pub enum Decoration {
     Buffer,
     PushConstant,
     NonCoherent,
-    YUV,
-    // TODO(http://anglebug.com/349994211): handle __pixel_localEXT, likely in combination with
-    // Input/Output/InputOutput
+    Yuv,
     // Indicates that a variable (excluding built-ins) is an input to the shader
     Input,
     // Indicates that a variable (excluding built-ins) is an output of the shader
@@ -1644,11 +1906,16 @@ pub enum Decoration {
     Depth(Depth),
     // Internal format declared on storage images
     ImageInternalFormat(ImageInternalFormat),
-    // Number of views in OVR_multiview
-    NumViews(u32),
+    // Used internally to implement OES_shader_multisample_interpolation for Metal.
+    Interpolant,
     // Used internally to implement ANGLE_pixel_local_storage, indicates a D3D 11.3 Rasterizer
-    // Order Views (ROV)
+    // Order Views (ROV) and Metal raster_order_groups.
     RasterOrdered,
+    // Used internally to emulate instanced multiview.
+    EmulatedViewIDOut,
+    EmulatedViewIDIn,
+    // Used internally to emulate multidraw built-ins.
+    EmulatedMultiDrawBuiltIn(EmulatedMultiDraw),
 }
 
 // A set of decorations that only affect variables.  They are placed in a vector that's expected to
@@ -1667,16 +1934,52 @@ impl Decorations {
         Decorations { decorations }
     }
     pub fn add_invariant(&mut self) {
-        if !self.decorations.iter().any(|decoration| matches!(decoration, Decoration::Invariant)) {
+        if !self.has(Decoration::Invariant) {
             self.decorations.push(Decoration::Invariant);
         }
     }
-    pub fn add_precise(&mut self) {
-        if !self.decorations.iter().any(|decoration| matches!(decoration, Decoration::Precise)) {
-            self.decorations.push(Decoration::Precise);
-        }
+    pub fn has(&self, query: Decoration) -> bool {
+        self.decorations.contains(&query)
     }
 }
+
+// For decorations with data, macros are needed to simplify querying and extracting them.
+//
+// has_decoration: Similar to Decorations::has, but for enums with data.  For example:
+//
+//     has_decoration!(decorations, Decoration::Location) // returns a bool
+//
+// get_decoration: Get a decoration matching a variant.  For example:
+//
+//     get_decoration!(decorations, Decoration::Location) // returns Some(Location(l)) or None
+//
+// get_decoration_value: Get the value inside a decoration matching a variant.  For example:
+//
+//     get_decoration_value!(decorations, Decoration::Location) // returns Some(l) or None
+macro_rules! has_decoration {
+    ($decorations:expr, $variant:path) => {
+        $decorations.decorations.iter().any(|decoration| matches!(decoration, $variant(..)))
+    };
+}
+macro_rules! get_decoration {
+    ($decorations:expr, $variant:path) => {
+        $decorations
+            .decorations
+            .iter()
+            .find(|decoration| matches!(decoration, $variant(..)))
+            .copied()
+    };
+}
+macro_rules! get_decoration_value {
+    ($decorations:expr, $variant:path) => {
+        $decorations.decorations.iter().find_map(|decoration| {
+            if let $variant(value) = decoration { Some(*value) } else { None }
+        })
+    };
+}
+pub(crate) use get_decoration;
+pub(crate) use get_decoration_value;
+pub(crate) use has_decoration;
 
 #[derive(Eq, PartialEq, Hash, Copy, Clone)]
 #[cfg_attr(debug_assertions, derive(Debug))]
@@ -1712,8 +2015,6 @@ pub enum ImageDimension {
     External,
     // For GL_EXT_YUV_target
     ExternalY2Y,
-    // For WebGL_video_texture
-    Video,
     // For ANGLE_shader_pixel_local_storage
     PixelLocal,
     // For subpass inputs
@@ -1736,7 +2037,10 @@ pub struct Field {
     pub name: Name,
     pub type_id: TypeId,
     pub precision: Precision,
+    pub precise: bool,
     pub decorations: Decorations,
+    // Reflection info.  Tracking is only needed for fields of nameless interface blocks.
+    pub is_static_use: bool,
 }
 
 impl Field {
@@ -1744,17 +2048,16 @@ impl Field {
         name: Name,
         type_id: TypeId,
         precision: Precision,
+        precise: bool,
         decorations: Decorations,
     ) -> Field {
-        Field { name, type_id, precision, decorations }
+        Field { name, type_id, precision, precise, decorations, is_static_use: false }
     }
 }
 
 #[derive(PartialEq, Copy, Clone)]
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub enum StructSpecialization {
-    // TODO(http://anglebug.com/349994211): Perhaps add an entry for structs that have been
-    // dead-code-eliminated so they aren't forward declared?
     Struct,
     InterfaceBlock,
 }
@@ -1778,6 +2081,96 @@ pub enum Type {
     UnsizedArray(TypeId),
     // A pointer to a type, includes variables, access chains etc
     Pointer(TypeId),
+    // An eliminated type that doesn't need to be declared in the output.
+    DeadCodeEliminated,
+}
+
+impl PartialEq for Type {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Type::Scalar(basic_type_1), Type::Scalar(basic_type_2)) => {
+                basic_type_1 == basic_type_2
+            }
+            (
+                Type::Image(basic_image_type_1, image_type_1),
+                Type::Image(basic_image_type_2, image_type_2),
+            ) => basic_image_type_1 == basic_image_type_2 && image_type_1 == image_type_2,
+            // https://registry.khronos.org/OpenGL/specs/es/3.2/GLSL_ES_Specification_3.20.html#structures
+            // Two structure types are the same if they have the same name
+            // However, the GLSL parser code will assign an empty string for the struct name if it
+            // is declared in the following way: struct
+            // {
+            //     int field;
+            // }s;
+            // This means if the GLSL shader code declares 2 struct types:
+            // struct
+            // {
+            //     int field;
+            // }s1;
+            //
+            // struct
+            // {
+            //     int field;
+            // }s2;
+            // In IR, both will ends up with the same Struct Name.
+            // In this case, we should treat them as different types even if the struct Name are
+            // equal.
+            (Type::Struct(name1, _, _), Type::Struct(name2, _, _)) => name1 == name2,
+            (
+                Type::Vector(scalar_type_id_1, vector_size_1),
+                Type::Vector(scalar_type_id_2, vector_size_2),
+            ) => scalar_type_id_1 == scalar_type_id_2 && vector_size_1 == vector_size_2,
+            (
+                Type::Matrix(vector_type_id_1, matrix_size_1),
+                Type::Matrix(vector_type_id_2, matrix_size_2),
+            ) => vector_type_id_1 == vector_type_id_2 && matrix_size_1 == matrix_size_2,
+            (
+                Type::Array(element_type_id_1, array_size_1),
+                Type::Array(element_type_id_2, array_size_2),
+            ) => element_type_id_1 == element_type_id_2 && array_size_1 == array_size_2,
+            (Type::UnsizedArray(element_type_id_1), Type::UnsizedArray(element_type_id_2)) => {
+                element_type_id_1 == element_type_id_2
+            }
+            (Type::Pointer(pointed_type_id_1), Type::Pointer(pointed_type_id_2)) => {
+                pointed_type_id_1 == pointed_type_id_2
+            }
+            (Type::DeadCodeEliminated, Type::DeadCodeEliminated) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Type {}
+
+impl Hash for Type {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        core::mem::discriminant(self).hash(state);
+        match self {
+            Type::Scalar(basic_type) => basic_type.hash(state),
+            Type::Image(image_basic_type, image_type) => {
+                image_basic_type.hash(state);
+                image_type.hash(state);
+            }
+            // https://registry.khronos.org/OpenGL/specs/es/3.2/GLSL_ES_Specification_3.20.html#structures
+            // Two structure types are the same if they have the same name
+            Type::Struct(name, _, _) => name.hash(state),
+            Type::Vector(scalar_type_id, vector_size) => {
+                scalar_type_id.hash(state);
+                vector_size.hash(state);
+            }
+            Type::Matrix(vector_type_id, matrix_size) => {
+                vector_type_id.hash(state);
+                matrix_size.hash(state);
+            }
+            Type::Array(element_type_id, array_size) => {
+                element_type_id.hash(state);
+                array_size.hash(state);
+            }
+            Type::UnsizedArray(element_type_id) => element_type_id.hash(state),
+            Type::Pointer(pointed_type_id) => pointed_type_id.hash(state),
+            Type::DeadCodeEliminated => {}
+        }
+    }
 }
 
 impl Type {
@@ -1816,6 +2209,9 @@ impl Type {
     pub fn is_scalar(&self) -> bool {
         matches!(self, Type::Scalar(_))
     }
+    pub fn is_scalar_atomic_counter(&self) -> bool {
+        matches!(self, Type::Scalar(BasicType::AtomicCounter))
+    }
 
     pub fn is_vector(&self) -> bool {
         matches!(self, Type::Vector(..))
@@ -1828,9 +2224,21 @@ impl Type {
     pub fn is_image(&self) -> bool {
         matches!(self, Type::Image(..))
     }
+    pub fn is_sampled_image(&self) -> bool {
+        matches!(self, Type::Image(_, ImageType { is_sampled: true, .. }))
+    }
+    pub fn is_pixel_local_storage_plane(&self) -> bool {
+        matches!(self, Type::Image(_, ImageType { dimension: ImageDimension::PixelLocal, .. }))
+    }
 
     pub fn is_array(&self) -> bool {
         matches!(self, Type::Array(..))
+    }
+    pub fn is_array_of_array(&self, ir_meta: &IRMeta) -> bool {
+        match *self {
+            Type::Array(element_id, _) => ir_meta.get_type(element_id).is_array(),
+            _ => false,
+        }
     }
 
     pub fn is_unsized_array(&self) -> bool {
@@ -1841,8 +2249,60 @@ impl Type {
         matches!(self, Type::Struct(..))
     }
 
+    pub fn is_struct_with_empty_name(&self) -> bool {
+        match self {
+            Type::Struct(struct_name, _, _) => struct_name.name.is_empty(),
+            _ => false,
+        }
+    }
+
+    pub fn is_struct_interface_block(&self) -> bool {
+        matches!(self, Type::Struct(_, _, StructSpecialization::InterfaceBlock))
+    }
+
+    fn is_struct_containing_samplers_helper(&self, ir_meta: &IRMeta) -> bool {
+        // The parser puts samplers at the end of the struct, so check the fields from the back for
+        // any sampler or struct that contains samplers.  Samplers in struct are only valid in ESSL
+        // 100, so this function is unnecessary to call for higher versions.
+        self.is_sampled_image()
+            || match self {
+                Type::Struct(_, fields, StructSpecialization::Struct) => {
+                    fields.iter().rev().any(|field| {
+                        let type_info = ir_meta.get_type(field.type_id);
+                        type_info.is_struct_containing_samplers_helper(ir_meta)
+                    })
+                }
+                &Type::Array(element_type_id, _) => {
+                    let type_info = ir_meta.get_type(element_type_id);
+                    type_info.is_struct_containing_samplers_helper(ir_meta)
+                }
+                _ => false,
+            }
+    }
+    pub fn is_struct_containing_samplers(&self, ir_meta: &IRMeta) -> bool {
+        self.is_struct() && self.is_struct_containing_samplers_helper(ir_meta)
+    }
+
+    pub fn is_matrix_packing_applicable(&self, ir_meta: &IRMeta) -> bool {
+        // Matrix can be nested within structs or arrays.
+        match self {
+            &Type::Array(element_type_id, _) | &Type::UnsizedArray(element_type_id) => {
+                ir_meta.get_type(element_type_id).is_matrix_packing_applicable(ir_meta)
+            }
+            &Type::Struct(_, ref fields, StructSpecialization::Struct) => fields
+                .iter()
+                .any(|field| ir_meta.get_type(field.type_id).is_matrix_packing_applicable(ir_meta)),
+            &Type::Matrix(..) => true,
+            _ => false,
+        }
+    }
+
     pub fn is_pointer(&self) -> bool {
         matches!(self, Type::Pointer(_))
+    }
+
+    pub fn is_dead_code_eliminated(&self) -> bool {
+        matches!(self, Type::DeadCodeEliminated)
     }
 
     pub fn get_scalar_basic_type(&self) -> BasicType {
@@ -1867,12 +2327,12 @@ impl Type {
     }
 
     pub fn get_element_type_id(&self) -> Option<TypeId> {
-        match self {
-            &Type::Vector(element_id, _) => Some(element_id),
-            &Type::Matrix(element_id, _) => Some(element_id),
-            &Type::Array(element_id, _) => Some(element_id),
-            &Type::UnsizedArray(element_id) => Some(element_id),
-            &Type::Pointer(element_id) => Some(element_id),
+        match *self {
+            Type::Vector(element_id, _) => Some(element_id),
+            Type::Matrix(element_id, _) => Some(element_id),
+            Type::Array(element_id, _) => Some(element_id),
+            Type::UnsizedArray(element_id) => Some(element_id),
+            Type::Pointer(element_id) => Some(element_id),
             _ => None,
         }
     }
@@ -2016,7 +2476,6 @@ impl AdvancedBlendEquations {
 // closures makes it hard for Rust to verify things, everything in the IR except the function
 // blocks are split into an `IRMeta` struct (allowing both the `.functions` and `.meta` to be
 // borrowed as &mut).
-#[cfg_attr(debug_assertions, derive(Debug))]
 pub struct IRMeta {
     types: Vec<Type>,
     constants: Vec<Constant>,
@@ -2051,6 +2510,9 @@ pub struct IRMeta {
     // Data that globally affects the shader:
     shader_type: ShaderType,
 
+    // Affecting vertex shaders:
+    num_views: u32,
+
     // Affecting fragment shaders:
     early_fragment_tests: bool,
     advanced_blend_equations: AdvancedBlendEquations,
@@ -2078,6 +2540,14 @@ pub struct IRMeta {
     per_vertex_out_is_redeclared: bool,
     // TODO(http://anglebug.com/349994211): invariant and others that can be globally set, do they
     // need to be tracked here?
+
+    // Set of variables that are required to be zero-initialized before output generation.  This
+    // set is determined during parse, but zero-initialization needs to be done late in
+    // compilation.
+    variables_pending_zero_initialization: HashSet<VariableId>,
+    // Shader reflection info
+    reflection_info: reflection::Info,
+    uses_secondary_frag_data: bool,
 }
 
 impl IRMeta {
@@ -2207,6 +2677,7 @@ impl IRMeta {
             uint_constant_map,
             composite_constant_map: HashMap::new(),
             shader_type,
+            num_views: 0,
             early_fragment_tests: false,
             advanced_blend_equations: AdvancedBlendEquations::new(),
             tcs_vertices: 0,
@@ -2220,6 +2691,9 @@ impl IRMeta {
             gs_max_vertices: 0,
             per_vertex_in_is_redeclared: false,
             per_vertex_out_is_redeclared: false,
+            variables_pending_zero_initialization: HashSet::new(),
+            reflection_info: reflection::Info::new(),
+            uses_secondary_frag_data: false,
         }
     }
 
@@ -2241,6 +2715,27 @@ impl IRMeta {
     pub fn all_global_variables(&self) -> &Vec<VariableId> {
         &self.global_variables
     }
+    pub fn total_register_count(&self) -> u32 {
+        self.instructions.len() as u32
+    }
+    pub fn prune_global_variables<Keep>(&mut self, keep: Keep)
+    where
+        Keep: Fn(VariableId, &Variable) -> bool,
+    {
+        self.global_variables.retain(|&id| {
+            let should_keep = keep(id, &self.variables[id.id as usize]);
+            if !should_keep {
+                self.variables[id.id as usize].is_dead_code_eliminated = true;
+                self.variables_pending_zero_initialization.remove(&id);
+            }
+            should_keep
+        });
+    }
+    // Used by transformations that non-trivially modify the list of global variables.  Returns the
+    // old list.
+    pub fn replace_global_variables(&mut self, replacement: Vec<VariableId>) -> Vec<VariableId> {
+        std::mem::replace(&mut self.global_variables, replacement)
+    }
 
     pub fn get_main_function_id(&self) -> Option<FunctionId> {
         self.main_function_id
@@ -2255,6 +2750,9 @@ impl IRMeta {
     }
     pub fn get_early_fragment_tests(&self) -> bool {
         self.early_fragment_tests
+    }
+    pub fn get_num_views(&self) -> u32 {
+        self.num_views
     }
     pub fn get_advanced_blend_equations(&self) -> &AdvancedBlendEquations {
         &self.advanced_blend_equations
@@ -2296,6 +2794,9 @@ impl IRMeta {
     pub fn set_early_fragment_tests(&mut self, value: bool) {
         self.early_fragment_tests = value;
     }
+    pub fn set_num_views(&mut self, value: u32) {
+        self.num_views = value;
+    }
     pub fn add_advanced_blend_equations(&mut self, equations: AdvancedBlendEquations) {
         self.advanced_blend_equations.add(equations);
     }
@@ -2332,6 +2833,9 @@ impl IRMeta {
     pub fn on_per_vertex_out_redeclaration(&mut self) {
         self.per_vertex_out_is_redeclared = true;
     }
+    pub fn get_variables_pending_zero_initialization(&self) -> &HashSet<VariableId> {
+        &self.variables_pending_zero_initialization
+    }
 
     fn add_item_and_get_id<T>(items: &mut Vec<T>, new_item: T) -> u32 {
         let item_id = items.len() as u32;
@@ -2365,7 +2869,7 @@ impl IRMeta {
 
     // Returns a predefined type id for vectors, see TYPE_ID_* constants.
     pub fn get_vector_type_id(&self, basic_type: BasicType, vector_size: u32) -> TypeId {
-        debug_assert!(vector_size >= 2 && vector_size <= 4);
+        debug_assert!((2..=4).contains(&vector_size));
 
         let offset = vector_size - 2;
 
@@ -2395,8 +2899,8 @@ impl IRMeta {
 
     // Returns a predefined type id for matrices, see TYPE_ID_* constants.
     pub fn get_matrix_type_id(&self, column_count: u32, row_count: u32) -> TypeId {
-        debug_assert!(column_count >= 2 && column_count <= 4);
-        debug_assert!(row_count >= 2 && row_count <= 4);
+        debug_assert!((2..=4).contains(&column_count));
+        debug_assert!((2..=4).contains(&row_count));
 
         let offset = (column_count - 2) * 3 + (row_count - 2);
         TypeId { id: TYPE_ID_MAT2.id + offset }
@@ -2455,6 +2959,11 @@ impl IRMeta {
             Self::add_constant_and_get_id(&mut self.constants, Constant::new_float(value))
         })
     }
+    pub fn get_constant_float_typed(&mut self, value: f32, precision: Precision) -> TypedId {
+        // `float` needs a precision
+        debug_assert!(precision != Precision::NotApplicable);
+        TypedId::from_constant_id(self.get_constant_float(value), TYPE_ID_FLOAT, precision)
+    }
 
     pub fn get_constant_int(&mut self, value: i32) -> ConstantId {
         // Look up the int constant; if one doesn't exist, create it.
@@ -2462,12 +2971,54 @@ impl IRMeta {
             Self::add_constant_and_get_id(&mut self.constants, Constant::new_int(value))
         })
     }
+    pub fn get_constant_int_typed(&mut self, value: i32, precision: Precision) -> TypedId {
+        // `int` needs a precision
+        debug_assert!(precision != Precision::NotApplicable);
+        TypedId::from_constant_id(self.get_constant_int(value), TYPE_ID_INT, precision)
+    }
+    pub fn get_constant_ivec4_typed(
+        &mut self,
+        r: i32,
+        g: i32,
+        b: i32,
+        a: i32,
+        precision: Precision,
+    ) -> TypedId {
+        // `ivec4` needs a precision
+        debug_assert!(precision != Precision::NotApplicable);
+        let r = self.get_constant_int(r);
+        let g = self.get_constant_int(g);
+        let b = self.get_constant_int(b);
+        let a = self.get_constant_int(a);
+        self.get_constant_composite_typed(TYPE_ID_IVEC4, vec![r, g, b, a], precision)
+    }
 
     pub fn get_constant_uint(&mut self, value: u32) -> ConstantId {
         // Look up the int constant; if one doesn't exist, create it.
         *self.uint_constant_map.entry(value).or_insert_with(|| {
             Self::add_constant_and_get_id(&mut self.constants, Constant::new_uint(value))
         })
+    }
+    pub fn get_constant_uint_typed(&mut self, value: u32, precision: Precision) -> TypedId {
+        // `uint` needs a precision
+        debug_assert!(precision != Precision::NotApplicable);
+        TypedId::from_constant_id(self.get_constant_uint(value), TYPE_ID_UINT, precision)
+    }
+    pub fn get_constant_uvec4_typed(
+        &mut self,
+        r: u32,
+        g: u32,
+        b: u32,
+        a: u32,
+        precision: Precision,
+    ) -> TypedId {
+        // `uvec4` needs a precision
+        debug_assert!(precision != Precision::NotApplicable);
+        let r = self.get_constant_uint(r);
+        let g = self.get_constant_uint(g);
+        let b = self.get_constant_uint(b);
+        let a = self.get_constant_uint(a);
+        self.get_constant_composite_typed(TYPE_ID_UVEC4, vec![r, g, b, a], precision)
     }
 
     pub fn get_constant_yuv_csc_standard(&mut self, value: YuvCscStandard) -> ConstantId {
@@ -2477,10 +3028,29 @@ impl IRMeta {
             YuvCscStandard::Itu709 => CONSTANT_ID_YUV_CSC_ITU709,
         }
     }
+    pub fn get_constant_yuv_csc_standard_typed(
+        &mut self,
+        value: YuvCscStandard,
+        precision: Precision,
+    ) -> TypedId {
+        // `yuv_csc_standard` does not need a precision
+        debug_assert!(precision == Precision::NotApplicable);
+        TypedId::from_constant_id(
+            self.get_constant_yuv_csc_standard(value),
+            TYPE_ID_YUV_CSC_STANDARD,
+            precision,
+        )
+    }
 
     pub fn get_constant_bool(&mut self, value: bool) -> ConstantId {
         // Bool constants are predefined
         if value { CONSTANT_ID_TRUE } else { CONSTANT_ID_FALSE }
+    }
+    pub fn get_constant_bool_typed(&mut self, value: bool, precision: Precision) -> TypedId {
+        // `bool` does not need a precision
+        debug_assert!(precision == Precision::NotApplicable);
+
+        TypedId::from_constant_id(self.get_constant_bool(value), TYPE_ID_BOOL, precision)
     }
 
     pub fn get_constant_composite(
@@ -2489,16 +3059,99 @@ impl IRMeta {
         components: Vec<ConstantId>,
     ) -> ConstantId {
         // Look up the composite constant; if one doesn't exist, create it.
-        let constant_id = *self
-            .composite_constant_map
-            .entry((type_id, components.clone()))
-            .or_insert_with(|| {
-                Self::add_constant_and_get_id(
-                    &mut self.constants,
-                    Constant::new_composite(type_id, components),
-                )
-            });
-        constant_id
+        *self.composite_constant_map.entry((type_id, components.clone())).or_insert_with(|| {
+            Self::add_constant_and_get_id(
+                &mut self.constants,
+                Constant::new_composite(type_id, components),
+            )
+        })
+    }
+    pub fn get_constant_composite_typed(
+        &mut self,
+        type_id: TypeId,
+        components: Vec<ConstantId>,
+        precision: Precision,
+    ) -> TypedId {
+        if util::is_precision_applicable_to_type(self, type_id) {
+            debug_assert!(precision != Precision::NotApplicable)
+        } else {
+            debug_assert!(precision == Precision::NotApplicable);
+        }
+
+        TypedId::from_constant_id(
+            self.get_constant_composite(type_id, components),
+            type_id,
+            precision,
+        )
+    }
+
+    pub fn dead_code_eliminate_variable(&mut self, id: VariableId) {
+        // Mark the variable as eliminated.
+        // Also remove it from pending initialization list.
+        // If the variable is referenced in other parts of the IR, it is expected to already be
+        // removed.
+        self.variables[id.id as usize].is_dead_code_eliminated = true;
+        self.variables_pending_zero_initialization.remove(&id);
+    }
+    pub fn dead_code_eliminate_constant(&mut self, id: ConstantId) {
+        // Don't dead-code-eliminate predefined constants, they may be referenced by future
+        // transformations.
+        if id.id <= MAX_PREDEFINED_CONSTANT_ID {
+            return;
+        }
+
+        // Mark the constant as dead-code-eliminated.
+        let constant = &mut self.constants[id.id as usize];
+        constant.is_dead_code_eliminated = true;
+
+        // Remove the constant from the constant map, so this id is never returned in future
+        // lookups.
+        match constant.value {
+            ConstantValue::Float(f) => {
+                self.float_constant_map.remove(&f.to_bits());
+            }
+            ConstantValue::Int(i) => {
+                self.int_constant_map.remove(&i);
+            }
+            ConstantValue::Uint(u) => {
+                self.uint_constant_map.remove(&u);
+            }
+            ConstantValue::Bool(_) | ConstantValue::YuvCsc(_) => {
+                // Nothing to do, all possible values are predefined.
+            }
+            ConstantValue::Composite(ref components) => {
+                self.composite_constant_map.remove(&(constant.type_id, components.clone()));
+            }
+        };
+    }
+    pub fn dead_code_eliminate_type(&mut self, id: TypeId) {
+        // Don't dead-code-eliminate predefined types, they may be referenced by future
+        // transformations.
+        if id.id <= MAX_PREDEFINED_TYPE_ID {
+            return;
+        }
+
+        let type_info = &mut self.types[id.id as usize];
+
+        // Remove the type from the type map, so this id is never returned in future lookups.
+        match *type_info {
+            Type::Image(basic_type, image_type) => {
+                self.image_type_map.remove(&(basic_type, image_type));
+            }
+            Type::Array(element_type_id, count) => {
+                self.array_type_map.remove(&(element_type_id, count));
+            }
+            Type::UnsizedArray(element_type_id) => {
+                self.array_type_map.remove(&(element_type_id, 0));
+            }
+            Type::Pointer(pointee_type_id) => {
+                self.pointer_type_map.remove(&pointee_type_id);
+            }
+            _ => {}
+        }
+
+        // Mark the type as dead-code-eliminated.
+        *type_info = Type::DeadCodeEliminated;
     }
 
     // Generate the "null" value of a given type.  That is 0 for numeric types, false for boolean,
@@ -2536,7 +3189,7 @@ impl IRMeta {
                     .collect();
                 self.get_constant_composite(type_id, components)
             }
-            Type::Struct(.., StructSpecialization::InterfaceBlock) => {
+            Type::Struct(..) => {
                 panic!("Internal error: Cannot create a null value of interface block type")
             }
             Type::UnsizedArray(_) => {
@@ -2546,7 +3199,18 @@ impl IRMeta {
                 panic!("Internal error: Cannot create a null value of pointer type")
             }
             Type::Image(..) => panic!("Internal error: Cannot create a null value of image type"),
+            Type::DeadCodeEliminated => {
+                panic!("Internal error: Cannot create a null value of dead-code-eliminated type")
+            }
         }
+    }
+    pub fn get_constant_null_typed(&mut self, type_id: TypeId, precision: Precision) -> TypedId {
+        if util::is_precision_applicable_to_type(self, type_id) {
+            debug_assert!(precision != Precision::NotApplicable)
+        } else {
+            debug_assert!(precision == Precision::NotApplicable);
+        }
+        TypedId::from_constant_id(self.get_constant_null(type_id), type_id, precision)
     }
 
     pub fn add_variable(&mut self, variable: Variable) -> VariableId {
@@ -2557,23 +3221,37 @@ impl IRMeta {
         name: Name,
         type_id: TypeId,
         precision: Precision,
+        precise: bool,
         decorations: Decorations,
         built_in: Option<BuiltIn>,
         initializer: Option<ConstantId>,
         scope: VariableScope,
-    ) -> VariableId {
-        // Automatically turn the type into a pointer
-        debug_assert!(!self.get_type(type_id).is_pointer());
-        let type_id = self.get_pointer_type_id(type_id);
-        let var =
-            Variable::new(name, type_id, precision, decorations, built_in, initializer, scope);
+    ) -> (VariableId, TypedId) {
+        // Automatically turn the type into a pointer if not already.  Typically the given type is
+        // not a pointer, but it could sometimes be if we're duplicating an existing variable and
+        // the pointer type is readily available.
+        let type_id = if self.get_type(type_id).is_pointer() {
+            type_id
+        } else {
+            self.get_pointer_type_id(type_id)
+        };
+        let var = Variable::new(
+            name,
+            type_id,
+            precision,
+            precise,
+            decorations,
+            built_in,
+            initializer,
+            scope,
+        );
         let variable_id = self.add_variable(var);
 
         if scope == VariableScope::Global {
             self.global_variables.push(variable_id);
         }
 
-        variable_id
+        (variable_id, TypedId::new(Id::new_variable(variable_id), type_id, precision))
     }
     // Used only by builder.rs.  Transformations should not create const variables, but instead
     // just use constants.
@@ -2582,19 +3260,147 @@ impl IRMeta {
         name: Name,
         type_id: TypeId,
         precision: Precision,
+        precise: bool,
     ) -> VariableId {
         // Automatically turn the type into a pointer
         debug_assert!(!self.get_type(type_id).is_pointer());
         let type_id = self.get_pointer_type_id(type_id);
-        let var = Variable::new_const(name, type_id, precision);
+        let var = Variable::new_const(name, type_id, precision, precise);
         // No need to add the variable to any scope, because they are always replaced by their
         // constant value in the IR.
         self.add_variable(var)
     }
+    // Short-hand for declaring a shader-private (global or local) variable.
+    pub fn declare_private_variable(
+        &mut self,
+        name: Name,
+        type_id: TypeId,
+        precision: Precision,
+        initializer: Option<ConstantId>,
+        scope: VariableScope,
+    ) -> (VariableId, TypedId) {
+        self.declare_variable(
+            name,
+            type_id,
+            precision,
+            false,
+            Decorations::new_none(),
+            None,
+            initializer,
+            scope,
+        )
+    }
+    pub fn get_built_in_variable(&self, built_in: BuiltIn) -> Option<VariableId> {
+        self.global_variables
+            .iter()
+            .find(|&id| matches!(self.get_variable(*id).built_in, Some(value) if value == built_in))
+            .copied()
+    }
+    pub fn declare_built_in_variable(
+        &mut self,
+        type_id: TypeId,
+        precision: Precision,
+        built_in: BuiltIn,
+    ) -> (VariableId, TypedId) {
+        self.declare_variable(
+            Name::new_exact(""),
+            type_id,
+            precision,
+            false,
+            Decorations::new_none(),
+            Some(built_in),
+            None,
+            VariableScope::Global,
+        )
+    }
+    // If already declared, return a built-in variable, otherwise declare it.  Used by
+    // transformations to reference a built-in that the shader might not have originally used.
+    //
+    // There are very few built-in's that the transformations may declare and their
+    // type/precision/etc is baked here (instead of autogenerated from builtin_variables.json).
+    pub fn get_or_declare_built_in_variable(&mut self, built_in: BuiltIn) -> (VariableId, TypedId) {
+        if let Some(variable_id) = self.get_built_in_variable(built_in) {
+            (variable_id, TypedId::from_variable_id(self, variable_id))
+        } else {
+            let (type_id, precision) = match built_in {
+                // Note: gl_FragCoord is mediump in ESSL 100, but highp in ESSL 300+.  Declare it
+                // as highp to conform to newer standards.
+                BuiltIn::FragCoord => (TYPE_ID_VEC4, Precision::High),
+                BuiltIn::BaseVertex | BuiltIn::InstanceID | BuiltIn::LayerOut => {
+                    (TYPE_ID_INT, Precision::High)
+                }
+                _ => panic!("Internal error: Unexpected built-in declared by transformations"),
+            };
 
+            self.declare_built_in_variable(type_id, precision, built_in)
+        }
+    }
+    // Declare a global variable to cache the contents of an interface variable.  The original
+    // variable is replaced with the global variable and a new id is assigned to the interface
+    // variable and returned.  This way, the shader does not need to be modified except for
+    // possibly writing to the cache variable at the start of shader and reading from it at the
+    // end.
+    pub fn declare_cached_global_for_variable(
+        &mut self,
+        variable_id: VariableId,
+        cache_name: &'static str,
+    ) -> (VariableId, TypedId) {
+        let variable = self.get_variable_mut(variable_id);
+
+        // Replace the variable with a private global.
+        let original_name = std::mem::replace(&mut variable.name, Name::new_temp(cache_name));
+        let type_id = variable.type_id;
+        let precision = variable.precision;
+        let precise = variable.precise;
+        let original_decorations =
+            std::mem::replace(&mut variable.decorations, Decorations::new_none());
+        let original_built_in = std::mem::take(&mut variable.built_in);
+        let is_static_use = variable.is_static_use;
+        debug_assert!(variable.initializer.is_none());
+        debug_assert!(variable.scope == VariableScope::Global);
+        debug_assert!(!variable.is_const);
+        debug_assert!(!variable.is_dead_code_eliminated);
+
+        // Create a new variable for the original one.
+        let (new_id, new_typed_id) = self.declare_variable(
+            original_name,
+            type_id,
+            precision,
+            precise,
+            original_decorations,
+            original_built_in,
+            None,
+            VariableScope::Global,
+        );
+        if is_static_use {
+            self.get_variable_mut(new_id).is_static_use = true;
+        }
+
+        (new_id, new_typed_id)
+    }
+
+    // Used only by builder.rs.  Transformations should set the initializer at the same time as
+    // declaring the variable with `declare_variable`.
     pub fn set_variable_initializer(&mut self, id: VariableId, constant_id: ConstantId) {
         debug_assert!(self.variables[id.id as usize].initializer.is_none());
         self.variables[id.id as usize].initializer = Some(constant_id);
+        self.on_variable_initialized(id);
+    }
+    pub fn on_variable_initialized(&mut self, id: VariableId) {
+        // Now that the initializer is visited (during parse), the variable won't need
+        // zero-initialization.
+        self.variables_pending_zero_initialization.remove(&id);
+    }
+    pub fn require_variable_zero_initialization(&mut self, id: VariableId) {
+        debug_assert!(!self.variable_needs_zero_initialization(id));
+        self.variables_pending_zero_initialization.insert(id);
+    }
+    pub fn variable_needs_zero_initialization(&self, id: VariableId) -> bool {
+        self.variables_pending_zero_initialization.contains(&id)
+    }
+    pub fn on_variable_zero_initialization_done(&mut self, id: VariableId) {
+        debug_assert!(self.variable_needs_zero_initialization(id));
+        self.variables_pending_zero_initialization.remove(&id);
     }
 
     pub fn add_function(&mut self, function: Function) -> FunctionId {
@@ -2705,9 +3511,41 @@ impl IRMeta {
         let element_type_info = self.get_type(element_type_id);
         element_type_info.get_element_type_id().unwrap_or(element_type_id)
     }
+
+    // Given a pointer type, retrieves the type it points to.
+    pub fn get_pointee_type(&self, type_id: TypeId) -> TypeId {
+        let type_info = self.get_type(type_id);
+        debug_assert!(type_info.is_pointer());
+        type_info.get_element_type_id().unwrap()
+    }
+
+    // Given an array type, retrieves its base element.
+    pub fn get_base_element_type(&self, type_id: TypeId) -> TypeId {
+        debug_assert!(!self.get_type(type_id).is_pointer());
+
+        let mut type_id = type_id;
+        while let Type::Array(element_id, _) = self.get_type(type_id) {
+            type_id = *element_id;
+        }
+
+        type_id
+    }
+
+    // For some transformations, it matters if some built-in is statically used, even if it's
+    // dead-code eliminated.  Calculate that before DCE.
+    pub fn cache_built_in_static_use_before_dce(&mut self) {
+        self.uses_secondary_frag_data =
+            self.get_built_in_variable(BuiltIn::SecondaryFragDataEXT).is_some();
+    }
+    pub fn uses_secondary_frag_data(&self) -> bool {
+        self.uses_secondary_frag_data
+    }
+
+    pub fn take_reflection_info(&mut self) -> reflection::Info {
+        std::mem::replace(&mut self.reflection_info, reflection::Info::new())
+    }
 }
 
-#[cfg_attr(debug_assertions, derive(Debug))]
 pub struct IR {
     pub meta: IRMeta,
     // The first block of the function for each function id.  This is the root of the block graph.
@@ -2734,17 +3572,45 @@ impl IR {
         self.function_entries[id.id as usize] = Some(entry);
     }
 
-    pub fn prepend_to_main(&mut self, mut new_entry: Block) {
+    pub fn dead_code_eliminate_function(&mut self, id: FunctionId) {
+        self.function_entries[id.id as usize] = None;
+    }
+
+    // By prepending code to main, it will run at the start of the shader.
+    pub fn prepend_to_main(&mut self, block: Block) {
         let main_function_id = self.meta.get_main_function_id().unwrap();
-        let main_entry = &mut self.function_entries[main_function_id.id as usize];
-        let main_entry_block = main_entry.take().unwrap();
+        let main_entry = self.function_entries[main_function_id.id as usize].as_mut().unwrap();
+        main_entry.prepend_code(block);
+    }
 
-        // Terminate the last block of `new_entry` with a `NextBlock`, and set its merge block to
-        // the current main block.
-        let last_block = new_entry.get_merge_chain_last_block_mut();
-        debug_assert!(matches!(last_block.get_terminating_op(), OpCode::NextBlock));
-        last_block.set_merge_block(main_entry_block);
+    // By appending code to main, it will run at the end of the shader unless the shader is
+    // discarded.
+    //
+    // Note that appending to main only correctly has this effect if `main` itself does not include
+    // early `return` or any `discard` branches.  The builder wraps `main` in a helper function if
+    // so, such that code appended to the final `main` always runs to the last instruction (again,
+    // assuming the fragment is not `discard`ed).
+    pub fn append_to_main(&mut self, block: Block) {
+        let main_function_id = self.meta.get_main_function_id().unwrap();
+        let main_entry = self.function_entries[main_function_id.id as usize].as_mut().unwrap();
+        main_entry.append_code(block);
+    }
 
-        *main_entry = Some(new_entry);
+    pub fn collect_reflection_info(
+        &mut self,
+        options: &reflection::Options,
+        active_interface_variables: &HashSet<VariableId>,
+    ) {
+        self.meta.reflection_info =
+            reflection::collect_info(self, options, active_interface_variables);
     }
 }
+
+// Helper macro to run validation on the IR
+macro_rules! validate {
+    ($ir:expr, $previous_operation:expr) => {
+        #[cfg(debug_assertions)]
+        $crate::validator::validate($ir, $previous_operation);
+    };
+}
+pub(crate) use validate;

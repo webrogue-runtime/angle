@@ -17,6 +17,8 @@
 
 #include <filesystem>
 #include <string>
+#include "common/system_utils.h"
+#include "scoped_capture_exclude.h"
 
 namespace
 {
@@ -111,16 +113,19 @@ BlockIndexesMap gUniformBlockIndexes;
 
 void UpdateUniformLocation(GLuint program, const char *name, GLint location, GLint count)
 {
+    // Do not capture the glGetUniformLocation below on retrace
+    angle::ScopedCaptureExclude skipRecording;
+
     std::vector<GLint> &programLocations = gInternalUniformLocationsMap[program];
     if (static_cast<GLint>(programLocations.size()) < location + count)
     {
         programLocations.resize(location + count, 0);
     }
     GLuint mappedProgramID = gShaderProgramMap[program];
+    GLint baseUniformLocation = glGetUniformLocation(mappedProgramID, name);
     for (GLint arrayIndex = 0; arrayIndex < count; ++arrayIndex)
     {
-        programLocations[location + arrayIndex] =
-            glGetUniformLocation(mappedProgramID, name) + arrayIndex;
+        programLocations[location + arrayIndex] = baseUniformLocation + arrayIndex;
     }
     gUniformLocations[program] = programLocations.data();
 }
@@ -132,6 +137,9 @@ void DeleteUniformLocations(GLuint program)
 
 void UpdateUniformBlockIndex(GLuint program, const char *name, GLuint index)
 {
+    // Do not capture the glGetUniformBlockIndex below on retrace
+    angle::ScopedCaptureExclude skipRecording;
+
     gUniformBlockIndexes[program][index] = glGetUniformBlockIndex(program, name);
 }
 
@@ -496,6 +504,17 @@ void UpdateClientArrayPointer(int arrayIndex, const void *data, uint64_t size)
 {
     memcpy(gClientArrays[arrayIndex], data, static_cast<size_t>(size));
 }
+
+void UpdateClientArrayPointerWithOffset(int arrayIndex,
+                                        const void *data,
+                                        uint64_t size,
+                                        uint64_t offset)
+{
+    uintptr_t dest =
+        reinterpret_cast<uintptr_t>(gClientArrays[arrayIndex]) + static_cast<size_t>(offset);
+    memcpy(reinterpret_cast<uint8_t *>(dest), data, static_cast<size_t>(size));
+}
+
 BufferHandleMap gMappedBufferData;
 
 void UpdateClientBufferData(GLuint bufferID, const void *source, GLsizei size)
@@ -671,6 +690,41 @@ void FenceSync2(GLenum condition, GLbitfield flags, uintptr_t fenceSync)
     gSyncMap2[fenceSync] = glFenceSync(condition, flags);
 }
 
+GLenum ClientWaitSync(GLsync sync, GLbitfield flags, GLuint64 timeout, GLenum capturedReturnValue)
+{
+    if (capturedReturnValue == GL_ALREADY_SIGNALED || capturedReturnValue == GL_CONDITION_SATISFIED)
+    {
+        GLenum result        = GL_TIMEOUT_EXPIRED;
+        GLuint64 waitTimeout = 100000000;  // 100ms
+        int attempts         = 0;
+        while (result != GL_ALREADY_SIGNALED && result != GL_CONDITION_SATISFIED)
+        {
+            result = glClientWaitSync(sync, flags, waitTimeout);
+            attempts++;
+            if (attempts > 100)
+            {
+                printf(
+                    "ClientWaitSync: Waiting for sync object %p to be signaled is taking too long "
+                    "(attempts: %d)\n",
+                    (void *)sync, attempts);
+                attempts = 0;
+            }
+            if (result == GL_WAIT_FAILED)
+            {
+                printf(
+                    "ClientWaitSync: glClientWaitSync returned GL_WAIT_FAILED for sync object %p\n",
+                    (void *)sync);
+                break;
+            }
+        }
+        return result;
+    }
+    else
+    {
+        return glClientWaitSync(sync, flags, timeout);
+    }
+}
+
 GLuint CreateEGLImageResource(GLsizei width, GLsizei height)
 {
     GLint previousTexId;
@@ -686,19 +740,69 @@ GLuint CreateEGLImageResource(GLsizei width, GLsizei height)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     std::vector<GLubyte> pixels;
-    pixels.reserve(width * height * 3);
+    pixels.reserve(width * height * 4);
     for (int i = 0; i < width * height; i++)
     {
         pixels.push_back(61);
         pixels.push_back(220);
         pixels.push_back(132);
+        pixels.push_back(255);
     }
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE,
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
                  pixels.data());
 
     glPixelStorei(GL_UNPACK_ALIGNMENT, previousAlignment);
     glBindTexture(GL_TEXTURE_2D, previousTexId);
     return stagingTexId;
+}
+
+void UpdateEGLImageData(GLuint imageID, GLsizei width, GLsizei height, const void *imageData)
+{
+    GLint restoreTexture;
+    GLint restoreAlignment;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &restoreTexture);
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &restoreAlignment);
+
+    if (gEGLImageMap2[imageID] != nullptr)
+    {
+        // EGLImage already exists, update backing texture if there is imageData
+        GLuint textureID = gEGLImageMap2Resources[imageID];
+        if ((textureID != 0) && (imageData != nullptr))
+        {
+            glBindTexture(GL_TEXTURE_2D, textureID);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE,
+                            imageData);
+        }
+    }
+    else
+    {
+        // First eglImage binding, create eglImage and a staging texture for it
+        GLuint stagingTexture;
+        if (imageData != nullptr)
+        {
+            glGenTextures(1, &stagingTexture);
+            glBindTexture(GL_TEXTURE_2D, stagingTexture);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                         imageData);
+        }
+        else
+        {
+            // Fallback is to use a static, solid green placeholder texture
+            stagingTexture = CreateEGLImageResource(width, height);
+        }
+
+        gEGLImageMap2Resources[imageID] = stagingTexture;
+        gEGLImageMap2[imageID] =
+            eglCreateImageKHR(gEGLDisplay, eglGetCurrentContext(), EGL_GL_TEXTURE_2D,
+                              reinterpret_cast<EGLClientBuffer>(stagingTexture), nullptr);
+    }
+
+    glPixelStorei(GL_UNPACK_ALIGNMENT, restoreAlignment);
+    glBindTexture(GL_TEXTURE_2D, restoreTexture);
 }
 
 void CreateEGLImage(EGLDisplay dpy,
@@ -712,10 +816,10 @@ void CreateEGLImage(EGLDisplay dpy,
 {
     if (target == EGL_NATIVE_BUFFER_ANDROID || buffer == 0)
     {
-        // If this image was created from an AHB or the backing resource was not
-        // captured, create a new GL texture during replay to use instead.
-        // Substituting a GL texture for an AHB allows the trace to run on
-        // non-Android systems.
+        // If image was created from an AHB or the backing resource wasn't captured, create a new
+        // texture to use instead, which will be filled in an UpdateEGLImageData call we insert just
+        // before the bind call. Substituting a regular texture for the AHB allows the trace to run
+        // on non-Android systems.
         gEGLImageMap2Resources[imageID] = CreateEGLImageResource(width, height);
         gEGLImageMap2[imageID]          = eglCreateImage(
             dpy, eglGetCurrentContext(), EGL_GL_TEXTURE_2D,
@@ -737,6 +841,8 @@ void CreateEGLImageKHR(EGLDisplay dpy,
                        GLsizei height,
                        GLuint imageID)
 {
+    // This function is nearly identical to CreateEGLImage() above, but remains separated
+    // because of a unique function signature. See comments above.
     if (target == EGL_NATIVE_BUFFER_ANDROID || buffer == 0)
     {
         gEGLImageMap2Resources[imageID] = CreateEGLImageResource(width, height);

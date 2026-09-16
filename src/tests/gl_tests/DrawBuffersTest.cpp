@@ -8,6 +8,8 @@
 #    pragma allow_unsafe_buffers
 #endif
 
+#include <array>
+
 #include "test_utils/ANGLETest.h"
 #include "test_utils/gl_raii.h"
 
@@ -31,7 +33,7 @@ class DrawBuffersTest : public ANGLETest<>
     {
         glDeleteFramebuffers(1, &mFBO);
         glDeleteFramebuffers(1, &mReadFramebuffer);
-        glDeleteTextures(4, mTextures);
+        glDeleteTextures(4, mTextures.data());
     }
 
     // We must call a different DrawBuffers method depending on extension support. Use this
@@ -64,11 +66,11 @@ class DrawBuffersTest : public ANGLETest<>
         glGenFramebuffers(1, &mFBO);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, mFBO);
 
-        glGenTextures(4, mTextures);
+        glGenTextures(4, mTextures.data());
 
-        for (size_t texIndex = 0; texIndex < ArraySize(mTextures); texIndex++)
+        for (GLuint texture : mTextures)
         {
-            glBindTexture(GL_TEXTURE_2D, mTextures[texIndex]);
+            glBindTexture(GL_TEXTURE_2D, texture);
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, getWindowWidth(), getWindowHeight(), 0, GL_RGBA,
                          GL_UNSIGNED_BYTE, nullptr);
         }
@@ -227,7 +229,7 @@ class DrawBuffersTest : public ANGLETest<>
 
     GLuint mFBO             = 0;
     GLuint mReadFramebuffer = 0;
-    GLuint mTextures[4]     = {};
+    std::array<GLuint, 4> mTextures = {};
     GLint mMaxDrawBuffers   = 0;
 };
 
@@ -250,16 +252,8 @@ TEST_P(DrawBuffersTest, VerifyD3DLimits)
 
     glGetIntegerv(GL_MAX_DRAW_BUFFERS, &mMaxDrawBuffers);
 
-    if (platform.majorVersion == 9 && platform.minorVersion == 3)
-    {
-        // D3D11 Feature Level 9_3 supports 4 draw buffers
-        ASSERT_EQ(mMaxDrawBuffers, 4);
-    }
-    else
-    {
-        // D3D11 Feature Level 10_0+ supports 8 draw buffers
-        ASSERT_EQ(mMaxDrawBuffers, 8);
-    }
+    // D3D11 Feature Level 10_0+ supports 8 draw buffers
+    ASSERT_EQ(mMaxDrawBuffers, 8);
 }
 
 TEST_P(DrawBuffersTest, Gaps)
@@ -287,9 +281,6 @@ TEST_P(DrawBuffersTest, Gaps)
 TEST_P(DrawBuffersTest, BlendWithGaps)
 {
     ANGLE_SKIP_TEST_IF(!setupTest());
-
-    // http://anglebug.com/42263715
-    ANGLE_SKIP_TEST_IF(IsMac() && IsIntel() && IsDesktopOpenGL());
 
     glBindTexture(GL_TEXTURE_2D, mTextures[0]);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, mTextures[0], 0);
@@ -574,7 +565,7 @@ TEST_P(DrawBuffersTest, FirstHalfNULL)
     ANGLE_SKIP_TEST_IF(!setupTest());
 
     bool flags[8]  = {false};
-    GLenum bufs[8] = {GL_NONE};
+    std::array<GLenum, 8> bufs = {GL_NONE};
 
     ASSERT_GT(mMaxDrawBuffers, 0);
     ASSERT_LE(mMaxDrawBuffers, 8);
@@ -592,7 +583,7 @@ TEST_P(DrawBuffersTest, FirstHalfNULL)
     GLuint program;
     setupMRTProgram(flags, &program);
 
-    setDrawBuffers(mMaxDrawBuffers, bufs);
+    setDrawBuffers(mMaxDrawBuffers, bufs.data());
     drawQuad(program, positionAttrib(), 0.5);
 
     for (GLuint texIndex = 0; texIndex < halfMaxDrawBuffers; texIndex++)
@@ -654,8 +645,8 @@ TEST_P(DrawBuffersTest, None)
     ANGLE_SKIP_TEST_IF(!setupTest());
 
     bool flags[8]  = {false};
-    GLenum bufs[8] = {GL_NONE};
-    GLTexture textures[8];
+    std::array<GLenum, 8> bufs = {GL_NONE};
+    std::array<GLTexture, 8> textures;
 
     ASSERT_GT(mMaxDrawBuffers, 0);
     ASSERT_LE(mMaxDrawBuffers, 8);
@@ -673,7 +664,7 @@ TEST_P(DrawBuffersTest, None)
     GLuint program;
     setupMRTProgram(flags, &program);
 
-    setDrawBuffers(mMaxDrawBuffers, bufs);
+    setDrawBuffers(mMaxDrawBuffers, bufs.data());
     glClearColor(0.5, 0.5, 0.5, 1.0);
     glClear(GL_COLOR_BUFFER_BIT);
 
@@ -682,7 +673,7 @@ TEST_P(DrawBuffersTest, None)
         bufs[texIndex] = GL_NONE;
     }
 
-    setDrawBuffers(mMaxDrawBuffers, bufs);
+    setDrawBuffers(mMaxDrawBuffers, bufs.data());
     drawQuad(program, positionAttrib(), 0.5);
 
     ASSERT_GL_NO_ERROR();
@@ -827,8 +818,8 @@ TEST_P(DrawBuffersTest, AllRGBA8)
     ANGLE_SKIP_TEST_IF(!setupTest());
 
     bool flags[8]  = {false};
-    GLenum bufs[8] = {GL_NONE};
-    GLTexture textures[8];
+    std::array<GLenum, 8> bufs = {GL_NONE};
+    std::array<GLTexture, 8> textures;
 
     ASSERT_GT(mMaxDrawBuffers, 0);
     ASSERT_LE(mMaxDrawBuffers, 8);
@@ -848,7 +839,7 @@ TEST_P(DrawBuffersTest, AllRGBA8)
     GLuint program;
     setupMRTProgram(flags, &program);
 
-    setDrawBuffers(mMaxDrawBuffers, bufs);
+    setDrawBuffers(mMaxDrawBuffers, bufs.data());
     drawQuad(program, positionAttrib(), 0.5);
 
     for (GLint texIndex = 0; texIndex < mMaxDrawBuffers; ++texIndex)
@@ -872,7 +863,7 @@ TEST_P(DrawBuffersWebGL2Test, TwoProgramsWithDifferentOutputsAndClear)
     ASSERT_GE(mMaxDrawBuffers, 4);
 
     bool flags[8]      = {false};
-    GLenum someBufs[4] = {GL_NONE};
+    std::array<GLenum, 4> someBufs = {GL_NONE};
     GLenum allBufs[4]  = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2,
                           GL_COLOR_ATTACHMENT3};
 
@@ -903,7 +894,7 @@ TEST_P(DrawBuffersWebGL2Test, TwoProgramsWithDifferentOutputsAndClear)
     ASSERT_GL_NO_ERROR();
 
     // Clear draw buffers.
-    setDrawBuffers(kMaxBuffers, someBufs);
+    setDrawBuffers(kMaxBuffers, someBufs.data());
     glClearColor(0.0f, 1.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
@@ -916,7 +907,7 @@ TEST_P(DrawBuffersWebGL2Test, TwoProgramsWithDifferentOutputsAndClear)
     verifyAttachment2DColor(3, mTextures[3], GL_TEXTURE_2D, 0, GLColor::green);
 
     // Draw with MRT program.
-    setDrawBuffers(kMaxBuffers, someBufs);
+    setDrawBuffers(kMaxBuffers, someBufs.data());
     drawQuad(program, positionAttrib(), 0.5, 1.0f, true);
     ASSERT_GL_NO_ERROR();
 
@@ -1295,9 +1286,6 @@ TEST_P(DrawBuffersTestES3, BlendWithDrawBufferAndFramebufferChanges)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_OES_draw_buffers_indexed"));
 
-    // http://anglebug.com/42263715
-    ANGLE_SKIP_TEST_IF(IsMac() && IsIntel() && IsDesktopOpenGL());
-
     // Create two framebuffers, one with 3 attachments (fbo3), one with 4 (fbo4).  The test issues
     // draw calls on fbo3 with different attachments enabled, then switches to fbo4 (without
     // dirtying blend state) and draws to other attachments.  It ensures that blend state is
@@ -1307,7 +1295,7 @@ TEST_P(DrawBuffersTestES3, BlendWithDrawBufferAndFramebufferChanges)
                       GL_COLOR_ATTACHMENT3};
 
     GLFramebuffer fbo[2];
-    GLTexture tex[7];
+    std::array<GLTexture, 7> tex;
     constexpr GLfloat kClearValue[] = {1, 1, 1, 1};
 
     glBindFramebuffer(GL_FRAMEBUFFER, fbo[0]);
@@ -1380,7 +1368,7 @@ void main()
     ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
     glUseProgram(program);
 
-    GLint uniforms[4];
+    std::array<GLint, 4> uniforms;
     for (uint32_t attachmentIndex = 0; attachmentIndex < 4; ++attachmentIndex)
     {
         char uniformName[20];
@@ -1577,10 +1565,10 @@ class ColorMaskForDrawBuffersTest : public DrawBuffersTest
         drawBuffers[1] = GL_COLOR_ATTACHMENT1;
         drawBuffers[2] = GL_COLOR_ATTACHMENT2;
         drawBuffers[3] = GL_NONE;
-        setDrawBuffers(4, drawBuffers);
+        setDrawBuffers(4, drawBuffers.data());
     }
 
-    GLenum drawBuffers[4];
+    std::array<GLenum, 4> drawBuffers;
     GLuint program;
     GLint positionLocation;
     GLint color0UniformLocation;
@@ -1596,7 +1584,7 @@ TEST_P(ColorMaskForDrawBuffersTest, DrawQuad)
 
     // Draw blue into attachment0. Buffer0 should be blue and buffer1 should remain green
     drawBuffers[0] = GL_COLOR_ATTACHMENT0;
-    setDrawBuffers(4, drawBuffers);
+    setDrawBuffers(4, drawBuffers.data());
     glUniform4fv(color0UniformLocation, 1, GLColor::blue.toNormalizedVector().data());
     glUniform4fv(color1UniformLocation, 1, GLColor::cyan.toNormalizedVector().data());
     glViewport(0, 0, getWindowWidth() / 2, getWindowHeight() / 2);
@@ -1630,7 +1618,7 @@ TEST_P(ColorMaskForDrawBuffersTest, Clear)
 
     // Clear attachment1. Buffer0 should retain red and buffer1 should be blue
     drawBuffers[1] = GL_COLOR_ATTACHMENT1;
-    setDrawBuffers(4, drawBuffers);
+    setDrawBuffers(4, drawBuffers.data());
     angle::Vector4 clearColor = GLColor::blue.toNormalizedVector();
     glClearColor(clearColor[0], clearColor[1], clearColor[2], clearColor[3]);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -1647,7 +1635,7 @@ TEST_P(ColorMaskForDrawBuffersTest, ScissoredClear)
 
     // Clear attachment1. Buffer0 should retain red and buffer1 should be blue
     drawBuffers[1] = GL_COLOR_ATTACHMENT1;
-    setDrawBuffers(4, drawBuffers);
+    setDrawBuffers(4, drawBuffers.data());
     angle::Vector4 clearColor = GLColor::blue.toNormalizedVector();
     glClearColor(clearColor[0], clearColor[1], clearColor[2], clearColor[3]);
     glScissor(0, 0, getWindowWidth() / 2, getWindowHeight() / 2);
@@ -1685,7 +1673,7 @@ TEST_P(ColorMaskForDrawBuffersTest, Blit)
 
     // BLIT mTexture[2] to attachment0. Buffer0 should remain red and buffer1 should be yellow
     drawBuffers[0] = GL_COLOR_ATTACHMENT0;
-    setDrawBuffers(4, drawBuffers);
+    setDrawBuffers(4, drawBuffers.data());
     glBlitFramebuffer(0, 0, getWindowWidth(), getWindowHeight(), 0, 0, getWindowWidth(),
                       getWindowHeight(), GL_COLOR_BUFFER_BIT, GL_NEAREST);
     verifyAttachment2DColor(0, mTextures[0], GL_TEXTURE_2D, 0, GLColor::yellow);
@@ -1709,7 +1697,7 @@ TEST_P(ColorMaskForDrawBuffersTest, StateChangeAffectsColorMask)
     drawBuffers[0] = GL_COLOR_ATTACHMENT0;
     drawBuffers[1] = GL_NONE;
     drawBuffers[2] = GL_NONE;
-    setDrawBuffers(4, drawBuffers);
+    setDrawBuffers(4, drawBuffers.data());
     glUniform4fv(color0UniformLocation, 1, GLColor::blue.toNormalizedVector().data());
     glUniform4fv(color1UniformLocation, 1, GLColor::cyan.toNormalizedVector().data());
     // Attachment 0 is now blue
@@ -1719,7 +1707,7 @@ TEST_P(ColorMaskForDrawBuffersTest, StateChangeAffectsColorMask)
     // Draw with the second attachment enabled
     drawBuffers[0] = GL_COLOR_ATTACHMENT0;
     drawBuffers[1] = GL_COLOR_ATTACHMENT1;
-    setDrawBuffers(4, drawBuffers);
+    setDrawBuffers(4, drawBuffers.data());
     glUniform4fv(color0UniformLocation, 1, GLColor::magenta.toNormalizedVector().data());
     glUniform4fv(color1UniformLocation, 1, GLColor::white.toNormalizedVector().data());
     // Attachment 0 is now magenta, and attachment 1 is white.  Attachment 2 is still yellow.
@@ -1757,7 +1745,7 @@ TEST_P(ColorMaskForDrawBuffersTest, StateChangeAffectsBlendState)
     drawBuffers[0] = GL_COLOR_ATTACHMENT0;
     drawBuffers[1] = GL_NONE;
     drawBuffers[2] = GL_NONE;
-    setDrawBuffers(4, drawBuffers);
+    setDrawBuffers(4, drawBuffers.data());
     glUniform4fv(color0UniformLocation, 1, GLColor::blue.toNormalizedVector().data());
     glUniform4fv(color1UniformLocation, 1, GLColor::cyan.toNormalizedVector().data());
     // Attachment 0 is now magenta.
@@ -1767,7 +1755,7 @@ TEST_P(ColorMaskForDrawBuffersTest, StateChangeAffectsBlendState)
     // Draw with the second attachment enabled
     drawBuffers[0] = GL_COLOR_ATTACHMENT0;
     drawBuffers[1] = GL_COLOR_ATTACHMENT1;
-    setDrawBuffers(4, drawBuffers);
+    setDrawBuffers(4, drawBuffers.data());
     glUniform4fv(color0UniformLocation, 1, GLColor::green.toNormalizedVector().data());
     glUniform4fv(color1UniformLocation, 1, GLColor::blue.toNormalizedVector().data());
     // Attachment 0 is now white, attachment 1 is cyan and attachment 2 is still yellow.
@@ -1785,13 +1773,11 @@ TEST_P(ColorMaskForDrawBuffersTest, StateChangeAffectsBlendState)
     EXPECT_GL_NO_ERROR();
 }
 
-ANGLE_INSTANTIATE_TEST(DrawBuffersTest,
-                       ANGLE_ALL_TEST_PLATFORMS_ES2,
-                       ANGLE_ALL_TEST_PLATFORMS_ES3,
-                       ES2_METAL().enable(Feature::LimitMaxDrawBuffersForTesting),
-                       ES2_VULKAN()
-                           .disable(Feature::SupportsTransformFeedbackExtension)
-                           .disable(Feature::EmulateTransformFeedback));
+ANGLE_INSTANTIATE_TEST_ES2_AND_ES3_AND(DrawBuffersTest,
+                                       ES2_METAL().enable(Feature::LimitMaxDrawBuffersForTesting),
+                                       ES2_VULKAN()
+                                           .disable(Feature::SupportsTransformFeedbackExtension)
+                                           .disable(Feature::EmulateTransformFeedback));
 
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(DrawBuffersWebGL2Test);
 ANGLE_INSTANTIATE_TEST_ES3(DrawBuffersWebGL2Test);

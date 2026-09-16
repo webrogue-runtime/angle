@@ -76,8 +76,9 @@ enum
     // In ES 3.1 and below, the limit for active textures is 64.
     IMPLEMENTATION_MAX_ES31_ACTIVE_TEXTURES = 64,
 
-    // In ES 3.2 we need to support a minimum of 96 maximum textures.
-    IMPLEMENTATION_MAX_ACTIVE_TEXTURES = 96,
+    // In ES 3.2 we need to support a minimum of 96 maximum textures, but some Android
+    // apps assume more are available without querying limits first.
+    IMPLEMENTATION_MAX_ACTIVE_TEXTURES = 192,
     IMPLEMENTATION_MAX_IMAGE_UNITS     = IMPLEMENTATION_MAX_ACTIVE_TEXTURES,
 
     // Maximum framebuffer and renderbuffer size supported.
@@ -146,11 +147,20 @@ enum
     // Implementation maximums
 
     // CL requires a min of 128 maximum read images as kernel arguments
-    IMPLEMENATION_MAX_READ_IMAGES = 128,
+    IMPLEMENTATION_MAX_READ_IMAGES = 128,
 
     // CL requires a min of 64 maximum write images as kernel arguments
-    IMPLEMENATION_MAX_WRITE_IMAGES = 64,
+    IMPLEMENTATION_MAX_WRITE_IMAGES = 64,
+
+    // The below are some typical numbers for device info query attributes, for which there is no
+    // appropriate Vulkan query
+
+    // A decent default minimum that should be supported by devices
+    IMPLEMENTATION_PREFERRED_WORKGROUP_SIZE_MULTIPLE = 16,
+
+    // There must be at least one compute unit to support OpenCL
+    IMPLEMENTATION_NUM_COMPUTE_UNITS = 1,
 };
-}
+}  // namespace cl
 
 #endif  // LIBANGLE_CONSTANTS_H_

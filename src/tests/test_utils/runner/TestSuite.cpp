@@ -7,11 +7,8 @@
 //   Basic implementation of a test harness in ANGLE.
 //
 
-#ifdef UNSAFE_BUFFERS_BUILD
-#    pragma allow_unsafe_buffers
-#endif
-
 #include "TestSuite.h"
+#include "common/unsafe_buffers.h"
 
 #include "common/debug.h"
 #include "common/hash_containers.h"
@@ -24,6 +21,7 @@
 #include <stdlib.h>
 #include <time.h>
 
+#include <format>
 #include <fstream>
 #include <unordered_map>
 
@@ -99,7 +97,7 @@ void SignalHandler(int sig, siginfo_t *info, void *reserved)
         std::cerr << "SignalHandler: TestSuite not initialized!" << std::endl;
     }
 
-    g_originalSigaction[sig].sa_sigaction(sig, info, reserved);
+    ANGLE_UNSAFE_TODO(g_originalSigaction[sig].sa_sigaction(sig, info, reserved));
 }
 
 void InstallExceptionHandlers()
@@ -113,9 +111,10 @@ void InstallExceptionHandlers()
     // The list of signals which are considered to be crashes.
     const int exceptionSignals[] = {SIGSEGV, SIGABRT, SIGFPE, SIGILL, SIGBUS, -1};
 
-    for (unsigned int i = 0; exceptionSignals[i] != -1; ++i)
+    for (unsigned int i = 0; ANGLE_UNSAFE_TODO(exceptionSignals[i]) != -1; ++i)
     {
-        sigaction(exceptionSignals[i], &sa, &g_originalSigaction[exceptionSignals[i]]);
+        ANGLE_UNSAFE_TODO(
+            sigaction(exceptionSignals[i], &sa, &g_originalSigaction[exceptionSignals[i]]));
     }
 }
 #endif  // ANGLE_PLATFORM_ANDROID
@@ -307,10 +306,8 @@ void WriteResultsFile(bool interrupted,
 
         jsResult.AddMember("times", times, allocator);
 
-        char testName[500];
-        id.snprintfName(testName, sizeof(testName));
         js::Value jsName;
-        jsName.SetString(testName, allocator);
+        jsName.SetString(id.fullName(), allocator);
 
         tests.AddMember(jsName, jsResult, allocator);
     }
@@ -387,7 +384,7 @@ TestIdentifier GetTestIdentifier(const testing::TestInfo &testInfo)
 
 bool IsTestDisabled(const testing::TestInfo &testInfo)
 {
-    return ::strstr(testInfo.name(), "DISABLED_") == testInfo.name();
+    return ANGLE_UNSAFE_TODO(::strstr(testInfo.name(), "DISABLED_")) == testInfo.name();
 }
 
 using TestIdentifierFilter = std::function<bool(const TestIdentifier &id)>;
@@ -421,11 +418,60 @@ std::vector<TestIdentifier> FilterTests(std::map<TestIdentifier, FileLine> *file
     return tests;
 }
 
+struct TestFilter
+{
+    std::vector<std::string_view> globPatterns;
+    std::unordered_set<std::string_view> exactMatches;
+};
+
+TestFilter ParseTestFilter(const std::string_view &filterString)
+{
+    std::vector<std::string_view> patterns =
+        SplitStringView(filterString, ":", TRIM_WHITESPACE, SPLIT_WANT_ALL);
+
+    TestFilter filter;
+    for (const std::string_view &pattern : patterns)
+    {
+        if (IsGlobPattern(pattern))
+        {
+            filter.globPatterns.push_back(pattern);
+        }
+        else
+        {
+            filter.exactMatches.insert(pattern);
+        }
+    }
+
+    return filter;
+}
+
+bool TestFilterMatchesName(const TestFilter &filter, const std::string_view &name)
+{
+    return filter.exactMatches.find(name) != filter.exactMatches.end() ||
+           std::any_of(filter.globPatterns.begin(), filter.globPatterns.end(),
+                       [&name](const std::string_view &glob) {
+                           return NamesMatchWithWildcard(glob, name);
+                       });
+}
+
 std::vector<TestIdentifier> GetFilteredTests(std::map<TestIdentifier, FileLine> *fileLinesOut,
                                              bool alsoRunDisabledTests)
 {
-    TestIdentifierFilter gtestIDFilter = [](const TestIdentifier &id) {
-        return testing::internal::UnitTestOptions::FilterMatchesTest(id.testSuiteName, id.testName);
+    std::string filterString = GTEST_FLAG_GET(filter);
+    std::vector<std::string_view> positiveAndNegativeFilters =
+        SplitStringView(filterString, "-", TRIM_WHITESPACE, SPLIT_WANT_ALL);
+    TestFilter positiveFilter = ParseTestFilter(
+        (positiveAndNegativeFilters.size() >= 1 && !positiveAndNegativeFilters[0].empty())
+            ? positiveAndNegativeFilters[0]
+            : "*");
+    TestFilter negativeFilter = ParseTestFilter(
+        positiveAndNegativeFilters.size() >= 2 ? positiveAndNegativeFilters[1] : "");
+
+    TestIdentifierFilter gtestIDFilter = [&positiveFilter,
+                                          &negativeFilter](const TestIdentifier &id) {
+        std::string fullTestName = id.fullName();
+        return TestFilterMatchesName(positiveFilter, fullTestName) &&
+               !TestFilterMatchesName(negativeFilter, fullTestName);
     };
 
     return FilterTests(fileLinesOut, gtestIDFilter, alsoRunDisabledTests);
@@ -872,6 +918,91 @@ bool UsesExternalBatching()
 }
 }  // namespace
 
+// Mimics GTest's PrintJsonTestList() to satisfy Chromium's ParseGTestListTestsJSON.
+// Simplifies the format by omitting counts and line numbers, providing only what Chromium needs.
+// Duplicated here because ANGLE bypasses GTest's slow test listing (see GTestListTests).
+// Needs update if GTest changes its schema and Chromium updates its parser.
+//
+// Generated on device at path specified by --gtest_output=json:<path>.
+// Example test command:
+//   out/Android/angle_end2end_tests --gtest_filter="GLSLTest_ES3.FragmentShaderOutputArray/*"
+//   --gtest_list_tests --gtest_output=json:/sdcard/Download/test_list.json --verbose --local-output
+//
+// Sample JSON output:
+// {
+//   "testsuites": [
+//     {
+//       "name": "GLSLTest_ES3",
+//       "testsuite": [
+//         {
+//           "name": "FragmentShaderOutputArray/ES3_OpenGLES",
+//           "file": "../../src/tests/gl_tests/GLSLTest.cpp"
+//         },
+//         ...
+//         {
+//           "name": "FragmentShaderOutputArray/ES3_Vulkan_NoSupportsSPIRV14",
+//           "file": "../../src/tests/gl_tests/GLSLTest.cpp"
+//         }
+//       ]
+//     }
+//   ]
+// }
+void TestSuite::WriteTestListJSON(const std::string &path) const
+{
+    FILE *file = fopen(path.c_str(), "w");
+    if (!file)
+    {
+        printf("Error opening file for JSON output: %s\n", path.c_str());
+        return;
+    }
+
+    fprintf(file, "{\n");
+    fprintf(file, "  \"testsuites\": [\n");
+
+    std::map<std::string, std::vector<std::pair<TestIdentifier, std::string>>> suites;
+    for (const auto &pair : mTestFileLines)
+    {
+        const TestIdentifier &id = pair.first;
+        suites[id.testSuiteName].push_back({id, pair.second.file});
+    }
+
+    bool firstSuite = true;
+    for (const auto &suiteIt : suites)
+    {
+        if (!firstSuite)
+        {
+            fprintf(file, ",\n");
+        }
+        firstSuite = false;
+
+        fprintf(file, "    {\n");
+        fprintf(file, "      \"name\": \"%s\",\n", suiteIt.first.c_str());
+        fprintf(file, "      \"testsuite\": [\n");
+
+        bool firstTest = true;
+        for (const auto &testPair : suiteIt.second)
+        {
+            if (!firstTest)
+            {
+                fprintf(file, ",\n");
+            }
+            firstTest = false;
+
+            fprintf(file, "        {\n");
+            fprintf(file, "          \"name\": \"%s\",\n", testPair.first.testName.c_str());
+            fprintf(file, "          \"file\": \"%s\"\n", testPair.second.c_str());
+            fprintf(file, "        }");
+        }
+        fprintf(file, "\n      ]\n");
+        fprintf(file, "    }");
+    }
+
+    fprintf(file, "\n  ]\n");
+    fprintf(file, "}\n");
+
+    fclose(file);
+}
+
 void MetricWriter::enable(const std::string &testArtifactDirectory)
 {
     mPath = testArtifactDirectory + GetPathSeparator() + "angle_metrics";
@@ -942,9 +1073,9 @@ TestIdentifier::~TestIdentifier() = default;
 
 TestIdentifier &TestIdentifier::operator=(const TestIdentifier &other) = default;
 
-void TestIdentifier::snprintfName(char *outBuffer, size_t maxLen) const
+std::string TestIdentifier::fullName() const
 {
-    snprintf(outBuffer, maxLen, "%s.%s", testSuiteName.c_str(), testName.c_str());
+    return std::format("{}.{}", testSuiteName, testName);
 }
 
 // static
@@ -1072,19 +1203,20 @@ TestSuite::TestSuite(int *argc, char **argv, std::function<void()> registerTests
             continue;
         }
 
-        if (strstr(argv[argIndex], "--gtest_filter=") == argv[argIndex])
+        if (ANGLE_UNSAFE_TODO(strstr(argv[argIndex], "--gtest_filter=")) ==
+            ANGLE_UNSAFE_TODO(argv[argIndex]))
         {
             filterArgIndex = argIndex;
         }
         else
         {
             // Don't include disabled tests in test lists unless the user asks for them.
-            if (strcmp("--gtest_also_run_disabled_tests", argv[argIndex]) == 0)
+            if (ANGLE_UNSAFE_TODO(strcmp("--gtest_also_run_disabled_tests", argv[argIndex])) == 0)
             {
                 alsoRunDisabledTests = true;
             }
 
-            mChildProcessArgs.push_back(argv[argIndex]);
+            mChildProcessArgs.push_back(ANGLE_UNSAFE_TODO(argv[argIndex]));
         }
         ++argIndex;
     }
@@ -1374,6 +1506,8 @@ bool TestSuite::parseSingleArg(int *argc, char **argv, int argIndex)
            ParseStringArg("--render-test-output-dir", argc, argv, argIndex,
                           &mTestArtifactDirectory) ||
            ParseStringArg("--isolated-outdir", argc, argv, argIndex, &mTestArtifactDirectory) ||
+           ParseStringArgWithHandling("--gtest_output", argc, argv, argIndex, &mGTestOutput,
+                                      ArgHandling::Preserve) ||
            ParseFlag("--test-launcher-bot-mode", argc, argv, argIndex, &mBotMode) ||
            ParseFlag("--bot-mode", argc, argv, argIndex, &mBotMode) ||
            ParseFlag("--debug-test-groups", argc, argv, argIndex, &mDebugTestGroups) ||
@@ -1636,7 +1770,7 @@ bool TestSuite::finishProcess(ProcessInfo *processInfo)
         }
         else
         {
-            printf(" (%s)\n", ResultTypeToString(result.type));
+            ANGLE_UNSAFE_TODO(printf(" (%s)\n", ResultTypeToString(result.type)));
             mFailureCount++;
 
             const std::string &batchStdout = processInfo->process->getStdout();
@@ -1710,7 +1844,7 @@ int TestSuite::run()
 [==========] 1 test from 1 test suite ran. (24 ms total)
 [  PASSED  ] 1 test.
 )";
-        printf(kPlaceholderTestTest);
+        ANGLE_UNSAFE_TODO(printf(kPlaceholderTestTest));
 #endif  // defined(ANGLE_PLATFORM_ANDROID)
 
         return EXIT_SUCCESS;
@@ -1724,6 +1858,12 @@ int TestSuite::run()
     if (mGTestListTests)
     {
         GTestListTests(mTestResults.results);
+        const char kJsonPrefix[] = "json:";
+        if (!mGTestOutput.empty() && mGTestOutput.find(kJsonPrefix) == 0)
+        {
+            std::string path = mGTestOutput.substr(strlen(kJsonPrefix));
+            WriteTestListJSON(path);
+        }
         return EXIT_SUCCESS;
     }
 

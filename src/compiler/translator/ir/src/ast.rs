@@ -9,6 +9,14 @@
 use crate::ir::*;
 use crate::*;
 
+// For cleaner output, the astify pass does not cache some expressions with side effect in a
+// temporary variable if the result is never used.  Instead, it returns a map that indicates which
+// instructions are uncached as such.  The generator would have to treat then as "void"
+// instructions by immediately adding them to the block and discarding the result.
+//
+// Only Call, Unary, Binary and BuiltIn instructions may be in this list.
+pub type UncachedRegistersWithSideEffect = HashSet<RegisterId>;
+
 pub trait Target {
     type BlockResult;
 
@@ -27,7 +35,12 @@ pub trait Target {
     // variables, geometry/tessellation info, etc.
     fn global_scope(&mut self, ir_meta: &IRMeta);
 
-    fn begin_block(&mut self, ir_meta: &IRMeta, variables: &Vec<VariableId>) -> Self::BlockResult;
+    fn begin_block(
+        &mut self,
+        ir_meta: &IRMeta,
+        variables: &[VariableId],
+        for_loop_variable: Option<VariableId>,
+    ) -> Self::BlockResult;
     fn merge_blocks(&mut self, blocks: Vec<Self::BlockResult>) -> Self::BlockResult;
 
     // Instructions
@@ -43,7 +56,7 @@ pub trait Target {
         block: &mut Self::BlockResult,
         result: RegisterId,
         id: TypedId,
-        indices: &Vec<u32>,
+        indices: &[u32],
     );
     fn index(
         &mut self,
@@ -72,7 +85,7 @@ pub trait Target {
         block: &mut Self::BlockResult,
         result: RegisterId,
         type_id: TypeId,
-        ids: &Vec<TypedId>,
+        ids: &[TypedId],
     );
     fn load(&mut self, block: &mut Self::BlockResult, result: RegisterId, pointer: TypedId);
     fn store(&mut self, block: &mut Self::BlockResult, pointer: TypedId, value: TypedId);
@@ -81,7 +94,8 @@ pub trait Target {
         block: &mut Self::BlockResult,
         result: Option<RegisterId>,
         function_id: FunctionId,
-        params: &Vec<TypedId>,
+        params: &[TypedId],
+        has_side_effect_with_unused_result: bool,
     );
     fn unary(
         &mut self,
@@ -89,6 +103,7 @@ pub trait Target {
         result: RegisterId,
         unary_op: UnaryOpCode,
         id: TypedId,
+        has_side_effect_with_unused_result: bool,
     );
     fn binary(
         &mut self,
@@ -97,13 +112,15 @@ pub trait Target {
         binary_op: BinaryOpCode,
         lhs: TypedId,
         rhs: TypedId,
+        has_side_effect_with_unused_result: bool,
     );
     fn built_in(
         &mut self,
         block: &mut Self::BlockResult,
         result: Option<RegisterId>,
         built_in_op: BuiltInOpCode,
-        args: &Vec<TypedId>,
+        args: &[TypedId],
+        has_side_effect_with_unused_result: bool,
     );
     fn texture(
         &mut self,
@@ -231,12 +248,18 @@ pub trait Target {
         block: &mut Self::BlockResult,
         body_block: Option<Self::BlockResult>,
     );
+    fn branch_for_loop(
+        &mut self,
+        block: &mut Self::BlockResult,
+        info: &util::TrivialLoopInfo,
+        body_block: Option<Self::BlockResult>,
+    );
     fn branch_loop_if(&mut self, block: &mut Self::BlockResult, condition: TypedId);
     fn branch_switch(
         &mut self,
         block: &mut Self::BlockResult,
         value: TypedId,
-        case_ids: &Vec<Option<ConstantId>>,
+        case_ids: &[Option<ConstantId>],
         case_blocks: Vec<Self::BlockResult>,
     );
 
@@ -244,77 +267,78 @@ pub trait Target {
     fn end_function(&mut self, block: Self::BlockResult, id: FunctionId);
 }
 
-pub struct Generator<'ir> {
-    ir_meta: &'ir IRMeta,
+pub struct Generator {
+    ir: IR,
+    uncached_registers_with_side_effect: ast::UncachedRegistersWithSideEffect,
 }
 
-impl<'ir> Generator<'ir> {
-    pub fn new(ir_meta: &'ir IRMeta) -> Generator<'ir> {
-        Generator { ir_meta }
+impl Generator {
+    pub fn new(
+        ir: IR,
+        uncached_registers_with_side_effect: UncachedRegistersWithSideEffect,
+    ) -> Generator {
+        Generator { ir, uncached_registers_with_side_effect }
     }
 
     // Note: call transform::dealias::run() beforehand, as well as transform::astify::run().
-    pub fn generate<T: Target>(
-        &mut self,
-        function_entries: &Vec<Option<Block>>,
-        target: &mut T,
-    ) -> T::BlockResult {
-        // Declare the base types, variables and functions up-front so they can be referred to
-        // by ids when generating the AST itself.
-        self.create_base_types(target);
+    pub fn generate<T: Target>(&mut self, target: &mut T) -> T::BlockResult {
+        // Declare the types, variables and functions up-front so they can be referred to by ids
+        // when generating the AST itself.
+        self.create_types(target);
         self.create_constants(target);
         self.create_variables(target);
         self.create_functions(target);
 
-        self.generate_ast(function_entries, target)
+        self.generate_ast(target)
     }
 
-    fn create_base_types<T: Target>(&mut self, target: &mut T) {
-        // TODO(http://anglebug.com/349994211): Don't declare types that have been eliminated (such
-        // as unused structs)
-        self.ir_meta.all_types().iter().enumerate().for_each(|(id, type_info)| {
-            target.new_type(self.ir_meta, TypeId { id: id as u32 }, type_info)
+    fn create_types<T: Target>(&self, target: &mut T) {
+        self.ir.meta.all_types().iter().enumerate().for_each(|(id, type_info)| {
+            if !type_info.is_dead_code_eliminated() {
+                target.new_type(&self.ir.meta, TypeId { id: id as u32 }, type_info)
+            }
         });
     }
 
-    fn create_constants<T: Target>(&mut self, target: &mut T) {
-        // TODO(http://anglebug.com/349994211): Don't declare constants that have been eliminated
-        // (such as constants created out of unused structs).  See for example:
-        // GLSLTest.StructUsedWithoutVariable/*
-        self.ir_meta.all_constants().iter().enumerate().for_each(|(id, constant)| {
-            target.new_constant(self.ir_meta, ConstantId { id: id as u32 }, constant)
+    fn create_constants<T: Target>(&self, target: &mut T) {
+        self.ir.meta.all_constants().iter().enumerate().for_each(|(id, constant)| {
+            if !constant.is_dead_code_eliminated {
+                target.new_constant(&self.ir.meta, ConstantId { id: id as u32 }, constant)
+            }
         });
     }
 
-    fn create_variables<T: Target>(&mut self, target: &mut T) {
-        self.ir_meta.all_variables().iter().enumerate().for_each(|(id, variable)| {
-            target.new_variable(self.ir_meta, VariableId { id: id as u32 }, variable)
+    fn create_variables<T: Target>(&self, target: &mut T) {
+        self.ir.meta.all_variables().iter().enumerate().for_each(|(id, variable)| {
+            if !variable.is_dead_code_eliminated {
+                let variable_id = VariableId { id: id as u32 };
+                debug_assert!(!self.ir.meta.variable_needs_zero_initialization(variable_id));
+                target.new_variable(&self.ir.meta, variable_id, variable)
+            }
         });
     }
 
-    fn create_functions<T: Target>(&mut self, target: &mut T) {
-        self.ir_meta.all_functions().iter().enumerate().for_each(|(id, function)| {
-            target.new_function(self.ir_meta, FunctionId { id: id as u32 }, function)
+    fn create_functions<T: Target>(&self, target: &mut T) {
+        self.ir.meta.all_functions().iter().enumerate().for_each(|(id, function)| {
+            if self.ir.function_entries[id].is_some() {
+                target.new_function(&self.ir.meta, FunctionId { id: id as u32 }, function)
+            }
         });
     }
 
-    fn generate_ast<T: Target>(
-        &mut self,
-        function_entries: &Vec<Option<Block>>,
-        target: &mut T,
-    ) -> T::BlockResult {
+    fn generate_ast<T: Target>(&self, target: &mut T) -> T::BlockResult {
         target.begin();
 
         // Prepare the global scope
-        target.global_scope(self.ir_meta);
+        target.global_scope(&self.ir.meta);
 
         // Visit the functions in DAG-sorted order, so that forward declarations are
         // unnecessary.
         let function_decl_order =
-            util::calculate_function_decl_order(self.ir_meta, function_entries);
+            util::calculate_function_decl_order(&self.ir.meta, &self.ir.function_entries);
 
         for function_id in function_decl_order {
-            let entry = &function_entries[function_id.id as usize].as_ref().unwrap();
+            let entry = &self.ir.function_entries[function_id.id as usize].as_ref().unwrap();
 
             let result_body = self.generate_block(entry, target);
             target.end_function(result_body, function_id);
@@ -323,48 +347,73 @@ impl<'ir> Generator<'ir> {
         target.end()
     }
 
-    fn generate_block<T: Target>(&mut self, block: &Block, target: &mut T) -> T::BlockResult {
+    fn generate_block<T: Target>(&self, block: &Block, target: &mut T) -> T::BlockResult {
         traverser::visitor::visit_block_instructions(
             &mut (self, target),
             block,
             &|(generator, target), block: &Block| {
                 // transform::astify::run() should have gotten rid of merge block inputs.
                 debug_assert!(block.input.is_none());
-                target.begin_block(generator.ir_meta, &block.variables)
+
+                // Keep trivial `for` loops as `for` loops, multiple backends rely on it currently.
+                //
+                // Eventually, this check should move to the backend-specific code (when ported to
+                // the IR) where the information is needed, while the loop is not
+                // necessarily generated as a `for` ultimately.
+                let for_loop_info = util::block_ends_in_trivial_for_loop(&self.ir.meta, block);
+                (
+                    target.begin_block(
+                        &generator.ir.meta,
+                        &block.variables,
+                        for_loop_info.as_ref().map(|info| info.loop_variable),
+                    ),
+                    for_loop_info,
+                )
             },
-            &|(generator, target), block_result, instructions| {
+            &|(generator, target), (block_result, _), instructions| {
                 generator.generate_instructions(block_result, instructions, *target);
             },
             &|(generator, target),
-              block_result,
+              (block_result, for_loop_info),
               branch_opcode,
               loop_condition_block_result,
               block1_result,
               block2_result,
               case_block_results| {
-                generator.generate_branch_instruction(
-                    block_result,
-                    branch_opcode,
-                    loop_condition_block_result,
-                    block1_result,
-                    block2_result,
-                    case_block_results,
-                    *target,
-                );
+                if let Some(info) = &for_loop_info {
+                    target.branch_for_loop(block_result, info, block1_result.map(|result| result.0))
+                } else {
+                    let case_block_results =
+                        case_block_results.into_iter().map(|result| result.0).collect();
+                    generator.generate_branch_instruction(
+                        block_result,
+                        branch_opcode,
+                        loop_condition_block_result.map(|result| result.0),
+                        block1_result.map(|result| result.0),
+                        block2_result.map(|result| result.0),
+                        case_block_results,
+                        *target,
+                    );
+                }
             },
-            &|(_, target), block_result_chain| target.merge_blocks(block_result_chain),
+            &|(_, target), block_result_chain| {
+                let block_result_chain =
+                    block_result_chain.into_iter().map(|result| result.0).collect();
+                (target.merge_blocks(block_result_chain), None)
+            },
         )
+        .0
     }
 
     fn generate_instructions<T: Target>(
-        &mut self,
+        &self,
         block_result: &mut T::BlockResult,
         instructions: &[BlockInstruction],
         target: &mut T,
     ) {
         // Generate nodes for all instructions except the terminating branch instruction.
         instructions.iter().for_each(|instruction| {
-            let (op, result) = instruction.get_op_and_result(self.ir_meta);
+            let (op, result) = instruction.get_op_and_result(&self.ir.meta);
             match op {
                 &OpCode::ExtractVectorComponent(id, index)
                 | &OpCode::AccessVectorComponent(id, index) => {
@@ -387,17 +436,17 @@ impl<'ir> Generator<'ir> {
                     result.unwrap().id,
                     id,
                     index,
-                    self.ir_meta.get_type(id.type_id).get_struct_field(index),
+                    self.ir.meta.get_type(id.type_id).get_struct_field(index),
                 ),
                 &OpCode::AccessStructField(id, index) => {
                     let struct_type_id =
-                        self.ir_meta.get_type(id.type_id).get_element_type_id().unwrap();
+                        self.ir.meta.get_type(id.type_id).get_element_type_id().unwrap();
                     target.select_field(
                         block_result,
                         result.unwrap().id,
                         id,
                         index,
-                        self.ir_meta.get_type(struct_type_id).get_struct_field(index),
+                        self.ir.meta.get_type(struct_type_id).get_struct_field(index),
                     )
                 }
 
@@ -423,21 +472,58 @@ impl<'ir> Generator<'ir> {
                 }
 
                 &OpCode::Call(function_id, ref params) => {
-                    target.call(block_result, result.map(|id| id.id), function_id, params)
+                    let has_side_effect_with_unused_result = result.is_some_and(|id| {
+                        self.uncached_registers_with_side_effect.contains(&id.id)
+                    });
+                    target.call(
+                        block_result,
+                        result.map(|id| id.id),
+                        function_id,
+                        params,
+                        has_side_effect_with_unused_result,
+                    )
                 }
 
                 &OpCode::Unary(unary_op, id) => {
-                    target.unary(block_result, result.unwrap().id, unary_op, id)
+                    let result = result.unwrap().id;
+                    let has_side_effect_with_unused_result =
+                        self.uncached_registers_with_side_effect.contains(&result);
+                    target.unary(
+                        block_result,
+                        result,
+                        unary_op,
+                        id,
+                        has_side_effect_with_unused_result,
+                    )
                 }
                 &OpCode::Binary(binary_op, lhs, rhs) => {
-                    target.binary(block_result, result.unwrap().id, binary_op, lhs, rhs)
+                    let result = result.unwrap().id;
+                    let has_side_effect_with_unused_result =
+                        self.uncached_registers_with_side_effect.contains(&result);
+                    target.binary(
+                        block_result,
+                        result,
+                        binary_op,
+                        lhs,
+                        rhs,
+                        has_side_effect_with_unused_result,
+                    )
                 }
                 &OpCode::BuiltIn(built_in_op, ref params) => {
-                    target.built_in(block_result, result.map(|id| id.id), built_in_op, params)
+                    let has_side_effect_with_unused_result = result.is_some_and(|id| {
+                        self.uncached_registers_with_side_effect.contains(&id.id)
+                    });
+                    target.built_in(
+                        block_result,
+                        result.map(|id| id.id),
+                        built_in_op,
+                        params,
+                        has_side_effect_with_unused_result,
+                    )
                 }
                 &OpCode::Texture(TextureOpCode::Implicit { is_proj, offset }, sampler, coord) => {
                     target.texture(
-                        self.ir_meta,
+                        &self.ir.meta,
                         block_result,
                         result.unwrap().id,
                         sampler,
@@ -448,7 +534,7 @@ impl<'ir> Generator<'ir> {
                 }
                 &OpCode::Texture(TextureOpCode::Compare { compare }, sampler, coord) => target
                     .texture_compare(
-                        self.ir_meta,
+                        &self.ir.meta,
                         block_result,
                         result.unwrap().id,
                         sampler,
@@ -457,7 +543,7 @@ impl<'ir> Generator<'ir> {
                     ),
                 &OpCode::Texture(TextureOpCode::Lod { is_proj, lod, offset }, sampler, coord) => {
                     target.texture_lod(
-                        self.ir_meta,
+                        &self.ir.meta,
                         block_result,
                         result.unwrap().id,
                         sampler,
@@ -469,7 +555,7 @@ impl<'ir> Generator<'ir> {
                 }
                 &OpCode::Texture(TextureOpCode::CompareLod { compare, lod }, sampler, coord) => {
                     target.texture_compare_lod(
-                        self.ir_meta,
+                        &self.ir.meta,
                         block_result,
                         result.unwrap().id,
                         sampler,
@@ -480,7 +566,7 @@ impl<'ir> Generator<'ir> {
                 }
                 &OpCode::Texture(TextureOpCode::Bias { is_proj, bias, offset }, sampler, coord) => {
                     target.texture_bias(
-                        self.ir_meta,
+                        &self.ir.meta,
                         block_result,
                         result.unwrap().id,
                         sampler,
@@ -492,7 +578,7 @@ impl<'ir> Generator<'ir> {
                 }
                 &OpCode::Texture(TextureOpCode::CompareBias { compare, bias }, sampler, coord) => {
                     target.texture_compare_bias(
-                        self.ir_meta,
+                        &self.ir.meta,
                         block_result,
                         result.unwrap().id,
                         sampler,
@@ -506,7 +592,7 @@ impl<'ir> Generator<'ir> {
                     sampler,
                     coord,
                 ) => target.texture_grad(
-                    self.ir_meta,
+                    &self.ir.meta,
                     block_result,
                     result.unwrap().id,
                     sampler,
@@ -518,7 +604,7 @@ impl<'ir> Generator<'ir> {
                 ),
                 &OpCode::Texture(TextureOpCode::Gather { offset }, sampler, coord) => target
                     .texture_gather(
-                        self.ir_meta,
+                        &self.ir.meta,
                         block_result,
                         result.unwrap().id,
                         sampler,
@@ -530,7 +616,7 @@ impl<'ir> Generator<'ir> {
                     sampler,
                     coord,
                 ) => target.texture_gather_component(
-                    self.ir_meta,
+                    &self.ir.meta,
                     block_result,
                     result.unwrap().id,
                     sampler,
@@ -540,7 +626,7 @@ impl<'ir> Generator<'ir> {
                 ),
                 &OpCode::Texture(TextureOpCode::GatherRef { refz, offset }, sampler, coord) => {
                     target.texture_gather_ref(
-                        self.ir_meta,
+                        &self.ir.meta,
                         block_result,
                         result.unwrap().id,
                         sampler,
@@ -555,7 +641,7 @@ impl<'ir> Generator<'ir> {
     }
 
     fn generate_branch_instruction<T: Target>(
-        &mut self,
+        &self,
         block_result: &mut T::BlockResult,
         op: &OpCode,
         loop_condition_block_result: Option<T::BlockResult>,

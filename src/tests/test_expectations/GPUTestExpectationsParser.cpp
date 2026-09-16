@@ -4,15 +4,15 @@
 // found in the LICENSE file.
 //
 
-#ifdef UNSAFE_BUFFERS_BUILD
-#    pragma allow_unsafe_buffers
-#endif
-
 #include "GPUTestExpectationsParser.h"
+#include <array>
+#include "common/unsafe_buffers.h"
 
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <fstream>
+#include <string>
 
 #include "common/angleutils.h"
 #include "common/debug.h"
@@ -72,7 +72,6 @@ enum Token
     kConfigRelease,
     kConfigDebug,
     // ANGLE renderer
-    kConfigD3D9,
     kConfigD3D11,
     kConfigGLDesktop,
     kConfigGLES,
@@ -87,6 +86,7 @@ enum Token
     kConfigPixel4,
     kConfigPixel6,
     kConfigPixel7,
+    kConfigPixel10,
     kConfigFlipN2,
     kConfigMaliG710,
     kConfigGalaxyA23,
@@ -111,6 +111,8 @@ enum Token
     kConfigASan,
     kConfigTSan,
     kConfigUBSan,
+    // Translator
+    kConfigIR,
     // expectation
     kExpectationPass,
     kExpectationFail,
@@ -165,7 +167,7 @@ struct TokenInfo
     GPUTestExpectationsParser::GPUTestExpectation expectation;
 };
 
-constexpr TokenInfo kTokenData[kNumberOfTokens] = {
+constexpr std::array<TokenInfo, kNumberOfTokens> kTokenData = {{
     {"xp", GPUTestConfig::kConditionWinXP},
     {"vista", GPUTestConfig::kConditionWinVista},
     {"win7", GPUTestConfig::kConditionWin7},
@@ -198,7 +200,6 @@ constexpr TokenInfo kTokenData[kNumberOfTokens] = {
     {"samsung", GPUTestConfig::kConditionSamsung},
     {"release", GPUTestConfig::kConditionRelease},
     {"debug", GPUTestConfig::kConditionDebug},
-    {"d3d9", GPUTestConfig::kConditionD3D9},
     {"d3d11", GPUTestConfig::kConditionD3D11},
     {"opengl", GPUTestConfig::kConditionGLDesktop},
     {"gles", GPUTestConfig::kConditionGLES},
@@ -212,6 +213,7 @@ constexpr TokenInfo kTokenData[kNumberOfTokens] = {
     {"pixel4orxl", GPUTestConfig::kConditionPixel4OrXL},
     {"pixel6", GPUTestConfig::kConditionPixel6},
     {"pixel7", GPUTestConfig::kConditionPixel7},
+    {"pixel10", GPUTestConfig::kConditionPixel10},
     {"flipn2", GPUTestConfig::kConditionFlipN2},
     {"malig710", GPUTestConfig::kConditionMaliG710},
     {"galaxya23", GPUTestConfig::kConditionGalaxyA23},
@@ -233,6 +235,7 @@ constexpr TokenInfo kTokenData[kNumberOfTokens] = {
     {"asan", GPUTestConfig::kConditionASan},
     {"tsan", GPUTestConfig::kConditionTSan},
     {"ubsan", GPUTestConfig::kConditionUBSan},
+    {"ir", GPUTestConfig::kConditionIR},
     {"pass", GPUTestConfig::kConditionNone, GPUTestExpectationsParser::kGpuTestPass},
     {"fail", GPUTestConfig::kConditionNone, GPUTestExpectationsParser::kGpuTestFail},
     {"flaky", GPUTestConfig::kConditionNone, GPUTestExpectationsParser::kGpuTestFlaky},
@@ -243,9 +246,9 @@ constexpr TokenInfo kTokenData[kNumberOfTokens] = {
     {},                                    // kNumberOfExactMatchTokens
     {},                                    // kTokenComment
     {},                                    // kTokenWord
-};
+}};
 
-const char *kErrorMessage[kNumberOfErrors] = {
+constexpr std::array<const char *, kNumberOfErrors> kErrorMessage = {
     "file IO failed",
     "entry with wrong format",
     "entry invalid, likely unimplemented modifiers",
@@ -269,7 +272,7 @@ inline Char ToLowerASCII(Char c)
 template <typename Iter>
 inline bool DoLowerCaseEqualsASCII(Iter a_begin, Iter a_end, const char *b)
 {
-    for (Iter it = a_begin; it != a_end; ++it, ++b)
+    for (Iter it = a_begin; it != a_end; ++it, ANGLE_UNSAFE_TODO(++b))
     {
         if (!*b || ToLowerASCII(*it) != *b)
             return false;
@@ -290,7 +293,9 @@ inline Token ParseToken(const std::string &word)
     for (int32_t i = 0; i < kNumberOfExactMatchTokens; ++i)
     {
         if (LowerCaseEqualsASCII(word, kTokenData[i].name))
+        {
             return static_cast<Token>(i);
+        }
     }
     return kTokenWord;
 }
@@ -356,27 +361,31 @@ GPUTestExpectationsParser::GPUTestExpectationsParser()
           GPUTestExpectationsParser::kGpuTestSkip)
 {
     // Some initial checks.
-    ASSERT((static_cast<unsigned int>(kNumberOfTokens)) ==
-           (sizeof(kTokenData) / sizeof(kTokenData[0])));
-    ASSERT((static_cast<unsigned int>(kNumberOfErrors)) ==
-           (sizeof(kErrorMessage) / sizeof(kErrorMessage[0])));
+    static_assert(kNumberOfTokens == kTokenData.size(), "kTokenData size mismatch");
+    static_assert(kNumberOfErrors == kErrorMessage.size(), "kErrorMessage size mismatch");
 }
 
 GPUTestExpectationsParser::~GPUTestExpectationsParser() = default;
 
+template <typename InputStream>
 bool GPUTestExpectationsParser::loadTestExpectationsImpl(const GPUTestConfig *config,
-                                                         const std::string &data)
+                                                         InputStream &dataStream)
 {
     mEntries.clear();
     mErrorMessages.clear();
 
-    std::vector<std::string> lines = SplitString(data, "\n", TRIM_WHITESPACE, SPLIT_WANT_ALL);
     bool rt                        = true;
-    for (size_t i = 0; i < lines.size(); ++i)
+
+    size_t lineNumber = 1;
+    std::string line;
+    while (std::getline(dataStream, line))
     {
-        if (!parseLine(config, lines[i], i + 1))
+        if (!parseLine(config, line, lineNumber++))
+        {
             rt = false;
+        }
     }
+
     if (detectConflictsBetweenEntries())
     {
         mEntries.clear();
@@ -389,12 +398,14 @@ bool GPUTestExpectationsParser::loadTestExpectationsImpl(const GPUTestConfig *co
 bool GPUTestExpectationsParser::loadTestExpectations(const GPUTestConfig &config,
                                                      const std::string &data)
 {
-    return loadTestExpectationsImpl(&config, data);
+    std::istringstream iss(data);
+    return loadTestExpectationsImpl(&config, iss);
 }
 
 bool GPUTestExpectationsParser::loadAllTestExpectations(const std::string &data)
 {
-    return loadTestExpectationsImpl(nullptr, data);
+    std::istringstream iss(data);
+    return loadTestExpectationsImpl(nullptr, iss);
 }
 
 bool GPUTestExpectationsParser::loadTestExpectationsFromFileImpl(const GPUTestConfig *config,
@@ -403,13 +414,14 @@ bool GPUTestExpectationsParser::loadTestExpectationsFromFileImpl(const GPUTestCo
     mEntries.clear();
     mErrorMessages.clear();
 
-    std::string data;
-    if (!ReadFileToString(path, &data))
+    std::ifstream fileStream(path);
+    if (!fileStream)
     {
         mErrorMessages.push_back(kErrorMessage[kErrorFileIO]);
         return false;
     }
-    return loadTestExpectationsImpl(config, data);
+
+    return loadTestExpectationsImpl(config, fileStream);
 }
 
 bool GPUTestExpectationsParser::loadTestExpectationsFromFile(const GPUTestConfig &config,
@@ -426,32 +438,29 @@ bool GPUTestExpectationsParser::loadAllTestExpectationsFromFile(const std::strin
 int32_t GPUTestExpectationsParser::getTestExpectationImpl(const GPUTestConfig *config,
                                                           const std::string &testName)
 {
+    // If no config is present, set all bits to match all entries
+    constexpr GPUTestConfig::ConditionArray kDefaultConditions =
+        GPUTestConfig::ConditionArray::Mask(GPUTestConfig::ConditionArray::size());
+    const GPUTestConfig::ConditionArray &configConditions =
+        config ? config->getConditions() : kDefaultConditions;
+
     for (GPUTestExpectationEntry &entry : mEntries)
     {
-        if (NamesMatchWithWildcard(entry.testName.c_str(), testName.c_str()))
+        // Entry condition bits must be a subset of the config condition bits.
+        if ((configConditions & entry.conditions) != entry.conditions)
         {
-            // Filter by condition first.
-            bool satisfiesConditions = true;
-            if (config)
-            {
-                for (size_t condition : entry.conditions)
-                {
-                    if (!config->getConditions()[condition])
-                    {
-                        satisfiesConditions = false;
-                        break;
-                    }
-                }
-            }
-
-            // Use the first matching expectation in the file as the matching expression.
-            if (satisfiesConditions)
-            {
-                entry.used = true;
-                return entry.testExpectation;
-            }
+            continue;
         }
+
+        if (!NamesMatchWithWildcard(entry.testName.c_str(), testName.c_str()))
+        {
+            continue;
+        }
+
+        entry.used = true;
+        return entry.testExpectation;
     }
+
     return kGpuTestPass;
 }
 
@@ -535,7 +544,6 @@ bool GPUTestExpectationsParser::parseLine(const GPUTestConfig *config,
             case kConfigSamsung:
             case kConfigRelease:
             case kConfigDebug:
-            case kConfigD3D9:
             case kConfigD3D11:
             case kConfigGLDesktop:
             case kConfigGLES:
@@ -549,6 +557,7 @@ bool GPUTestExpectationsParser::parseLine(const GPUTestConfig *config,
             case kConfigPixel4:
             case kConfigPixel6:
             case kConfigPixel7:
+            case kConfigPixel10:
             case kConfigFlipN2:
             case kConfigMaliG710:
             case kConfigGalaxyA23:
@@ -570,6 +579,7 @@ bool GPUTestExpectationsParser::parseLine(const GPUTestConfig *config,
             case kConfigASan:
             case kConfigTSan:
             case kConfigUBSan:
+            case kConfigIR:
                 // MODIFIERS, check each condition and add accordingly.
                 if (stage != kLineParserConfigs && stage != kLineParserBugID)
                 {
@@ -691,7 +701,7 @@ bool GPUTestExpectationsParser::checkTokenCondition(const GPUTestConfig &config,
                                                     int32_t token,
                                                     size_t lineNumber)
 {
-    if (token >= kNumberOfTokens)
+    if (token < 0 || static_cast<size_t>(token) >= kTokenData.size())
     {
         pushErrorMessage(kErrorMessage[kErrorIllegalEntry], lineNumber);
         err = true;

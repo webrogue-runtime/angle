@@ -6,11 +6,9 @@
 // Unit tests for HandleAllocator.
 //
 
-#ifdef UNSAFE_BUFFERS_BUILD
-#    pragma allow_unsafe_buffers
-#endif
-
+#include <array>
 #include <unordered_set>
+#include "common/unsafe_buffers.h"
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -137,7 +135,7 @@ TEST(HandleAllocatorTest, SortedOrderHandle)
 
     allocator.reserve(3);
 
-    GLuint allocatedList[5];
+    std::array<GLuint, 5> allocatedList;
     for (GLuint count = 0; count < 5; count++)
     {
         EXPECT_TRUE(allocator.allocate(&allocatedList[count]));
@@ -293,6 +291,196 @@ TEST(HandleAllocatorTest, HandleExhaustion)
     // The allocator is full again, allocations should fail
     EXPECT_FALSE(allocator.allocate(nullptr));
     EXPECT_FALSE(allocator.anyHandleAvailableForAllocation());
+}
+
+// Verifies that released handles are reused in FIFO order.
+TEST(HandleAllocatorTest, ReleaseThenReuseInFIFO)
+{
+    gl::HandleAllocator allocator(1000);
+
+    // Allocate handles 1-11. The next unallocated index is 12.
+    std::array<GLuint, 11> handles;
+    for (int i = 0; i < 11; i++)
+    {
+        EXPECT_TRUE(allocator.allocate(&handles[i]));
+    }
+
+    // Release handles in a non-sorted order. None is adjacent to 12, so all go into mReleasedList
+    // rather than being consolidated into mUnallocatedList.
+    constexpr GLuint kReleaseOrder[] = {3, 1, 5, 2, 4, 8, 6, 10, 7, 9};
+    for (GLuint i : kReleaseOrder)
+    {
+        allocator.release(i);
+    }
+
+    // Each allocation should return the next handle in the same order they were released.
+    for (GLuint expected : kReleaseOrder)
+    {
+        GLuint handle = 0;
+        EXPECT_TRUE(allocator.allocate(&handle));
+        EXPECT_EQ(expected, handle);
+    }
+}
+
+// Verifies that reserve() correctly removes handles from the released list even when the released
+// list has many entries.
+TEST(HandleAllocatorTest, ReserveFromLargeReleasedList)
+{
+    gl::HandleAllocator allocator(1000);
+
+    // Need to allocate 101 to push the next unallocated index to 102, so it is no longer adjacent
+    // to 1-100.
+    GLuint prevHandle;
+    for (GLuint i = 1; i <= 101; i++)
+    {
+        EXPECT_TRUE(allocator.allocate(&prevHandle));
+    }
+
+    // Release 1-100. All should go to mReleasedList.
+    for (GLuint i = 1; i <= 100; i++)
+    {
+        allocator.release(i);
+    }
+
+    // Reserve some specific handles.
+    allocator.reserve(50);
+    allocator.reserve(75);
+    allocator.reserve(25);
+
+    // Verify those reserved handles are not allocated.
+    GLuint handle;
+    for (GLuint i = 1; i <= 100; i++)
+    {
+        if (allocator.allocate(&handle))
+        {
+            EXPECT_NE(25u, handle);
+            EXPECT_NE(50u, handle);
+            EXPECT_NE(75u, handle);
+        }
+    }
+}
+
+// Verifies that interleaved release and allocate operations work correctly.
+// Simulates handle usage patterns similar to real-world resource management.
+TEST(HandleAllocatorTest, InterleavedReleaseAllocate)
+{
+    gl::HandleAllocator allocator(kMaxHandleForTesting);
+    constexpr GLuint kPoolSize = 16;
+
+    // Allocate more handles than the pool to prevent consolidation.
+    std::vector<GLuint> pool;
+    for (GLuint i = 0; i < kPoolSize; i++)
+    {
+        GLuint handle;
+        EXPECT_TRUE(allocator.allocate(&handle));
+        pool.push_back(handle);
+    }
+
+    // Keep the next unallocated handle advanced.
+    GLuint gapHandle;
+    EXPECT_TRUE(allocator.allocate(&gapHandle));
+
+    // Release half of the pool.
+    std::vector<GLuint> releasedHandles;
+    for (GLuint i = 0; i < kPoolSize / 2; i++)
+    {
+        allocator.release(pool[i]);
+        releasedHandles.push_back(pool[i]);
+    }
+
+    // Release more handles.
+    std::vector<GLuint> releasedHandles2;
+    for (GLuint i = kPoolSize / 2; i < kPoolSize; i++)
+    {
+        allocator.release(pool[i]);
+        releasedHandles2.push_back(pool[i]);
+    }
+
+    // Allocate them back. It should return in FIFO order.
+    for (GLuint handle : releasedHandles)
+    {
+        GLuint newHandle;
+        EXPECT_TRUE(allocator.allocate(&newHandle));
+        EXPECT_EQ(handle, newHandle);
+    }
+
+    for (GLuint handle : releasedHandles2)
+    {
+        GLuint newHandle;
+        EXPECT_TRUE(allocator.allocate(&newHandle));
+        EXPECT_EQ(handle, newHandle);
+    }
+}
+
+// Test MinimumReleasedToKeep parameter behavior for HandleAllocator.
+TEST(HandleAllocatorTest, MinimumReleasedToKeep)
+{
+    // MinimumReleasedToKeep = 3
+    gl::HandleAllocator allocator(100, 3);
+
+    // Allocate 5 handles (1, 2, 3, 4, 5)
+    for (GLuint i = 1; i <= 5; ++i)
+    {
+        GLuint handle = 0;
+        EXPECT_TRUE(allocator.allocate(&handle));
+        EXPECT_EQ(handle, i);
+    }
+
+    // Release 1 and 3 (mReleasedList size becomes 2 <= 3)
+    allocator.release(1);
+    allocator.release(3);
+
+    // Next allocation should NOT recycle from mReleasedList because size (2) <= 3.
+    // It should allocate handle 6 from mUnallocatedList.
+    GLuint handle = 0;
+    EXPECT_TRUE(allocator.allocate(&handle));
+    EXPECT_EQ(6u, handle);
+
+    // Release handle 2 (mReleasedList size becomes 3 <= 3: [1, 3, 2])
+    allocator.release(2);
+
+    // Next allocation should NOT recycle from mReleasedList because size (3) <= 3.
+    // It should allocate handle 7 from mUnallocatedList.
+    EXPECT_TRUE(allocator.allocate(&handle));
+    EXPECT_EQ(7u, handle);
+
+    // Release handle 4 (mReleasedList size becomes 4 > 3: [1, 3, 2, 4])
+    allocator.release(4);
+
+    // Next allocation SHOULD recycle from mReleasedList because size (4) > 3.
+    // Recycles handle 1 in FIFO order.
+    EXPECT_TRUE(allocator.allocate(&handle));
+    EXPECT_EQ(1u, handle);
+
+    // Now mReleasedList size is 3 <= 3. Next allocation should take handle 8 from mUnallocatedList.
+    EXPECT_TRUE(allocator.allocate(&handle));
+    EXPECT_EQ(8u, handle);
+}
+
+// Test that HandleAllocator falls back to recycling from mReleasedList when mUnallocatedList is
+// empty
+TEST(HandleAllocatorTest, MinimumReleasedToKeepExhaustionFallback)
+{
+    // MinimumReleasedToKeep = 3, max handles = 3
+    gl::HandleAllocator allocator(3, 3);
+
+    // Allocate all 3 handles
+    for (GLuint i = 1; i <= 3; ++i)
+    {
+        GLuint handle = 0;
+        EXPECT_TRUE(allocator.allocate(&handle));
+        EXPECT_EQ(handle, i);
+    }
+
+    // Release 1 and 2 (mReleasedList size = 2 < 3)
+    allocator.release(1);
+    allocator.release(2);
+
+    // mUnallocatedList is empty. Even though mReleasedList size (2) < 3,
+    // allocation should fallback to recycling from mReleasedList rather than failing.
+    GLuint handle = 0;
+    EXPECT_TRUE(allocator.allocate(&handle));
+    EXPECT_EQ(1u, handle);
 }
 
 }  // anonymous namespace

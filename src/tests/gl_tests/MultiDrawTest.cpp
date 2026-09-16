@@ -240,7 +240,8 @@ void main()
         std::stringstream shader;
         vertexShaderPreamble(shader) << R"(
 uniform bool boolUniform;
-uniform highp vec4 colorId0Uniform;
+// Use a mediump uniform, it can get sorted before the gl_DrawID emulated uniform
+uniform mediump vec4 colorId0Uniform;
 uniform highp vec4 colorId1Uniform;
 uniform highp vec4 colorId2Uniform;
 void main()
@@ -728,9 +729,6 @@ TEST_P(MultiDrawTest, MultiDrawArrays)
 {
     ANGLE_SKIP_TEST_IF(!requestExtensions());
 
-    // http://anglebug.com/40644769
-    ANGLE_SKIP_TEST_IF(isInstancedTest() && IsMac() && IsIntelUHD630Mobile() && IsDesktopOpenGL());
-
     setupBuffers();
     setupProgram();
     doDrawArrays();
@@ -742,9 +740,6 @@ TEST_P(MultiDrawTest, MultiDrawArrays)
 TEST_P(MultiDrawTestES3, MultiDrawArraysAfterFailedRelink)
 {
     ANGLE_SKIP_TEST_IF(!requestExtensions());
-
-    // http://anglebug.com/40644769
-    ANGLE_SKIP_TEST_IF(isInstancedTest() && IsMac() && IsIntelUHD630Mobile() && IsDesktopOpenGL());
 
     setupBuffers();
     setupProgram();
@@ -825,9 +820,6 @@ TEST_P(MultiDrawTest, MultiDrawElementsWithBoolUniforms)
 TEST_P(MultiDrawTest, MultiDrawArraysThenDrawArrays)
 {
     ANGLE_SKIP_TEST_IF(!requestExtensions());
-
-    // http://anglebug.com/40644769
-    ANGLE_SKIP_TEST_IF(isInstancedTest() && IsMac() && IsIntelUHD630Mobile() && IsDesktopOpenGL());
 
     setupBuffers();
     setupProgram();
@@ -1538,7 +1530,6 @@ void main()
         ES3_METAL().enable(Feature::AlwaysEnableEmulatedMultidrawExtensions)
 
 #define ANGLE_ALL_MULTIDRAW_TEST_PLATFORMS_ES3_1                                            \
-    ES31_D3D11().enable(Feature::AlwaysEnableEmulatedMultidrawExtensions),                  \
         ES31_OPENGL().enable(Feature::AlwaysEnableEmulatedMultidrawExtensions),             \
         ES31_OPENGLES().enable(Feature::AlwaysEnableEmulatedMultidrawExtensions),           \
         ES31_VULKAN().enable(Feature::AlwaysEnableEmulatedMultidrawExtensions),             \

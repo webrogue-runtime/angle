@@ -216,6 +216,8 @@ angle::FormatID Format::MetalToAngleFormatID(MTLPixelFormat formatMtl)
             return angle::FormatID::ETC2_R8G8B8_SRGB_BLOCK;
         case MTLPixelFormatETC2_RGB8:
             return angle::FormatID::ETC2_R8G8B8_UNORM_BLOCK;
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wdeprecated-declarations"
         case MTLPixelFormatPVRTC_RGBA_2BPP:
             return angle::FormatID::PVRTC1_RGBA_2BPP_UNORM_BLOCK;
         case MTLPixelFormatPVRTC_RGBA_2BPP_sRGB:
@@ -232,6 +234,7 @@ angle::FormatID Format::MetalToAngleFormatID(MTLPixelFormat formatMtl)
             return angle::FormatID::PVRTC1_RGB_4BPP_UNORM_BLOCK;
         case MTLPixelFormatPVRTC_RGB_4BPP_sRGB:
             return angle::FormatID::PVRTC1_RGB_4BPP_UNORM_SRGB_BLOCK;
+#    pragma clang diagnostic pop
         case MTLPixelFormatABGR4Unorm:
             return angle::FormatID::R4G4B4A4_UNORM;
         case MTLPixelFormatA1BGR5Unorm:
@@ -754,15 +757,37 @@ void Format::init(const DisplayMtl *display, angle::FormatID intendedFormatId_)
             break;
 
         case angle::FormatID::R8G8B8X8_UNORM:
+            if (display->getFeatures().hasTextureSwizzle.enabled)
+            {
 
-            this->metalFormat    = MTLPixelFormatRGBA8Unorm;
-            this->actualFormatId = angle::FormatID::R8G8B8A8_UNORM;
+                this->metalFormat    = MTLPixelFormatRGBA8Unorm;
+                this->actualFormatId = angle::FormatID::R8G8B8A8_UNORM;
+                this->swizzled       = true;
+                this->swizzle        = {GL_RED, GL_GREEN, GL_BLUE, GL_ONE};
+            }
+            else
+            {
+
+                this->metalFormat    = MTLPixelFormatRGBA8Unorm;
+                this->actualFormatId = angle::FormatID::R8G8B8A8_UNORM;
+            }
             break;
 
         case angle::FormatID::R8G8B8X8_UNORM_SRGB:
+            if (display->getFeatures().hasTextureSwizzle.enabled)
+            {
 
-            this->metalFormat    = MTLPixelFormatRGBA8Unorm_sRGB;
-            this->actualFormatId = angle::FormatID::R8G8B8A8_UNORM_SRGB;
+                this->metalFormat    = MTLPixelFormatRGBA8Unorm_sRGB;
+                this->actualFormatId = angle::FormatID::R8G8B8A8_UNORM_SRGB;
+                this->swizzled       = true;
+                this->swizzle        = {GL_RED, GL_GREEN, GL_BLUE, GL_ONE};
+            }
+            else
+            {
+
+                this->metalFormat    = MTLPixelFormatRGBA8Unorm_sRGB;
+                this->actualFormatId = angle::FormatID::R8G8B8A8_UNORM_SRGB;
+            }
             break;
 
         case angle::FormatID::R8G8B8_SINT:
@@ -1784,6 +1809,8 @@ void Format::init(const DisplayMtl *display, angle::FormatID intendedFormatId_)
             this->actualFormatId = angle::FormatID::ETC2_R8G8B8_UNORM_BLOCK;
             break;
 
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wdeprecated-declarations"
         case angle::FormatID::PVRTC1_RGBA_2BPP_UNORM_BLOCK:
 
             this->metalFormat    = MTLPixelFormatPVRTC_RGBA_2BPP;
@@ -1832,6 +1859,7 @@ void Format::init(const DisplayMtl *display, angle::FormatID intendedFormatId_)
             this->actualFormatId = angle::FormatID::PVRTC1_RGB_4BPP_UNORM_SRGB_BLOCK;
             break;
 
+#    pragma clang diagnostic pop
         case angle::FormatID::R4G4B4A4_UNORM:
 
             this->metalFormat    = MTLPixelFormatABGR4Unorm;
@@ -2517,6 +2545,8 @@ void Format::init(const DisplayMtl *display, angle::FormatID intendedFormatId_)
             }
             break;
 
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wdeprecated-declarations"
         case angle::FormatID::PVRTC1_RGBA_2BPP_UNORM_BLOCK:
 
             this->metalFormat    = MTLPixelFormatPVRTC_RGBA_2BPP;
@@ -2608,6 +2638,7 @@ void Format::init(const DisplayMtl *display, angle::FormatID intendedFormatId_)
             }
             break;
 
+#    pragma clang diagnostic pop
         case angle::FormatID::R8G8_UNORM_SRGB:
 
             this->metalFormat    = MTLPixelFormatRG8Unorm_sRGB;
@@ -3834,10 +3865,10 @@ void FormatTable::initNativeFormatCapsAutogen(const DisplayMtl *display)
     const angle::FeaturesMtl &featuresMtl = display->getFeatures();
     // Skip auto resolve if either hasDepth/StencilAutoResolve or allowMultisampleStoreAndResolve
     // feature are disabled.
-    bool supportDepthAutoResolve = featuresMtl.hasDepthAutoResolve.enabled &&
-                                   featuresMtl.allowMultisampleStoreAndResolve.enabled;
-    bool supportStencilAutoResolve = featuresMtl.hasStencilAutoResolve.enabled &&
-                                     featuresMtl.allowMultisampleStoreAndResolve.enabled;
+    bool supportDepthAutoResolve        = featuresMtl.hasDepthAutoResolve.enabled &&
+                                          featuresMtl.allowMultisampleStoreAndResolve.enabled;
+    bool supportStencilAutoResolve      = featuresMtl.hasStencilAutoResolve.enabled &&
+                                          featuresMtl.allowMultisampleStoreAndResolve.enabled;
     bool supportDepthStencilAutoResolve = supportDepthAutoResolve && supportStencilAutoResolve;
 
     // Source: https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf
@@ -4354,6 +4385,8 @@ void FormatTable::initNativeFormatCapsAutogen(const DisplayMtl *display)
                   /** writable*/ false, /** blendable*/ false, /** multisample*/ false,
                   /** resolve*/ false, /** colorRenderable*/ false, /** depthRenderable*/ false);
 
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wdeprecated-declarations"
     setFormatCaps(MTLPixelFormatPVRTC_RGBA_2BPP,
                   /** filterable*/ display->supportsAppleGPUFamily(1), /** writable*/ false,
                   /** blendable*/ false, /** multisample*/ false, /** resolve*/ false,
@@ -4392,6 +4425,7 @@ void FormatTable::initNativeFormatCapsAutogen(const DisplayMtl *display)
                   /** blendable*/ false, /** multisample*/ false, /** resolve*/ false,
                   /** colorRenderable*/ false, /** depthRenderable*/ false);
 
+#    pragma clang diagnostic pop
     setFormatCaps(MTLPixelFormatR8Unorm_sRGB, /** filterable*/ display->supportsAppleGPUFamily(1),
                   /** writable*/ display->supportsAppleGPUFamily(2),
                   /** blendable*/ display->supportsAppleGPUFamily(1),

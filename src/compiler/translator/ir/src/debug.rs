@@ -30,6 +30,7 @@ fn type_id_str(id: TypeId) -> String {
 fn precision_str(precision: Precision) -> &'static str {
     match precision {
         Precision::NotApplicable => "",
+        Precision::Unassigned => "unassigned",
         Precision::Low => "lowp",
         Precision::Medium => "mediump",
         Precision::High => "highp",
@@ -45,7 +46,7 @@ fn id_str(id: TypedId) -> String {
             // precision.  In that case, output the precision too.
             let constant_str = constant_id_str(cid);
             match id.precision {
-                Precision::NotApplicable => constant_str,
+                Precision::NotApplicable | Precision::Unassigned => constant_str,
                 _ => format!("{constant_str}[{}]", precision_str(id.precision)),
             }
         }
@@ -53,11 +54,11 @@ fn id_str(id: TypedId) -> String {
     }
 }
 
-fn id_list_str(ids: &Vec<TypedId>) -> String {
+fn id_list_str(ids: &[TypedId]) -> String {
     ids.iter().map(|&id| id_str(id)).collect::<Vec<_>>().join(", ")
 }
 
-fn index_list_str(ids: &Vec<u32>) -> String {
+fn index_list_str(ids: &[u32]) -> String {
     ids.iter().map(|index| index.to_string()).collect::<Vec<_>>().join(", ")
 }
 
@@ -75,6 +76,10 @@ fn shader_type_str(shader_type: ShaderType) -> String {
 
 fn early_fragment_tests_str(early_fragment_tests: bool) -> String {
     (if early_fragment_tests { "[Early fragment tests]" } else { "" }).to_string()
+}
+
+fn num_views_str(num_views: u32) -> String {
+    (if num_views > 0 { "[Views: {num_views}]" } else { "" }).to_string()
 }
 
 fn blend_equation_advanced_str(equations: &AdvancedBlendEquations) -> String {
@@ -234,7 +239,6 @@ fn image_type_str(basic_type: ImageBasicType, image_type: ImageType) -> String {
         ImageDimension::Buffer => "Buffer",
         ImageDimension::External => "ExternalOES",
         ImageDimension::ExternalY2Y => "External2DY2YEXT",
-        ImageDimension::Video => "VideoWEBGL",
         ImageDimension::PixelLocal => {
             base_name = "pixelLocalANGLE";
             ""
@@ -250,18 +254,24 @@ fn image_type_str(basic_type: ImageBasicType, image_type: ImageType) -> String {
     format!("{prefix}{base_name}{suffix}{multisample_suffix}{array_suffix}{shadow_suffix}")
 }
 
-fn name_str(name: &Name, temp_prefix: &'static str, id: u32) -> String {
+fn name_str(name: &Name, temp_prefix: &'static str, user_prefix: &'static str, id: u32) -> String {
     // Some names are expected to be output exactly, and are known to be unique.  Others will
     // be disambiguated with an `_N` suffix if they clash with any other name in text outputs.
     format!(
         "'{}{}{}'",
         match name.source {
-            NameSource::ShaderInterface => USER_SYMBOL_PREFIX,
+            NameSource::ShaderInterface => user_prefix,
             NameSource::Temporary => temp_prefix,
             _ => "",
         },
         name.name,
-        if name.source == NameSource::Temporary { format!("_{id}") } else { "".to_string() }
+        if name.source == NameSource::Temporary {
+            format!("_{id}")
+        } else if let Some(suffix) = name.suffix {
+            format!("_{}", suffix)
+        } else {
+            "".to_string()
+        }
     )
 }
 
@@ -315,7 +325,6 @@ fn image_internal_format_str(format: ImageInternalFormat) -> String {
 fn decoration_str(decoration: Decoration) -> String {
     match decoration {
         Decoration::Invariant => "invariant".to_string(),
-        Decoration::Precise => "precise".to_string(),
         Decoration::Interpolant => "interpolant".to_string(),
         Decoration::Smooth => "smooth".to_string(),
         Decoration::Flat => "flat".to_string(),
@@ -333,7 +342,7 @@ fn decoration_str(decoration: Decoration) -> String {
         Decoration::Buffer => "buffer".to_string(),
         Decoration::PushConstant => "push_constant".to_string(),
         Decoration::NonCoherent => "noncoherent".to_string(),
-        Decoration::YUV => "yuv".to_string(),
+        Decoration::Yuv => "yuv".to_string(),
         Decoration::Input => "input".to_string(),
         Decoration::Output => "output".to_string(),
         Decoration::InputOutput => "input/output".to_string(),
@@ -347,17 +356,30 @@ fn decoration_str(decoration: Decoration) -> String {
         Decoration::MatrixPacking(packing) => matrix_packing_str(packing),
         Decoration::Depth(depth) => depth_str(depth),
         Decoration::ImageInternalFormat(format) => image_internal_format_str(format),
-        Decoration::NumViews(n) => format!("num_views={n}"),
-        Decoration::RasterOrdered => "raster_ordered(D3D)".to_string(),
+        Decoration::RasterOrdered => "raster_ordered".to_string(),
+        Decoration::EmulatedViewIDOut => "emulated_ViewID(VS)".to_string(),
+        Decoration::EmulatedViewIDIn => "emulated_ViewID(FS)".to_string(),
+        Decoration::EmulatedMultiDrawBuiltIn(EmulatedMultiDraw::DrawID) => {
+            "emulated_gl_DrawID".to_string()
+        }
+        Decoration::EmulatedMultiDrawBuiltIn(EmulatedMultiDraw::BaseVertex) => {
+            "emulated_gl_BaseVertex".to_string()
+        }
+        Decoration::EmulatedMultiDrawBuiltIn(EmulatedMultiDraw::BaseInstance) => {
+            "emulated_gl_BaseInstance".to_string()
+        }
     }
 }
 
-fn decoration_list(precision: Precision, decorations: &Decorations) -> String {
+fn decoration_list(precision: Precision, precise: bool, decorations: &Decorations) -> String {
     let mut result = Vec::new();
     match precision {
         Precision::NotApplicable => {}
         _ => result.push(precision_str(precision).to_string()),
     };
+    if precise {
+        result.push("precise".to_string());
+    }
 
     decorations.decorations.iter().for_each(|&decoration| {
         result.push(decoration_str(decoration));
@@ -366,8 +388,13 @@ fn decoration_list(precision: Precision, decorations: &Decorations) -> String {
     result.join(", ")
 }
 
-fn append_decorations(result: &mut String, precision: Precision, decorations: &Decorations) {
-    let decorations = decoration_list(precision, decorations);
+fn append_decorations(
+    result: &mut String,
+    precision: Precision,
+    precise: bool,
+    decorations: &Decorations,
+) {
+    let decorations = decoration_list(precision, precise, decorations);
     if !decorations.is_empty() {
         *result = format!("{result} [{decorations}]");
     }
@@ -376,10 +403,10 @@ fn append_decorations(result: &mut String, precision: Precision, decorations: &D
 fn field_str(field: &Field, index: usize) -> String {
     let mut result = format!(
         "{}: {}",
-        name_str(&field.name, TEMP_STRUCT_FIELD_PREFIX, index as u32),
+        name_str(&field.name, TEMP_STRUCT_FIELD_PREFIX, USER_VARIABLE_PREFIX, index as u32),
         type_id_str(field.type_id)
     );
-    append_decorations(&mut result, field.precision, &field.decorations);
+    append_decorations(&mut result, field.precision, field.precise, &field.decorations);
     result
 }
 
@@ -396,6 +423,8 @@ fn built_in_str(built_in: BuiltIn) -> String {
     (match built_in {
         BuiltIn::InstanceID => "InstanceID",
         BuiltIn::VertexID => "VertexID",
+        BuiltIn::InstanceIndex => "InstanceIndex",
+        BuiltIn::VertexIndex => "VertexIndex",
         BuiltIn::Position => "Position",
         BuiltIn::PointSize => "PointSize",
         BuiltIn::BaseVertex => "BaseVertex",
@@ -426,7 +455,6 @@ fn built_in_str(built_in: BuiltIn) -> String {
         BuiltIn::SampleMask => "SampleMask",
         BuiltIn::NumSamples => "NumSamples",
         BuiltIn::NumWorkGroups => "NumWorkGroups",
-        BuiltIn::WorkGroupSize => "WorkGroupSize",
         BuiltIn::WorkGroupID => "WorkGroupID",
         BuiltIn::LocalInvocationID => "LocalInvocationID",
         BuiltIn::GlobalInvocationID => "GlobalInvocationID",
@@ -436,14 +464,13 @@ fn built_in_str(built_in: BuiltIn) -> String {
         BuiltIn::PrimitiveIDIn => "PrimitiveIDIn",
         BuiltIn::InvocationID => "InvocationID",
         BuiltIn::PrimitiveID => "PrimitiveID",
-        BuiltIn::LayerOut => "Layer(GS)",
+        BuiltIn::LayerOut => "Layer(GS/VS)",
         BuiltIn::LayerIn => "Layer(FS)",
         BuiltIn::PatchVerticesIn => "PatchVerticesIn",
         BuiltIn::TessLevelOuter => "TessLevelOuter",
         BuiltIn::TessLevelInner => "TessLevelInner",
         BuiltIn::TessCoord => "TessCoord",
         BuiltIn::BoundingBoxOES => "BoundingBoxOES",
-        BuiltIn::PixelLocalEXT => "PixelLocalEXT",
     })
     .to_string()
 }
@@ -458,10 +485,15 @@ fn function_param_direction_str(direction: FunctionParamDirection) -> String {
 }
 
 fn function_prototype_str(id: FunctionId, function: &Function) -> String {
-    let name = name_str(&function.name, TEMP_FUNCTION_PREFIX, id.id);
+    let name = name_str(&function.name, TEMP_FUNCTION_PREFIX, USER_VARIABLE_PREFIX, id.id);
 
     let mut return_type = type_id_str(function.return_type_id);
-    append_decorations(&mut return_type, function.return_precision, &function.return_decorations);
+    append_decorations(
+        &mut return_type,
+        function.return_precision,
+        function.return_precise,
+        &function.return_decorations,
+    );
 
     let params = function
         .params
@@ -685,8 +717,8 @@ fn built_in_opcode_str(op: BuiltInOpCode) -> &'static str {
 }
 
 fn texture_opcode_str(op: &TextureOpCode) -> (&'static str, String) {
-    match op {
-        &TextureOpCode::Implicit { is_proj, offset } => (
+    match *op {
+        TextureOpCode::Implicit { is_proj, offset } => (
             "",
             format!(
                 "is_proj:{}{}",
@@ -694,8 +726,8 @@ fn texture_opcode_str(op: &TextureOpCode) -> (&'static str, String) {
                 offset.map(|id| format!(" offset:{}", id_str(id))).unwrap_or("".to_string())
             ),
         ),
-        &TextureOpCode::Compare { compare } => ("Compare", format!("compare:{}", id_str(compare))),
-        &TextureOpCode::Lod { is_proj, lod, offset } => (
+        TextureOpCode::Compare { compare } => ("Compare", format!("compare:{}", id_str(compare))),
+        TextureOpCode::Lod { is_proj, lod, offset } => (
             "Lod",
             format!(
                 "is_proj:{} lod:{}{}",
@@ -704,10 +736,10 @@ fn texture_opcode_str(op: &TextureOpCode) -> (&'static str, String) {
                 offset.map(|id| format!(" offset:{}", id_str(id))).unwrap_or("".to_string())
             ),
         ),
-        &TextureOpCode::CompareLod { compare, lod } => {
+        TextureOpCode::CompareLod { compare, lod } => {
             ("CompareLod", format!("compare:{} lod:{}", id_str(compare), id_str(lod)))
         }
-        &TextureOpCode::Bias { is_proj, bias, offset } => (
+        TextureOpCode::Bias { is_proj, bias, offset } => (
             "Bias",
             format!(
                 "is_proj:{} bias:{}{}",
@@ -716,10 +748,10 @@ fn texture_opcode_str(op: &TextureOpCode) -> (&'static str, String) {
                 offset.map(|id| format!(" offset:{}", id_str(id))).unwrap_or("".to_string())
             ),
         ),
-        &TextureOpCode::CompareBias { compare, bias } => {
+        TextureOpCode::CompareBias { compare, bias } => {
             ("CompareBias", format!("compare:{} bias:{}", id_str(compare), id_str(bias)))
         }
-        &TextureOpCode::Grad { is_proj, dx, dy, offset } => (
+        TextureOpCode::Grad { is_proj, dx, dy, offset } => (
             "Grad",
             format!(
                 "is_proj:{} dx:{} dy:{}{}",
@@ -729,10 +761,10 @@ fn texture_opcode_str(op: &TextureOpCode) -> (&'static str, String) {
                 offset.map(|id| format!(" offset:{}", id_str(id))).unwrap_or("".to_string())
             ),
         ),
-        &TextureOpCode::Gather { offset } => {
+        TextureOpCode::Gather { offset } => {
             ("Gather", offset.map(|id| format!(" offset:{}", id_str(id))).unwrap_or("".to_string()))
         }
-        &TextureOpCode::GatherComponent { component, offset } => (
+        TextureOpCode::GatherComponent { component, offset } => (
             "GatherComponent",
             format!(
                 "component:{}{}",
@@ -740,7 +772,7 @@ fn texture_opcode_str(op: &TextureOpCode) -> (&'static str, String) {
                 offset.map(|id| format!(" offset:{}", id_str(id))).unwrap_or("".to_string())
             ),
         ),
-        &TextureOpCode::GatherRef { refz, offset } => (
+        TextureOpCode::GatherRef { refz, offset } => (
             "GatherRef",
             format!(
                 "refz:{}{}",
@@ -752,104 +784,104 @@ fn texture_opcode_str(op: &TextureOpCode) -> (&'static str, String) {
 }
 
 fn opcode_str(op: &OpCode) -> String {
-    match op {
-        &OpCode::MergeInput => {
+    match *op {
+        OpCode::MergeInput => {
             panic!("Internal error: No block instruction should use MergeInput")
         }
-        &OpCode::Call(id, ref params) => {
+        OpCode::Call(id, ref params) => {
             format!("Call {} With ({})", function_id_str(id), id_list_str(params))
         }
-        &OpCode::Discard => "Discard".to_string(),
-        &OpCode::Return(id) => {
+        OpCode::Discard => "Discard".to_string(),
+        OpCode::Return(id) => {
             format!("Return{}", id.map(|id| format!(" {}", id_str(id))).unwrap_or("".to_string()))
         }
-        &OpCode::Break => "Break".to_string(),
-        &OpCode::Continue => "Continue".to_string(),
-        &OpCode::Passthrough => "Passthrough".to_string(),
-        &OpCode::NextBlock => "NextBlock".to_string(),
-        &OpCode::Merge(id) => {
+        OpCode::Break => "Break".to_string(),
+        OpCode::Continue => "Continue".to_string(),
+        OpCode::Passthrough => "Passthrough".to_string(),
+        OpCode::NextBlock => "NextBlock".to_string(),
+        OpCode::Merge(id) => {
             format!("Merge{}", id.map(|id| format!(" {}", id_str(id))).unwrap_or("".to_string()))
         }
-        &OpCode::If(id) => format!("If {}", id_str(id)),
-        &OpCode::Loop => "Loop".to_string(),
-        &OpCode::DoLoop => "DoLoop".to_string(),
-        &OpCode::LoopIf(id) => format!("LoopIf {}", id_str(id)),
-        &OpCode::Switch(id, _) => format!("Switch {}", id_str(id)),
-        &OpCode::ExtractVectorComponent(id, index) => {
+        OpCode::If(id) => format!("If {}", id_str(id)),
+        OpCode::Loop => "Loop".to_string(),
+        OpCode::DoLoop => "DoLoop".to_string(),
+        OpCode::LoopIf(id) => format!("LoopIf {}", id_str(id)),
+        OpCode::Switch(id, _) => format!("Switch {}", id_str(id)),
+        OpCode::ExtractVectorComponent(id, index) => {
             format!("ExtractVectorComponent {} {index}", id_str(id))
         }
-        &OpCode::ExtractVectorComponentMulti(id, ref indices) => {
+        OpCode::ExtractVectorComponentMulti(id, ref indices) => {
             format!("ExtractVectorComponentMulti {} ({})", id_str(id), index_list_str(indices))
         }
-        &OpCode::ExtractVectorComponentDynamic(id, index) => {
+        OpCode::ExtractVectorComponentDynamic(id, index) => {
             format!("ExtractVectorComponentDynamic {} {}", id_str(id), id_str(index))
         }
-        &OpCode::ExtractMatrixColumn(id, index) => {
+        OpCode::ExtractMatrixColumn(id, index) => {
             format!("ExtractMatrixColumn {} {}", id_str(id), id_str(index))
         }
-        &OpCode::ExtractStructField(id, index) => {
+        OpCode::ExtractStructField(id, index) => {
             format!("ExtractStructField {} {index}", id_str(id))
         }
-        &OpCode::ExtractArrayElement(id, index) => {
+        OpCode::ExtractArrayElement(id, index) => {
             format!("ExtractArrayElement {} {}", id_str(id), id_str(index))
         }
-        &OpCode::ConstructScalarFromScalar(id) => {
+        OpCode::ConstructScalarFromScalar(id) => {
             format!("ConstructScalarFromScalar {}", id_str(id))
         }
-        &OpCode::ConstructVectorFromScalar(id) => {
+        OpCode::ConstructVectorFromScalar(id) => {
             format!("ConstructVectorFromScalar {}", id_str(id))
         }
-        &OpCode::ConstructMatrixFromScalar(id) => {
+        OpCode::ConstructMatrixFromScalar(id) => {
             format!("ConstructMatrixFromScalar {}", id_str(id))
         }
-        &OpCode::ConstructMatrixFromMatrix(id) => {
+        OpCode::ConstructMatrixFromMatrix(id) => {
             format!("ConstructMatrixFromMatrix {}", id_str(id))
         }
-        &OpCode::ConstructVectorFromMultiple(ref ids) => {
+        OpCode::ConstructVectorFromMultiple(ref ids) => {
             format!("ConstructVectorFromMultiple ({})", id_list_str(ids))
         }
-        &OpCode::ConstructMatrixFromMultiple(ref ids) => {
+        OpCode::ConstructMatrixFromMultiple(ref ids) => {
             format!("ConstructMatrixFromMultiple ({})", id_list_str(ids))
         }
-        &OpCode::ConstructStruct(ref ids) => {
+        OpCode::ConstructStruct(ref ids) => {
             format!("ConstructStruct ({})", id_list_str(ids))
         }
-        &OpCode::ConstructArray(ref ids) => {
+        OpCode::ConstructArray(ref ids) => {
             format!("ConstructArray ({})", id_list_str(ids))
         }
-        &OpCode::AccessVectorComponent(id, index) => {
+        OpCode::AccessVectorComponent(id, index) => {
             format!("AccessVectorComponent {} {index}", id_str(id))
         }
-        &OpCode::AccessVectorComponentMulti(id, ref indices) => {
+        OpCode::AccessVectorComponentMulti(id, ref indices) => {
             format!("AccessVectorComponentMulti {} ({})", id_str(id), index_list_str(indices))
         }
-        &OpCode::AccessVectorComponentDynamic(id, index) => {
+        OpCode::AccessVectorComponentDynamic(id, index) => {
             format!("AccessVectorComponentDynamic {} {}", id_str(id), id_str(index))
         }
-        &OpCode::AccessMatrixColumn(id, index) => {
+        OpCode::AccessMatrixColumn(id, index) => {
             format!("AccessMatrixColumn {} {}", id_str(id), id_str(index))
         }
-        &OpCode::AccessStructField(id, index) => {
+        OpCode::AccessStructField(id, index) => {
             format!("AccessStructField {} {index}", id_str(id))
         }
-        &OpCode::AccessArrayElement(id, index) => {
+        OpCode::AccessArrayElement(id, index) => {
             format!("AccessArrayElement {} {}", id_str(id), id_str(index))
         }
-        &OpCode::Load(id) => format!("Load {}", id_str(id)),
-        &OpCode::Store(target, value) => {
+        OpCode::Load(id) => format!("Load {}", id_str(id)),
+        OpCode::Store(target, value) => {
             format!("Store {} {}", id_str(target), id_str(value))
         }
-        &OpCode::Alias(id) => format!("Alias {}", id_str(id)),
-        &OpCode::Unary(unary_op, id) => {
+        OpCode::Alias(id) => format!("Alias {}", id_str(id)),
+        OpCode::Unary(unary_op, id) => {
             format!("{} {}", unary_opcode_str(unary_op), id_str(id))
         }
-        &OpCode::Binary(binary_op, lhs, rhs) => {
+        OpCode::Binary(binary_op, lhs, rhs) => {
             format!("{} {} {}", binary_opcode_str(binary_op), id_str(lhs), id_str(rhs))
         }
-        &OpCode::BuiltIn(built_in_op, ref ids) => {
+        OpCode::BuiltIn(built_in_op, ref ids) => {
             format!("{} ({})", built_in_opcode_str(built_in_op), id_list_str(ids))
         }
-        &OpCode::Texture(ref texture_op, sampler, coord) => {
+        OpCode::Texture(ref texture_op, sampler, coord) => {
             let (variant, params) = texture_opcode_str(texture_op);
             format!(
                 "Texture{} sampler:{} coord:{} {}",
@@ -883,6 +915,9 @@ fn append_on_new_line(result: &mut String, new: String, indent: usize) {
 
 fn dump_shader_properties(ir_meta: &IRMeta, result: &mut String) {
     match ir_meta.get_shader_type() {
+        ShaderType::Vertex => {
+            append_on_new_line(result, num_views_str(ir_meta.get_num_views()), 0);
+        }
         ShaderType::Fragment => {
             append_on_new_line(
                 result,
@@ -930,15 +965,23 @@ fn dump_types(ir_meta: &IRMeta, result: &mut String) {
                 &Type::UnsizedArray(type_id) =>
                     format!("Unsized Array of {}", type_id_str(type_id)),
                 &Type::Image(basic_type, image_type) => image_type_str(basic_type, image_type),
-                Type::Struct(name, _, specialization) => format!(
-                    "{} {}:",
-                    match specialization {
-                        StructSpecialization::Struct => "Struct",
-                        StructSpecialization::InterfaceBlock => "Interface Block",
-                    },
-                    name_str(name, TEMP_STRUCT_PREFIX, id as u32)
-                ),
+                Type::Struct(name, _, specialization) => {
+                    let (typename, prefix) = match specialization {
+                        StructSpecialization::Struct => ("Struct", USER_VARIABLE_PREFIX),
+                        StructSpecialization::InterfaceBlock => {
+                            ("Interface Block", USER_BLOCK_PREFIX)
+                        }
+                    };
+                    format!(
+                        "{} {}:",
+                        typename,
+                        name_str(name, TEMP_STRUCT_PREFIX, prefix, id as u32)
+                    )
+                }
                 &Type::Pointer(type_id) => format!("Pointer to {}", type_id_str(type_id)),
+                Type::DeadCodeEliminated => {
+                    return;
+                }
             }
         );
         append_on_new_line(result, formatted, 1);
@@ -954,6 +997,9 @@ fn dump_types(ir_meta: &IRMeta, result: &mut String) {
 fn dump_constants(ir_meta: &IRMeta, result: &mut String) {
     result.push_str("\n\nConstants:");
     ir_meta.all_constants().iter().enumerate().for_each(|(id, c)| {
+        if c.is_dead_code_eliminated {
+            return;
+        }
         let formatted = format!(
             "c{id} ({}): {}",
             type_id_str(c.type_id),
@@ -980,19 +1026,36 @@ fn dump_constants(ir_meta: &IRMeta, result: &mut String) {
 fn dump_variables(ir_meta: &IRMeta, result: &mut String) {
     result.push_str("\n\nVariables:");
     ir_meta.all_variables().iter().enumerate().for_each(|(id, v)| {
-        let name = name_str(&v.name, TEMP_VARIABLE_PREFIX, id as u32);
+        if v.is_dead_code_eliminated {
+            return;
+        }
+        let name = name_str(&v.name, TEMP_VARIABLE_PREFIX, USER_VARIABLE_PREFIX, id as u32);
         let initializer = v
             .initializer
             .map(|constant_id| format!("={}", constant_id_str(constant_id)))
+            .or(ir_meta
+                .variable_needs_zero_initialization(VariableId { id: id as u32 })
+                .then_some("=TO_BE_ZERO_INIT".to_string()))
             .unwrap_or("".to_string());
         let built_in = v
             .built_in
             .map(|built_in| format!(" <{}>", built_in_str(built_in)))
             .unwrap_or("".to_string());
+        let loop_variable = if v.scope == VariableScope::ForLoopVariable {
+            " {loop_variable}".to_string()
+        } else {
+            "".to_string()
+        };
 
-        let mut formatted =
-            format!("v{id} ({}): {}{}{}", type_id_str(v.type_id), name, initializer, built_in);
-        append_decorations(&mut formatted, v.precision, &v.decorations);
+        let mut formatted = format!(
+            "v{id} ({}): {}{}{}{}",
+            type_id_str(v.type_id),
+            name,
+            initializer,
+            built_in,
+            loop_variable,
+        );
+        append_decorations(&mut formatted, v.precision, v.precise, &v.decorations);
 
         append_on_new_line(result, formatted, 1);
     });
@@ -1024,7 +1087,7 @@ fn dump_instruction(
             (
                 format!("{} {:>6} = ", register_id_str(id), type_id),
                 opcode_str(&instruction.op),
-                decoration_list(instruction.result.precision, &Decorations::new_none()),
+                decoration_list(instruction.result.precision, false, &Decorations::new_none()),
             )
         }
         BlockInstruction::Void(op) => ("".to_string(), opcode_str(op), "".to_string()),
@@ -1073,7 +1136,7 @@ fn dump_block(
 
         let mut formatted =
             format!("Input: {} ({})", register_id_str(input.id), type_id_str(input.type_id));
-        append_decorations(&mut formatted, input.precision, &Decorations::new_none());
+        append_decorations(&mut formatted, input.precision, false, &Decorations::new_none());
         append_on_new_line(result, formatted, indent);
     });
 
@@ -1090,7 +1153,7 @@ fn dump_block(
     }
 }
 
-fn dump_functions(ir_meta: &IRMeta, function_entries: &Vec<Option<Block>>, result: &mut String) {
+fn dump_functions(ir_meta: &IRMeta, function_entries: &[Option<Block>], result: &mut String) {
     result.push_str("\n\nFunctions:");
 
     traverser::visitor::for_each_function(

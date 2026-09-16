@@ -261,9 +261,6 @@ class ContextMtl : public ContextImpl, public mtl::Context
     // Semaphore creation.
     SemaphoreImpl *createSemaphore() override;
 
-    // Overlay creation.
-    OverlayImpl *createOverlay(const gl::OverlayState &state) override;
-
     angle::Result dispatchCompute(const gl::Context *context,
                                   GLuint numGroupsX,
                                   GLuint numGroupsY,
@@ -307,10 +304,6 @@ class ContextMtl : public ContextImpl, public mtl::Context
     // Disable the occlusion query in the current render pass.
     // The render pass must already started.
     void disableActiveOcclusionQueryInRenderPass();
-    // Re-enable the occlusion query in the current render pass.
-    // The render pass must already started.
-    // NOTE: the old query's result will be retained and combined with the new result.
-    angle::Result restartActiveOcclusionQueryInRenderPass();
 
     // Invoke by TransformFeedbackMtl
     void onTransformFeedbackActive(const gl::Context *context, TransformFeedbackMtl *xfb);
@@ -342,9 +335,6 @@ class ContextMtl : public ContextImpl, public mtl::Context
                                        gl::SamplerFormat format,
                                        gl::Texture **textureOut);
 
-    // Recommended to call these methods to end encoding instead of invoking the encoder's
-    // endEncoding() directly.
-    void endRenderEncoding(mtl::RenderCommandEncoder *encoder);
     // Ends any active command encoder
     void endEncoding(bool forceSaveRenderPassContent);
 
@@ -404,6 +394,8 @@ class ContextMtl : public ContextImpl, public mtl::Context
 
     mtl::BufferManager &getBufferManager() { return mBufferManager; }
 
+    ProvokingVertexHelper &getProvokingVertexHelper() { return mProvokingVertexHelper; }
+
     mtl::PipelineCache &getPipelineCache() { return mPipelineCache; }
 
     const angle::ImageLoadContext &getImageLoadContext() const { return mImageLoadContext; }
@@ -416,7 +408,6 @@ class ContextMtl : public ContextImpl, public mtl::Context
     void endBlitAndComputeEncoding();
     angle::Result resyncDrawFramebufferIfNeeded(const gl::Context *context);
     angle::Result setupDraw(const gl::Context *context,
-                            gl::PrimitiveMode mode,
                             GLint firstVertex,
                             GLsizei vertexOrIndexCount,
                             GLsizei instanceCount,
@@ -426,7 +417,6 @@ class ContextMtl : public ContextImpl, public mtl::Context
                             bool *isNoOp);
 
     angle::Result setupDrawImpl(const gl::Context *context,
-                                gl::PrimitiveMode mode,
                                 GLint firstVertex,
                                 GLsizei vertexOrIndexCount,
                                 GLsizei instanceCount,
@@ -530,7 +520,6 @@ class ContextMtl : public ContextImpl, public mtl::Context
     angle::Result handleDirtyDepthBias(const gl::Context *context);
     angle::Result handleDirtyRenderPass(const gl::Context *context);
     angle::Result checkIfPipelineChanged(const gl::Context *context,
-                                         gl::PrimitiveMode primitiveMode,
                                          bool xfbPass,
                                          bool *pipelineDescChanged);
 
@@ -569,12 +558,12 @@ class ContextMtl : public ContextImpl, public mtl::Context
     // src/compiler/translator/DriverUniformMetal.cpp
     struct DriverUniforms
     {
-        uint32_t acbBufferOffsets[2];
         float depthRange[2];
         uint32_t renderArea;
         uint32_t flipXY;
-        uint32_t unused;
         uint32_t misc;
+        uint32_t unused;
+        uint32_t acbBufferOffsets[2];
 
         int32_t xfbBufferOffsets[4];
         int32_t xfbVerticesPerInstance;

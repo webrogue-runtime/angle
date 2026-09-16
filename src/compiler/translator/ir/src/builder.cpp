@@ -39,6 +39,16 @@ rust::Str Str(const ImmutableString &str)
     return rust::Str(str.data(), str.length());
 }
 
+ffi::BuildOptions MakeBuildOptions(const ShCompileOptions &options)
+{
+    return ffi::BuildOptions{
+        .initialize_uninitialized_variables = options.initializeUninitializedLocals,
+        .initializer_allowed_on_non_const_global_variables =
+            !options.forceDeferNonConstGlobalInitializers,
+        .initialize_output_variables = options.initOutputVariables,
+    };
+}
+
 ffi::ASTLayoutQualifier MakeASTLayoutQualifier(const TLayoutQualifier &qualifier)
 {
     return ffi::ASTLayoutQualifier{
@@ -49,7 +59,6 @@ ffi::ASTLayoutQualifier MakeASTLayoutQualifier(const TLayoutQualifier &qualifier
         qualifier.offset,
         static_cast<ffi::ASTLayoutDepth>(qualifier.depth),
         static_cast<ffi::ASTLayoutImageInternalFormat>(qualifier.imageInternalFormat),
-        qualifier.numViews,
         qualifier.yuv,
         qualifier.index,
         qualifier.noncoherent,
@@ -82,9 +91,10 @@ ffi::ASTType MakeASTType(const TType &type, TypeId typeId)
 }
 }  // anonymous namespace
 
-Builder::Builder(gl::ShaderType shaderType)
+Builder::Builder(gl::ShaderType shaderType, const ShCompileOptions &options)
     :  // C++ and Rust enums are identically defined.
-      mBuilder(ffi::builder_new(static_cast<ffi::ASTShaderType>(shaderType)))
+      mBuilder(
+          ffi::builder_new(static_cast<ffi::ASTShaderType>(shaderType), MakeBuildOptions(options)))
 
 {}
 
@@ -151,6 +161,11 @@ TypeId Builder::getArrayTypeId(TypeId elementTypeId,
 void Builder::setEarlyFragmentTests(bool value)
 {
     mBuilder->set_early_fragment_tests(value);
+}
+
+void Builder::setNumViews(uint32_t value)
+{
+    mBuilder->set_num_views(value);
 }
 
 void Builder::setAdvancedBlendEquations(uint32_t value)
@@ -229,6 +244,14 @@ VariableId Builder::declareTempVariable(const ImmutableString &name,
     return mBuilder->declare_temp_variable(Str(name), MakeASTType(type, typeId));
 }
 
+void Builder::rescopeAsForLoopVariable(VariableId id)
+{
+    if (!mHasError)
+    {
+        mBuilder->rescope_as_for_loop_variable(id);
+    }
+}
+
 void Builder::markVariableInvariant(VariableId id)
 {
     if (!mHasError)
@@ -273,6 +296,11 @@ void Builder::updateFunctionParamNames(FunctionId id,
                                        const angle::Span<ImmutableString> &paramNames,
                                        const angle::Span<VariableId> &paramIdsOut)
 {
+    if (mHasError)
+    {
+        return;
+    }
+
     std::vector<rust::Str> paramNameStrs;
     paramNameStrs.reserve(paramNames.size());
 
@@ -281,18 +309,20 @@ void Builder::updateFunctionParamNames(FunctionId id,
         paramNameStrs.push_back(Str(param));
     }
 
-    return mBuilder->update_function_param_names(id, Slice(paramNameStrs), SliceMut(paramIdsOut));
+    mBuilder->update_function_param_names(id, Slice(paramNameStrs), SliceMut(paramIdsOut));
 }
 VariableId Builder::declareFunctionParam(const ImmutableString &name,
                                          TypeId typeId,
-                                         const TType &type)
+                                         const TType &type,
+                                         TQualifier direction)
 {
     if (mHasError)
     {
         return {};
     }
 
-    return mBuilder->declare_function_param(Str(name), typeId, MakeASTType(type, typeId));
+    return mBuilder->declare_function_param(Str(name), typeId, MakeASTType(type, typeId),
+                                            static_cast<ffi::ASTQualifier>(direction));
 }
 
 void Builder::beginFunction(FunctionId id)
@@ -359,11 +389,11 @@ void Builder::beginTernaryTrueExpression()
     }
 }
 
-void Builder::endTernaryTrueExpression()
+void Builder::endTernaryTrueExpression(TBasicType basicType)
 {
     if (!mHasError)
     {
-        mBuilder->end_ternary_true_expression();
+        mBuilder->end_ternary_true_expression(basicType == EbtVoid);
     }
 }
 
@@ -375,19 +405,19 @@ void Builder::beginTernaryFalseExpression()
     }
 }
 
-void Builder::endTernaryFalseExpression()
+void Builder::endTernaryFalseExpression(TBasicType basicType)
 {
     if (!mHasError)
     {
-        mBuilder->end_ternary_false_expression();
+        mBuilder->end_ternary_false_expression(basicType == EbtVoid);
     }
 }
 
-void Builder::endTernary()
+void Builder::endTernary(TBasicType basicType)
 {
     if (!mHasError)
     {
-        mBuilder->end_ternary();
+        mBuilder->end_ternary(basicType == EbtVoid);
     }
 }
 
@@ -1253,7 +1283,6 @@ void Builder::builtIn(TOperator op, size_t argCount)
         case EOpTexture2DRect:
         case EOpTexture3D:
         case EOpTextureCube:
-        case EOpTextureVideoWEBGL:
         {
             // texture() takes the sampler, coordinates and possibly a compare parameter.
             // Note that the variant with a bias parameter is given a different Op.

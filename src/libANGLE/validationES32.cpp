@@ -55,11 +55,6 @@ static bool IsIndexedCapBannedWithActivePLS(GLenum cap)
 }
 }  // anonymous namespace
 
-bool ValidateBlendBarrier(const Context *context, angle::EntryPoint entryPoint)
-{
-    return true;
-}
-
 bool ValidateBlendEquationSeparatei(const PrivateState &state,
                                     ErrorSet *errors,
                                     angle::EntryPoint entryPoint,
@@ -190,14 +185,6 @@ bool ValidateCopyImageSubData(const Context *context,
                                         srcWidth, srcHeight, srcDepth);
 }
 
-bool ValidateDebugMessageCallback(const Context *context,
-                                  angle::EntryPoint entryPoint,
-                                  GLDEBUGPROC callback,
-                                  const void *userParam)
-{
-    return true;
-}
-
 bool ValidateDebugMessageControl(const Context *context,
                                  angle::EntryPoint entryPoint,
                                  GLenum source,
@@ -234,7 +221,8 @@ bool ValidateDisablei(const PrivateState &state,
     {
         if (IsIndexedCapBannedWithActivePLS(target))
         {
-            errors->validationErrorF(entryPoint, GL_INVALID_OPERATION, kPLSCapNotAllowed, target);
+            ANGLE_UNSAFE_TODO(errors->validationErrorF(entryPoint, GL_INVALID_OPERATION,
+                                                       kPLSCapNotAllowed, target));
             return false;
         }
     }
@@ -249,7 +237,8 @@ bool ValidateDisablei(const PrivateState &state,
             }
             break;
         default:
-            errors->validationErrorF(entryPoint, GL_INVALID_ENUM, kEnumNotSupported, target);
+            ANGLE_UNSAFE_TODO(
+                errors->validationErrorF(entryPoint, GL_INVALID_ENUM, kEnumNotSupported, target));
             return false;
     }
     return true;
@@ -320,7 +309,8 @@ bool ValidateEnablei(const PrivateState &state,
     {
         if (IsIndexedCapBannedWithActivePLS(target))
         {
-            errors->validationErrorF(entryPoint, GL_INVALID_OPERATION, kPLSCapNotAllowed, target);
+            ANGLE_UNSAFE_TODO(errors->validationErrorF(entryPoint, GL_INVALID_OPERATION,
+                                                       kPLSCapNotAllowed, target));
             return false;
         }
     }
@@ -335,7 +325,8 @@ bool ValidateEnablei(const PrivateState &state,
             }
             break;
         default:
-            errors->validationErrorF(entryPoint, GL_INVALID_ENUM, kEnumNotSupported, target);
+            ANGLE_UNSAFE_TODO(
+                errors->validationErrorF(entryPoint, GL_INVALID_ENUM, kEnumNotSupported, target));
             return false;
     }
     return true;
@@ -365,11 +356,6 @@ bool ValidateGetDebugMessageLog(const Context *context,
 {
     return ValidateGetDebugMessageLogBase(context, entryPoint, count, bufSize, sources, types, ids,
                                           severities, lengths, messageLog);
-}
-
-bool ValidateGetGraphicsResetStatus(const Context *context, angle::EntryPoint entryPoint)
-{
-    return true;
 }
 
 bool ValidateGetObjectLabel(const Context *context,
@@ -442,20 +428,22 @@ bool ValidateGetPointerv(const Context *context,
 
 bool ValidateGetSamplerParameterIiv(const Context *context,
                                     angle::EntryPoint entryPoint,
-                                    SamplerID sampler,
-                                    GLenum pname,
+                                    SamplerID samplerPacked,
+                                    SamplerParameter pnamePacked,
                                     const GLint *params)
 {
-    return ValidateGetSamplerParameterBase(context, entryPoint, sampler, pname, nullptr, params);
+    return ValidateGetSamplerParameterBase(context, entryPoint, samplerPacked, pnamePacked, params,
+                                           nullptr);
 }
 
 bool ValidateGetSamplerParameterIuiv(const Context *context,
                                      angle::EntryPoint entryPoint,
-                                     SamplerID sampler,
-                                     GLenum pname,
+                                     SamplerID samplerPacked,
+                                     SamplerParameter pnamePacked,
                                      const GLuint *params)
 {
-    return ValidateGetSamplerParameterBase(context, entryPoint, sampler, pname, nullptr, params);
+    return ValidateGetSamplerParameterBase(context, entryPoint, samplerPacked, pnamePacked, params,
+                                           nullptr);
 }
 
 bool ValidateGetTexParameterIiv(const Context *context,
@@ -478,32 +466,32 @@ bool ValidateGetTexParameterIuiv(const Context *context,
 
 bool ValidateGetnUniformfv(const Context *context,
                            angle::EntryPoint entryPoint,
-                           ShaderProgramID program,
-                           UniformLocation location,
+                           ShaderProgramID programPacked,
+                           UniformLocation locationPacked,
                            GLsizei bufSize,
                            const GLfloat *params)
 {
-    return ValidateSizedGetUniform(context, entryPoint, program, location, bufSize, nullptr);
+    return ValidateSizedGetUniform(context, entryPoint, programPacked, locationPacked, bufSize);
 }
 
 bool ValidateGetnUniformiv(const Context *context,
                            angle::EntryPoint entryPoint,
-                           ShaderProgramID program,
-                           UniformLocation location,
+                           ShaderProgramID programPacked,
+                           UniformLocation locationPacked,
                            GLsizei bufSize,
                            const GLint *params)
 {
-    return ValidateSizedGetUniform(context, entryPoint, program, location, bufSize, nullptr);
+    return ValidateSizedGetUniform(context, entryPoint, programPacked, locationPacked, bufSize);
 }
 
 bool ValidateGetnUniformuiv(const Context *context,
                             angle::EntryPoint entryPoint,
-                            ShaderProgramID program,
-                            UniformLocation location,
+                            ShaderProgramID programPacked,
+                            UniformLocation locationPacked,
                             GLsizei bufSize,
                             const GLuint *params)
 {
-    return ValidateSizedGetUniform(context, entryPoint, program, location, bufSize, nullptr);
+    return ValidateSizedGetUniform(context, entryPoint, programPacked, locationPacked, bufSize);
 }
 
 bool ValidateIsEnabledi(const PrivateState &state,
@@ -522,17 +510,10 @@ bool ValidateIsEnabledi(const PrivateState &state,
             }
             break;
         default:
-            errors->validationErrorF(entryPoint, GL_INVALID_ENUM, kEnumNotSupported, target);
+            ANGLE_UNSAFE_TODO(
+                errors->validationErrorF(entryPoint, GL_INVALID_ENUM, kEnumNotSupported, target));
             return false;
     }
-    return true;
-}
-
-bool ValidateMinSampleShading(const PrivateState &state,
-                              ErrorSet *errors,
-                              angle::EntryPoint entryPoint,
-                              GLfloat value)
-{
     return true;
 }
 
@@ -569,21 +550,6 @@ bool ValidatePopDebugGroup(const Context *context, angle::EntryPoint entryPoint)
     return ValidatePopDebugGroupBase(context, entryPoint);
 }
 
-bool ValidatePrimitiveBoundingBox(const PrivateState &state,
-                                  ErrorSet *errors,
-                                  angle::EntryPoint entryPoint,
-                                  GLfloat minX,
-                                  GLfloat minY,
-                                  GLfloat minZ,
-                                  GLfloat minW,
-                                  GLfloat maxX,
-                                  GLfloat maxY,
-                                  GLfloat maxZ,
-                                  GLfloat maxW)
-{
-    return true;
-}
-
 bool ValidatePushDebugGroup(const Context *context,
                             angle::EntryPoint entryPoint,
                             GLenum source,
@@ -605,32 +571,26 @@ bool ValidateReadnPixels(const Context *context,
                          GLsizei bufSize,
                          const void *data)
 {
-    if (bufSize < 0)
-    {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kNegativeBufSize);
-        return false;
-    }
-
     return ValidateReadPixelsBase(context, entryPoint, x, y, width, height, format, type, bufSize,
-                                  nullptr, nullptr, nullptr, data);
+                                  data);
 }
 
 bool ValidateSamplerParameterIiv(const Context *context,
                                  angle::EntryPoint entryPoint,
-                                 SamplerID sampler,
-                                 GLenum pname,
+                                 SamplerID samplerPacked,
+                                 SamplerParameter pnamePacked,
                                  const GLint *param)
 {
-    return ValidateSamplerParameterBase(context, entryPoint, sampler, pname, -1, true, param);
+    return ValidateSamplerParameterBase(context, entryPoint, samplerPacked, pnamePacked, param);
 }
 
 bool ValidateSamplerParameterIuiv(const Context *context,
                                   angle::EntryPoint entryPoint,
-                                  SamplerID sampler,
-                                  GLenum pname,
+                                  SamplerID samplerPacked,
+                                  SamplerParameter pnamePacked,
                                   const GLuint *param)
 {
-    return ValidateSamplerParameterBase(context, entryPoint, sampler, pname, -1, true, param);
+    return ValidateSamplerParameterBase(context, entryPoint, samplerPacked, pnamePacked, param);
 }
 
 bool ValidateTexBuffer(const Context *context,
@@ -660,7 +620,7 @@ bool ValidateTexParameterIiv(const Context *context,
                              GLenum pname,
                              const GLint *params)
 {
-    return ValidateTexParameterBase(context, entryPoint, targetPacked, pname, -1, true, params);
+    return ValidateTexParameterBase(context, entryPoint, targetPacked, pname, params);
 }
 
 bool ValidateTexParameterIuiv(const Context *context,
@@ -669,7 +629,7 @@ bool ValidateTexParameterIuiv(const Context *context,
                               GLenum pname,
                               const GLuint *params)
 {
-    return ValidateTexParameterBase(context, entryPoint, targetPacked, pname, -1, true, params);
+    return ValidateTexParameterBase(context, entryPoint, targetPacked, pname, params);
 }
 
 bool ValidateTexStorage3DMultisample(const Context *context,

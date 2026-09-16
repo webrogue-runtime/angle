@@ -8,13 +8,10 @@
 //      to respective MTLPixelFormat and MTLVertexFormat.
 //
 
-#ifdef UNSAFE_BUFFERS_BUILD
-#    pragma allow_unsafe_buffers
-#endif
-
 #include "libANGLE/renderer/metal/mtl_format_utils.h"
 
 #include "common/debug.h"
+#include "common/unsafe_buffers.h"
 #include "libANGLE/renderer/Format.h"
 #include "libANGLE/renderer/load_functions_table.h"
 #include "libANGLE/renderer/metal/DisplayMtl.h"
@@ -167,6 +164,13 @@ bool Format::needConversion(angle::FormatID srcFormatId) const
 
 bool Format::isPVRTC() const
 {
+    // Suppress `MTLPixelFormatPVRTC_*` deprecation warnings.
+    // These enumerations are still relied on in the code, and
+    // therefore cannot be removed.
+    // TODO (crbug.com/383994655): Remove deprecation supression
+    // once `MTLPixelFormatPVRTC_*` is no longer needed.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     switch (metalFormat)
     {
         case MTLPixelFormatPVRTC_RGB_2BPP:
@@ -181,6 +185,7 @@ bool Format::isPVRTC() const
         default:
             return false;
     }
+#pragma clang diagnostic pop
 }
 
 // FormatTable implementation
@@ -233,7 +238,7 @@ const VertexFormat &FormatTable::getVertexFormat(angle::FormatID angleFormatId,
                                                  bool tightlyPacked) const
 {
     auto tableIdx = tightlyPacked ? 1 : 0;
-    return mVertexFormatTables[tableIdx][static_cast<size_t>(angleFormatId)];
+    return ANGLE_UNSAFE_TODO(mVertexFormatTables[tableIdx][static_cast<size_t>(angleFormatId)]);
 }
 
 void FormatTable::setFormatCaps(MTLPixelFormat formatId,
@@ -295,7 +300,9 @@ void FormatTable::setFormatCaps(MTLPixelFormat id,
     mNativePixelFormatCapsTable[id].pixelBytesMSAA  = pixelBytes;
     mNativePixelFormatCapsTable[id].channels        = channels;
     if (channels != 0)
+    {
         mNativePixelFormatCapsTable[id].alignment = MAX(pixelBytes / channels, 1U);
+    }
 }
 
 void FormatTable::setCompressedFormatCaps(MTLPixelFormat formatId, bool filterable)

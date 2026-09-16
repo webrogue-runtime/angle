@@ -21,6 +21,17 @@ pub mod ffi {
         Empty,
     }
 
+    #[derive(Copy, Clone)]
+    #[repr(u32)]
+    enum ASTForLoopConditionOp {
+        Equal,
+        NotEqual,
+        LessThan,
+        GreaterThan,
+        LessThanEqual,
+        GreaterThanEqual,
+    }
+
     unsafe extern "C++" {
         include!("compiler/translator/ir/src/builder.rs.h");
 
@@ -77,37 +88,46 @@ pub mod ffi {
         // SAFETY: The following functions produce an AST in C++ and use pool-allocated objects of
         // TType, TInterm* etc.  They take `*mut` pointers mirroring the existing legacy C++ AST
         // code.
-        unsafe fn make_basic_type(basic_type: ASTBasicType) -> *mut TType;
+        fn make_basic_type(basic_type: ASTBasicType) -> *mut TType;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn make_vector_type(scalar_type: *const TType, count: u32) -> *mut TType;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn make_matrix_type(vector_type: *const TType, count: u32) -> *mut TType;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn make_array_type(element_type: *const TType, count: u32) -> *mut TType;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn make_unsized_array_type(element_type: *const TType) -> *mut TType;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn make_struct_type(
             compiler: *mut TCompiler,
             name: &SymbolName,
             fields: &[ASTFieldInfo],
             is_interface_block: bool,
         ) -> *mut TType;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn declare_struct(
             compiler: *mut TCompiler,
             struct_type: *const TType,
         ) -> *mut TIntermNode;
 
-        unsafe fn make_float_constant(f: f32) -> *mut TIntermTyped;
-        unsafe fn make_int_constant(i: i32) -> *mut TIntermTyped;
-        unsafe fn make_uint_constant(u: u32) -> *mut TIntermTyped;
-        unsafe fn make_bool_constant(b: bool) -> *mut TIntermTyped;
-        unsafe fn make_yuv_csc_constant(yuv_csc: ASTYuvCscStandardEXT) -> *mut TIntermTyped;
+        fn make_float_constant(f: f32) -> *mut TIntermTyped;
+        fn make_int_constant(i: i32) -> *mut TIntermTyped;
+        fn make_uint_constant(u: u32) -> *mut TIntermTyped;
+        fn make_bool_constant(b: bool) -> *mut TIntermTyped;
+        fn make_yuv_csc_constant(yuv_csc: ASTYuvCscStandardEXT) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn make_composite_constant(
             elements: &[*mut TIntermTyped],
             constant_type: *const TType,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn make_constant_variable(
             compiler: *mut TCompiler,
             constant_type: *const TType,
             value: *mut TIntermTyped,
         ) -> *mut TIntermTyped;
 
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn make_variable(
             compiler: *mut TCompiler,
             name: &SymbolName,
@@ -116,6 +136,11 @@ pub mod ffi {
             is_redeclared_built_in: bool,
             is_static_use: bool,
         ) -> *mut TIntermTyped;
+        fn make_internal_variable_gl_layer_vs() -> *mut TIntermTyped;
+        fn make_internal_variable_gl_instanceid_es100() -> *mut TIntermTyped;
+        fn make_internal_variable_gl_instanceindex() -> *mut TIntermTyped;
+        fn make_internal_variable_gl_vertexindex() -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn make_nameless_block_field_variable(
             compiler: *mut TCompiler,
             variable: *mut TIntermTyped,
@@ -124,18 +149,23 @@ pub mod ffi {
             base_type: *const TType,
             ast_type: &ASTType,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn declare_variable(variable: *mut TIntermTyped) -> *mut TIntermNode;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn declare_variable_with_initializer(
             variable: *mut TIntermTyped,
             value: *mut TIntermTyped,
         ) -> *mut TIntermNode;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn globally_qualify_built_in_invariant(
             variable: *mut TIntermTyped,
         ) -> *mut TIntermNode;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn globally_qualify_built_in_precise(
             variable: *mut TIntermTyped,
         ) -> *mut TIntermNode;
 
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn make_function(
             compiler: *mut TCompiler,
             name: &SymbolName,
@@ -144,16 +174,24 @@ pub mod ffi {
             params: &[*mut TIntermTyped],
             param_directions: &[ASTQualifier],
         ) -> *mut TFunction;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn declare_function(
             function: *const TFunction,
             body: *mut TIntermBlock,
         ) -> *mut TIntermNode;
 
-        unsafe fn make_interm_block() -> *mut TIntermBlock;
+        fn make_interm_block() -> *mut TIntermBlock;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
+        unsafe fn append_typed_instruction_to_block(
+            block: *mut TIntermBlock,
+            node: *mut TIntermTyped,
+        );
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn append_instructions_to_block(
             block: *mut TIntermBlock,
             nodes: &[*mut TIntermNode],
         );
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn append_blocks_to_block(
             block: *mut TIntermBlock,
             blocks_to_append: &[*mut TIntermBlock],
@@ -168,711 +206,891 @@ pub mod ffi {
         // This may not be a problem as ultimately the output will be generated by the IR itself
         // and this file will go away.
 
-        unsafe fn swizzle(operand: &Expression, indices: &[u32]) -> *mut TIntermTyped;
-        unsafe fn index(operand: &Expression, index: &Expression) -> *mut TIntermTyped;
-        unsafe fn select_field(operand: &Expression, field_index: u32) -> *mut TIntermTyped;
+        fn swizzle(operand: &Expression, indices: &[u32]) -> *mut TIntermTyped;
+        fn index(operand: &Expression, index: &Expression) -> *mut TIntermTyped;
+        fn select_field(operand: &Expression, field_index: u32) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn construct(
             construct_type: *const TType,
             operands: &[Expression],
         ) -> *mut TIntermTyped;
-        unsafe fn store(pointer: &Expression, value: &Expression) -> *mut TIntermNode;
+        fn store(pointer: &Expression, value: &Expression) -> *mut TIntermNode;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn call(function: *const TFunction, args: &[Expression]) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn call_void(function: *const TFunction, args: &[Expression]) -> *mut TIntermNode;
 
-        unsafe fn array_length(operand: &Expression) -> *mut TIntermTyped;
-        unsafe fn negate(operand: &Expression) -> *mut TIntermTyped;
-        unsafe fn postfix_increment(operand: &Expression) -> *mut TIntermTyped;
-        unsafe fn postfix_decrement(operand: &Expression) -> *mut TIntermTyped;
-        unsafe fn prefix_increment(operand: &Expression) -> *mut TIntermTyped;
-        unsafe fn prefix_decrement(operand: &Expression) -> *mut TIntermTyped;
-        unsafe fn logical_not(operand: &Expression) -> *mut TIntermTyped;
-        unsafe fn bitwise_not(operand: &Expression) -> *mut TIntermTyped;
+        fn array_length(operand: &Expression) -> *mut TIntermTyped;
+        fn negate(operand: &Expression) -> *mut TIntermTyped;
+        fn postfix_increment(operand: &Expression) -> *mut TIntermTyped;
+        fn postfix_decrement(operand: &Expression) -> *mut TIntermTyped;
+        fn prefix_increment(operand: &Expression) -> *mut TIntermTyped;
+        fn prefix_decrement(operand: &Expression) -> *mut TIntermTyped;
+        fn logical_not(operand: &Expression) -> *mut TIntermTyped;
+        fn bitwise_not(operand: &Expression) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_radians(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_degrees(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_sin(compiler: *mut TCompiler, operand: &Expression)
         -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_cos(compiler: *mut TCompiler, operand: &Expression)
         -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_tan(compiler: *mut TCompiler, operand: &Expression)
         -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_asin(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_acos(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_atan(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_sinh(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_cosh(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_tanh(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_asinh(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_acosh(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_atanh(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_exp(compiler: *mut TCompiler, operand: &Expression)
         -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_log(compiler: *mut TCompiler, operand: &Expression)
         -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_exp2(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_log2(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_sqrt(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_inversesqrt(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_abs(compiler: *mut TCompiler, operand: &Expression)
         -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_sign(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_floor(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_trunc(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_round(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_roundeven(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_ceil(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_fract(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_isnan(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_isinf(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_floatbitstoint(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_floatbitstouint(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_intbitstofloat(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_uintbitstofloat(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_packsnorm2x16(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_packhalf2x16(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_unpacksnorm2x16(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_unpackhalf2x16(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_packunorm2x16(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_unpackunorm2x16(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_packunorm4x8(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_packsnorm4x8(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_unpackunorm4x8(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_unpacksnorm4x8(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_length(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_normalize(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_transpose(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_determinant(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_inverse(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_any(compiler: *mut TCompiler, operand: &Expression)
         -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_all(compiler: *mut TCompiler, operand: &Expression)
         -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_not(compiler: *mut TCompiler, operand: &Expression)
         -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_bitfieldreverse(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_bitcount(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_findlsb(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_findmsb(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_dfdx(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_dfdy(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_fwidth(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_interpolateatcentroid(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_atomiccounter(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_atomiccounterincrement(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_atomiccounterdecrement(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_imagesize(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_pixellocalload(
             compiler: *mut TCompiler,
             operand: &Expression,
         ) -> *mut TIntermTyped;
 
-        unsafe fn add(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
-        unsafe fn sub(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
-        unsafe fn mul(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
-        unsafe fn vector_times_scalar(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
-        unsafe fn matrix_times_scalar(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
-        unsafe fn vector_times_matrix(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
-        unsafe fn matrix_times_vector(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
-        unsafe fn matrix_times_matrix(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
-        unsafe fn div(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
-        unsafe fn imod(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
-        unsafe fn logical_xor(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
-        unsafe fn equal(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
-        unsafe fn not_equal(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
-        unsafe fn less_than(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
-        unsafe fn greater_than(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
-        unsafe fn less_than_equal(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
-        unsafe fn greater_than_equal(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
-        unsafe fn bit_shift_left(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
-        unsafe fn bit_shift_right(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
-        unsafe fn bitwise_or(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
-        unsafe fn bitwise_xor(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
-        unsafe fn bitwise_and(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
+        fn add(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
+        fn sub(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
+        fn mul(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
+        fn vector_times_scalar(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
+        fn matrix_times_scalar(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
+        fn vector_times_matrix(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
+        fn matrix_times_vector(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
+        fn matrix_times_matrix(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
+        fn div(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
+        fn imod(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
+        fn logical_xor(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
+        fn equal(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
+        fn not_equal(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
+        fn less_than(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
+        fn greater_than(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
+        fn less_than_equal(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
+        fn greater_than_equal(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
+        fn bit_shift_left(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
+        fn bit_shift_right(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
+        fn bitwise_or(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
+        fn bitwise_xor(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
+        fn bitwise_and(lhs: &Expression, rhs: &Expression) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_atan_binary(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_pow(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_mod(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_min(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_max(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_step(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_modf(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_frexp(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_ldexp(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_distance(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_dot(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_cross(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_reflect(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_matrixcompmult(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_outerproduct(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_lessthanvec(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_lessthanequalvec(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_greaterthanvec(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_greaterthanequalvec(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_equalvec(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_notequalvec(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_interpolateatsample(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_interpolateatoffset(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_atomicadd(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_atomicmin(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_atomicmax(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_atomicand(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_atomicor(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_atomicxor(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_atomicexchange(
             compiler: *mut TCompiler,
             lhs: &Expression,
             rhs: &Expression,
         ) -> *mut TIntermTyped;
 
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_clamp(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_mix(compiler: *mut TCompiler, args: &[Expression]) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_smoothstep(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_fma(compiler: *mut TCompiler, args: &[Expression]) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_faceforward(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_refract(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_bitfieldextract(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_bitfieldinsert(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_uaddcarry(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_usubborrow(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_umulextended(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermNode;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_imulextended(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermNode;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_texturesize(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_texturequerylod(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_texelfetch(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_texelfetchoffset(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_rgb_2_yuv(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_yuv_2_rgb(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_atomiccompswap(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_imagestore(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermNode;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_imageload(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_imageatomicadd(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_imageatomicmin(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_imageatomicmax(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_imageatomicand(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_imageatomicor(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_imageatomicxor(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_imageatomicexchange(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_imageatomiccompswap(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_pixellocalstore(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermNode;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_memorybarrier(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermNode;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_memorybarrieratomiccounter(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermNode;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_memorybarrierbuffer(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermNode;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_memorybarrierimage(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermNode;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_barrier(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermNode;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_memorybarriershared(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermNode;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_groupmemorybarrier(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermNode;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_emitvertex(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermNode;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_endprimitive(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermNode;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_subpassload(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_begininvocationinterlocknv(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermNode;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_endinvocationinterlocknv(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermNode;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_beginfragmentshaderorderingintel(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermNode;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_begininvocationinterlockarb(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermNode;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_endinvocationinterlockarb(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermNode;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_numsamples(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_sampleposition(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_interpolateatcenter(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_loopforwardprogress(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermNode;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_saturate(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
 
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_texture(
             compiler: *mut TCompiler,
             args: &[Expression],
             sampler_type: ASTBasicType,
             is_proj: bool,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_textureoffset(
             compiler: *mut TCompiler,
             args: &[Expression],
             is_proj: bool,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_texture_with_compare(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_texturelod(
             compiler: *mut TCompiler,
             args: &[Expression],
             sampler_type: ASTBasicType,
             is_proj: bool,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_texturelodoffset(
             compiler: *mut TCompiler,
             args: &[Expression],
             is_proj: bool,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_texturelod_with_compare(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_texturegrad(
             compiler: *mut TCompiler,
             args: &[Expression],
             sampler_type: ASTBasicType,
             is_proj: bool,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_texturegradoffset(
             compiler: *mut TCompiler,
             args: &[Expression],
             is_proj: bool,
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_texturegather(
             compiler: *mut TCompiler,
             args: &[Expression],
         ) -> *mut TIntermTyped;
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn built_in_texturegatheroffset(
             compiler: *mut TCompiler,
             args: &[Expression],
             is_offset_array: bool,
         ) -> *mut TIntermTyped;
 
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn branch_discard(block: *mut TIntermBlock);
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn branch_return(block: *mut TIntermBlock);
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn branch_return_value(block: *mut TIntermBlock, value: &Expression);
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn branch_break(block: *mut TIntermBlock);
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn branch_continue(block: *mut TIntermBlock);
 
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn branch_if(
             block: *mut TIntermBlock,
             condition: &Expression,
             true_block: *mut TIntermBlock,
         );
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn branch_if_else(
             block: *mut TIntermBlock,
             condition: &Expression,
             true_block: *mut TIntermBlock,
             false_block: *mut TIntermBlock,
         );
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn branch_loop(
             block: *mut TIntermBlock,
             loop_condition_block: *mut TIntermBlock,
             body_block: *mut TIntermBlock,
         );
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn branch_do_loop(block: *mut TIntermBlock, body_block: *mut TIntermBlock);
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
+        unsafe fn branch_for_loop(
+            block: *mut TIntermBlock,
+            loop_variable_declaration: *mut TIntermNode,
+            loop_variable: *mut TIntermTyped,
+            condition_op: ASTForLoopConditionOp,
+            condition_comparator: *mut TIntermTyped,
+            ascending: bool,
+            increment_step: *mut TIntermTyped,
+            body_block: *mut TIntermBlock,
+        );
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn branch_loop_if(block: *mut TIntermBlock, condition: &Expression);
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn branch_switch(
             block: *mut TIntermBlock,
             value: &Expression,
@@ -880,6 +1098,7 @@ pub mod ffi {
             case_blocks: &[*mut TIntermBlock],
         );
 
+        // SAFETY: Pointers must be obtained from C++ and passed back to it.
         unsafe fn finalize(
             legacy_compiler: *mut TCompiler,
             type_declarations: &[*mut TIntermNode],
@@ -997,6 +1216,9 @@ pub struct Generator<'options> {
     expressions: HashMap<RegisterId, *mut TIntermTyped>,
     needs_deep_copy: HashSet<RegisterId>,
 
+    // `for` loop variable declarations are deferred.
+    for_loop_variable_declarations: HashMap<VariableId, *mut TIntermNode>,
+
     // Used by legacy code to declare types and variables.
     legacy_compiler: *mut TCompiler,
     // Derived from the GLSL version, used to decide which built-in to use, e.g. texture2D() vs
@@ -1021,6 +1243,7 @@ impl<'options> Generator<'options> {
             function_declarations: Vec::new(),
             expressions: HashMap::new(),
             needs_deep_copy: HashSet::new(),
+            for_loop_variable_declarations: HashMap::new(),
             legacy_compiler,
             options,
         }
@@ -1054,16 +1277,26 @@ impl<'options> Generator<'options> {
         }
     }
 
-    fn legacy_struct_symbol_type(name: &Name) -> ffi::ASTSymbolType {
+    fn legacy_struct_symbol_type(
+        name: &Name,
+        is_type_of_shader_input_output: bool,
+    ) -> ffi::ASTSymbolType {
         // For structs, the rules are a little different compared with other symbols:
         //
-        // * Structs at global scope are marked as ShaderInterface, but their symbol type is
-        //   AngleInternal instead of Empty.
+        // * Structs at global scope are marked as ShaderInterface, but for anonymous structs their
+        //   symbol type is AngleInternal except for shader input/output variables where the
+        //   corresponding anonymous struct has a symbol type of Empty.  This helps the generators
+        //   know whether they have to declare the struct without a name and together with the
+        //   shader input/output variable.
         // * gl_DepthRangeParameters needs to be handled and given a BuiltIn symbol type.
         match name.source {
             NameSource::ShaderInterface | NameSource::Temporary => {
                 if name.name.is_empty() {
-                    ffi::ASTSymbolType::AngleInternal
+                    if is_type_of_shader_input_output {
+                        ffi::ASTSymbolType::Empty
+                    } else {
+                        ffi::ASTSymbolType::AngleInternal
+                    }
                 } else {
                     ffi::ASTSymbolType::UserDefined
                 }
@@ -1081,8 +1314,24 @@ impl<'options> Generator<'options> {
     fn id_to_append(name: &Name, id: u32) -> u32 {
         if name.source == NameSource::Temporary && !name.name.is_empty() {
             id
+        } else if let Some(suffix) = name.suffix {
+            suffix
         } else {
             SYMBOL_NAME_NO_ID
+        }
+    }
+
+    // For structs, an id is always appended if the name is not empty.  This makes sure there is no
+    // collision between global struct names and local structs that are moved to the global scope.
+    // For global structs, an id of 0 is always used to make sure names match across shader
+    // interfaces.
+    fn struct_id_to_append(name: &Name, specialization: StructSpecialization, id: u32) -> u32 {
+        if name.name.is_empty() || specialization == StructSpecialization::InterfaceBlock {
+            SYMBOL_NAME_NO_ID
+        } else if name.source == NameSource::Temporary {
+            id
+        } else {
+            0
         }
     }
 
@@ -1198,11 +1447,12 @@ impl<'options> Generator<'options> {
                             }
                         }
                     } else {
-                        match (image_type.is_ms, image_type.is_array) {
-                            (false, false) => ffi::ASTBasicType::Image2D,
-                            (false, true) => ffi::ASTBasicType::Image2DArray,
-                            (true, false) => ffi::ASTBasicType::Image2DMS,
-                            (true, true) => ffi::ASTBasicType::Image2DMSArray,
+                        // Multisampled storage images are a desktop GLSL feature
+                        debug_assert!(!image_type.is_ms);
+                        if image_type.is_array {
+                            ffi::ASTBasicType::Image2DArray
+                        } else {
+                            ffi::ASTBasicType::Image2D
                         }
                     }
                 }
@@ -1215,11 +1465,11 @@ impl<'options> Generator<'options> {
                             (true, true) => ffi::ASTBasicType::ISampler2DMSArray,
                         }
                     } else {
-                        match (image_type.is_ms, image_type.is_array) {
-                            (false, false) => ffi::ASTBasicType::IImage2D,
-                            (false, true) => ffi::ASTBasicType::IImage2DArray,
-                            (true, false) => ffi::ASTBasicType::IImage2DMS,
-                            (true, true) => ffi::ASTBasicType::IImage2DMSArray,
+                        debug_assert!(!image_type.is_ms);
+                        if image_type.is_array {
+                            ffi::ASTBasicType::IImage2DArray
+                        } else {
+                            ffi::ASTBasicType::IImage2D
                         }
                     }
                 }
@@ -1231,13 +1481,10 @@ impl<'options> Generator<'options> {
                             (true, false) => ffi::ASTBasicType::USampler2DMS,
                             (true, true) => ffi::ASTBasicType::USampler2DMSArray,
                         }
+                    } else if image_type.is_array {
+                        ffi::ASTBasicType::UImage2DArray
                     } else {
-                        match (image_type.is_ms, image_type.is_array) {
-                            (false, false) => ffi::ASTBasicType::UImage2D,
-                            (false, true) => ffi::ASTBasicType::UImage2DArray,
-                            (true, false) => ffi::ASTBasicType::UImage2DMS,
-                            (true, true) => ffi::ASTBasicType::UImage2DMSArray,
-                        }
+                        ffi::ASTBasicType::UImage2D
                     }
                 }
             },
@@ -1273,19 +1520,15 @@ impl<'options> Generator<'options> {
                             } else {
                                 ffi::ASTBasicType::SamplerCubeShadow
                             }
+                        } else if image_type.is_array {
+                            ffi::ASTBasicType::SamplerCubeArray
                         } else {
-                            if image_type.is_array {
-                                ffi::ASTBasicType::SamplerCubeArray
-                            } else {
-                                ffi::ASTBasicType::SamplerCube
-                            }
+                            ffi::ASTBasicType::SamplerCube
                         }
+                    } else if image_type.is_array {
+                        ffi::ASTBasicType::ImageCubeArray
                     } else {
-                        if image_type.is_array {
-                            ffi::ASTBasicType::ImageCubeArray
-                        } else {
-                            ffi::ASTBasicType::ImageCube
-                        }
+                        ffi::ASTBasicType::ImageCube
                     }
                 }
                 ImageBasicType::Int => {
@@ -1295,12 +1538,10 @@ impl<'options> Generator<'options> {
                         } else {
                             ffi::ASTBasicType::ISamplerCube
                         }
+                    } else if image_type.is_array {
+                        ffi::ASTBasicType::IImageCubeArray
                     } else {
-                        if image_type.is_array {
-                            ffi::ASTBasicType::IImageCubeArray
-                        } else {
-                            ffi::ASTBasicType::IImageCube
-                        }
+                        ffi::ASTBasicType::IImageCube
                     }
                 }
                 ImageBasicType::Uint => {
@@ -1310,38 +1551,20 @@ impl<'options> Generator<'options> {
                         } else {
                             ffi::ASTBasicType::USamplerCube
                         }
+                    } else if image_type.is_array {
+                        ffi::ASTBasicType::UImageCubeArray
                     } else {
-                        if image_type.is_array {
-                            ffi::ASTBasicType::UImageCubeArray
-                        } else {
-                            ffi::ASTBasicType::UImageCube
-                        }
+                        ffi::ASTBasicType::UImageCube
                     }
                 }
             },
-            ImageDimension::Rect => match image_basic_type {
-                ImageBasicType::Float => {
-                    if image_type.is_sampled {
-                        ffi::ASTBasicType::Sampler2DRect
-                    } else {
-                        ffi::ASTBasicType::ImageRect
-                    }
-                }
-                ImageBasicType::Int => {
-                    if image_type.is_sampled {
-                        ffi::ASTBasicType::ISampler2DRect
-                    } else {
-                        ffi::ASTBasicType::IImageRect
-                    }
-                }
-                ImageBasicType::Uint => {
-                    if image_type.is_sampled {
-                        ffi::ASTBasicType::USampler2DRect
-                    } else {
-                        ffi::ASTBasicType::UImageRect
-                    }
-                }
-            },
+            ImageDimension::Rect => {
+                // Only float rect samplers are exposed via GL_ANGLE_texture_rectangle.
+                debug_assert!(image_basic_type == ImageBasicType::Float);
+                // Rect storage images are a desktop GLSL feature
+                debug_assert!(image_type.is_sampled);
+                ffi::ASTBasicType::Sampler2DRect
+            }
             ImageDimension::Buffer => match image_basic_type {
                 ImageBasicType::Float => {
                     if image_type.is_sampled {
@@ -1367,7 +1590,6 @@ impl<'options> Generator<'options> {
             },
             ImageDimension::External => ffi::ASTBasicType::SamplerExternalOES,
             ImageDimension::ExternalY2Y => ffi::ASTBasicType::SamplerExternal2DY2YEXT,
-            ImageDimension::Video => ffi::ASTBasicType::SamplerVideoWEBGL,
             ImageDimension::PixelLocal => match image_basic_type {
                 ImageBasicType::Float => ffi::ASTBasicType::PixelLocalANGLE,
                 ImageBasicType::Int => ffi::ASTBasicType::IPixelLocalANGLE,
@@ -1390,8 +1612,10 @@ impl<'options> Generator<'options> {
     ) -> ffi::ASTQualifier {
         if let Some(built_in) = built_in {
             match built_in {
-                BuiltIn::InstanceID => ffi::ASTQualifier::InstanceID,
-                BuiltIn::VertexID => ffi::ASTQualifier::VertexID,
+                // Note: the AST uses the same Instance/VertexID qualifiers for
+                // Instance/VertexIndex.
+                BuiltIn::InstanceID | BuiltIn::InstanceIndex => ffi::ASTQualifier::InstanceID,
+                BuiltIn::VertexID | BuiltIn::VertexIndex => ffi::ASTQualifier::VertexID,
                 BuiltIn::Position => ffi::ASTQualifier::Position,
                 BuiltIn::PointSize => ffi::ASTQualifier::PointSize,
                 BuiltIn::BaseVertex => ffi::ASTQualifier::BaseVertex,
@@ -1422,7 +1646,6 @@ impl<'options> Generator<'options> {
                 BuiltIn::SampleMask => ffi::ASTQualifier::SampleMask,
                 BuiltIn::NumSamples => ffi::ASTQualifier::NumSamples,
                 BuiltIn::NumWorkGroups => ffi::ASTQualifier::NumWorkGroups,
-                BuiltIn::WorkGroupSize => ffi::ASTQualifier::WorkGroupSize,
                 BuiltIn::WorkGroupID => ffi::ASTQualifier::WorkGroupID,
                 BuiltIn::LocalInvocationID => ffi::ASTQualifier::LocalInvocationID,
                 BuiltIn::GlobalInvocationID => ffi::ASTQualifier::GlobalInvocationID,
@@ -1439,45 +1662,26 @@ impl<'options> Generator<'options> {
                 BuiltIn::TessLevelInner => ffi::ASTQualifier::TessLevelInner,
                 BuiltIn::TessCoord => ffi::ASTQualifier::TessCoord,
                 BuiltIn::BoundingBoxOES => ffi::ASTQualifier::BoundingBox,
-                BuiltIn::PixelLocalEXT => ffi::ASTQualifier::PixelLocalEXT,
             }
-        } else if decorations
-            .decorations
-            .iter()
-            .any(|&decoration| matches!(decoration, Decoration::SpecConst(_)))
-        {
+        } else if has_decoration!(decorations, Decoration::SpecConst) {
             ffi::ASTQualifier::SpecConst
+        } else if decorations.has(Decoration::EmulatedViewIDOut)
+            || decorations.has(Decoration::EmulatedViewIDIn)
+        {
+            ffi::ASTQualifier::EmulatedViewIDOVR
         } else {
-            let is_input =
-                decorations.decorations.iter().any(|&decoration| decoration == Decoration::Input);
-            let is_output =
-                decorations.decorations.iter().any(|&decoration| decoration == Decoration::Output);
-            let is_inout = decorations
-                .decorations
-                .iter()
-                .any(|&decoration| decoration == Decoration::InputOutput);
-            let is_uniform =
-                decorations.decorations.iter().any(|&decoration| decoration == Decoration::Uniform);
-            let is_buffer =
-                decorations.decorations.iter().any(|&decoration| decoration == Decoration::Buffer);
-            let is_shared =
-                decorations.decorations.iter().any(|&decoration| decoration == Decoration::Shared);
-            let is_smooth =
-                decorations.decorations.iter().any(|&decoration| decoration == Decoration::Smooth);
-            let is_flat =
-                decorations.decorations.iter().any(|&decoration| decoration == Decoration::Flat);
-            let is_noperspective = decorations
-                .decorations
-                .iter()
-                .any(|&decoration| decoration == Decoration::NoPerspective);
-            let is_centroid = decorations
-                .decorations
-                .iter()
-                .any(|&decoration| decoration == Decoration::Centroid);
-            let is_sample =
-                decorations.decorations.iter().any(|&decoration| decoration == Decoration::Sample);
-            let is_patch =
-                decorations.decorations.iter().any(|&decoration| decoration == Decoration::Patch);
+            let is_input = decorations.has(Decoration::Input);
+            let is_output = decorations.has(Decoration::Output);
+            let is_inout = decorations.has(Decoration::InputOutput);
+            let is_uniform = decorations.has(Decoration::Uniform);
+            let is_buffer = decorations.has(Decoration::Buffer);
+            let is_shared = decorations.has(Decoration::Shared);
+            let is_smooth = decorations.has(Decoration::Smooth);
+            let is_flat = decorations.has(Decoration::Flat);
+            let is_noperspective = decorations.has(Decoration::NoPerspective);
+            let is_centroid = decorations.has(Decoration::Centroid);
+            let is_sample = decorations.has(Decoration::Sample);
+            let is_patch = decorations.has(Decoration::Patch);
 
             if is_uniform {
                 ffi::ASTQualifier::Uniform
@@ -1597,7 +1801,6 @@ impl<'options> Generator<'options> {
             offset: -1,
             depth: ffi::ASTLayoutDepth::Unspecified,
             image_internal_format: ffi::ASTLayoutImageInternalFormat::Unspecified,
-            num_views: -1,
             yuv: false,
             index: -1,
             noncoherent: false,
@@ -1610,7 +1813,7 @@ impl<'options> Generator<'options> {
             match decoration {
                 Decoration::PushConstant => layout_qualifier.push_constant = true,
                 Decoration::NonCoherent => layout_qualifier.noncoherent = true,
-                Decoration::YUV => layout_qualifier.yuv = true,
+                Decoration::Yuv => layout_qualifier.yuv = true,
                 Decoration::Location(location) => layout_qualifier.location = location as i32,
                 Decoration::Index(index) => layout_qualifier.index = index as i32,
                 Decoration::InputAttachmentIndex(index) => {
@@ -1627,7 +1830,6 @@ impl<'options> Generator<'options> {
                 Decoration::ImageInternalFormat(format) => {
                     layout_qualifier.image_internal_format = format.into()
                 }
-                Decoration::NumViews(num_views) => layout_qualifier.num_views = num_views as i32,
                 Decoration::RasterOrdered => layout_qualifier.raster_ordered = true,
                 _ => (),
             };
@@ -1637,16 +1839,11 @@ impl<'options> Generator<'options> {
     }
 
     fn get_memory_qualifier(decorations: &Decorations) -> ffi::ASTMemoryQualifier {
-        let readonly =
-            decorations.decorations.iter().any(|&decoration| decoration == Decoration::ReadOnly);
-        let writeonly =
-            decorations.decorations.iter().any(|&decoration| decoration == Decoration::WriteOnly);
-        let coherent =
-            decorations.decorations.iter().any(|&decoration| decoration == Decoration::Coherent);
-        let restrict_qualifier =
-            decorations.decorations.iter().any(|&decoration| decoration == Decoration::Restrict);
-        let volatile_qualifier =
-            decorations.decorations.iter().any(|&decoration| decoration == Decoration::Volatile);
+        let readonly = decorations.has(Decoration::ReadOnly);
+        let writeonly = decorations.has(Decoration::WriteOnly);
+        let coherent = decorations.has(Decoration::Coherent);
+        let restrict_qualifier = decorations.has(Decoration::Restrict);
+        let volatile_qualifier = decorations.has(Decoration::Volatile);
 
         ffi::ASTMemoryQualifier {
             readonly,
@@ -1661,16 +1858,13 @@ impl<'options> Generator<'options> {
         shader_type: ShaderType,
         is_es1: bool,
         precision: Precision,
+        precise: bool,
         decorations: &Decorations,
         built_in: Option<BuiltIn>,
         is_global: bool,
     ) -> ffi::ASTType {
-        let invariant =
-            decorations.decorations.iter().any(|&decoration| decoration == Decoration::Invariant);
-        let precise =
-            decorations.decorations.iter().any(|&decoration| decoration == Decoration::Precise);
-        let interpolant =
-            decorations.decorations.iter().any(|&decoration| decoration == Decoration::Interpolant);
+        let invariant = decorations.has(Decoration::Invariant);
+        let interpolant = decorations.has(Decoration::Interpolant);
 
         ffi::ASTType {
             // Note: TypeId is unused after going back to AST.
@@ -1689,6 +1883,8 @@ impl<'options> Generator<'options> {
         match built_in {
             BuiltIn::InstanceID => "gl_InstanceID",
             BuiltIn::VertexID => "gl_VertexID",
+            BuiltIn::InstanceIndex => "gl_InstanceIndex",
+            BuiltIn::VertexIndex => "gl_VertexIndex",
             BuiltIn::Position => "gl_Position",
             BuiltIn::PointSize => "gl_PointSize",
             BuiltIn::BaseVertex => "gl_BaseVertex",
@@ -1725,7 +1921,6 @@ impl<'options> Generator<'options> {
             BuiltIn::SampleMask => "gl_SampleMask",
             BuiltIn::NumSamples => "gl_NumSamples",
             BuiltIn::NumWorkGroups => "gl_NumWorkGroups",
-            BuiltIn::WorkGroupSize => "gl_WorkGroupSize",
             BuiltIn::WorkGroupID => "gl_WorkGroupID",
             BuiltIn::LocalInvocationID => "gl_LocalInvocationID",
             BuiltIn::GlobalInvocationID => "gl_GlobalInvocationID",
@@ -1748,7 +1943,6 @@ impl<'options> Generator<'options> {
             BuiltIn::TessLevelInner => "gl_TessLevelInner",
             BuiltIn::TessCoord => "gl_TessCoord",
             BuiltIn::BoundingBoxOES => "gl_BoundingBoxOES",
-            BuiltIn::PixelLocalEXT => "gl_PixelLocalEXT",
         }
     }
 
@@ -1759,8 +1953,10 @@ impl<'options> Generator<'options> {
     ) -> *mut TIntermNode {
         if let Some(constant_id) = initializer {
             let initializer = self.constants[&constant_id];
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
             unsafe { ffi::declare_variable_with_initializer(variable, initializer) }
         } else {
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
             unsafe { ffi::declare_variable(variable) }
         }
     }
@@ -1789,6 +1985,7 @@ impl ast::Target for Generator<'_> {
 
     fn begin(&mut self) {}
     fn end(&mut self) -> *mut TIntermBlock {
+        // SAFETY: Pointers are obtained from C++ and passed back to it.
         unsafe {
             ffi::finalize(
                 self.legacy_compiler,
@@ -1801,24 +1998,28 @@ impl ast::Target for Generator<'_> {
 
     fn new_type(&mut self, ir_meta: &IRMeta, id: TypeId, type_info: &Type) {
         let legacy_type = match type_info {
-            &Type::Scalar(basic_type) => unsafe {
+            &Type::Scalar(basic_type) =>
                 ffi::make_basic_type(Self::legacy_basic_type(basic_type))
-            },
+            ,
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
             &Type::Vector(type_id, count) => unsafe {
                 ffi::make_vector_type(self.types[&type_id], count)
             },
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
             &Type::Matrix(type_id, count) => unsafe {
                 ffi::make_matrix_type(self.types[&type_id], count)
             },
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
             &Type::Array(type_id, count) => unsafe {
                 ffi::make_array_type(self.types[&type_id], count)
             },
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
             &Type::UnsizedArray(type_id) => unsafe {
                 ffi::make_unsized_array_type(self.types[&type_id])
             },
-            &Type::Image(basic_type, ref image_type) => unsafe {
+            &Type::Image(basic_type, ref image_type) =>
                 ffi::make_basic_type(Self::legacy_image_basic_type(basic_type, image_type))
-            },
+            ,
             Type::Struct(name, fields, specialization) => {
                 let is_interface_block = *specialization == StructSpecialization::InterfaceBlock;
                 let fields = fields
@@ -1830,6 +2031,7 @@ impl ast::Target for Generator<'_> {
                             ir_meta.get_shader_type(),
                             self.options.is_es1,
                             field.precision,
+                            field.precise,
                             &field.decorations,
                             None,
                             // AST marks fields as EvqGlobal
@@ -1838,20 +2040,30 @@ impl ast::Target for Generator<'_> {
                     })
                     .collect::<Vec<_>>();
 
-                let symbol_type = Self::legacy_struct_symbol_type(name);
+                // If the struct is nameless but is used to declare a shader input or output
+                // variable, it has to stay nameless.
+                let is_type_of_shader_input_output = name.name.is_empty() && ir_meta.all_global_variables().iter().any(|&variable_id| {
+                        let variable = ir_meta.get_variable(variable_id);
+                        ir_meta.get_pointee_type(variable.type_id) == id &&
+                            (variable.decorations.has(Decoration::Input) || variable.decorations.has(Decoration::Output))
+                    });
+
+                let symbol_type = Self::legacy_struct_symbol_type(name, is_type_of_shader_input_output);
+                // SAFETY: Pointers are obtained from C++ and passed back to it.
                 let legacy_type = unsafe {
                     ffi::make_struct_type(
                         self.legacy_compiler,
                         &ffi::SymbolName {
                             name: name.name,
                             symbol_type,
-                            id: Self::id_to_append(name, id.id),
+                            id: Self::struct_id_to_append(name, *specialization, id.id),
                         },
                         &fields,
                         is_interface_block,
                     )
                 };
                 if !is_interface_block && symbol_type != ffi::ASTSymbolType::BuiltIn {
+                    // SAFETY: Pointers are obtained from C++ and passed back to it.
                     self.type_declarations
                         .push(unsafe { ffi::declare_struct(self.legacy_compiler, legacy_type) });
                 }
@@ -1859,6 +2071,9 @@ impl ast::Target for Generator<'_> {
                 legacy_type
             }
             &Type::Pointer(pointee_type_id) => self.types[&pointee_type_id],
+            Type::DeadCodeEliminated => {
+                return;
+            }
         };
 
         self.types.insert(id, legacy_type);
@@ -1866,16 +2081,15 @@ impl ast::Target for Generator<'_> {
 
     fn new_constant(&mut self, ir_meta: &IRMeta, id: ConstantId, constant: &Constant) {
         let constant = match &constant.value {
-            &ConstantValue::Float(f) => unsafe { ffi::make_float_constant(f) },
-            &ConstantValue::Int(i) => unsafe { ffi::make_int_constant(i) },
-            &ConstantValue::Uint(u) => unsafe { ffi::make_uint_constant(u) },
-            &ConstantValue::Bool(b) => unsafe { ffi::make_bool_constant(b) },
-            &ConstantValue::YuvCsc(yuv_csc) => unsafe {
-                ffi::make_yuv_csc_constant(yuv_csc.into())
-            },
+            &ConstantValue::Float(f) => ffi::make_float_constant(f),
+            &ConstantValue::Int(i) => ffi::make_int_constant(i),
+            &ConstantValue::Uint(u) => ffi::make_uint_constant(u),
+            &ConstantValue::Bool(b) => ffi::make_bool_constant(b),
+            &ConstantValue::YuvCsc(yuv_csc) => ffi::make_yuv_csc_constant(yuv_csc.into()),
             ConstantValue::Composite(elements) => {
                 let constant_type = self.types[&constant.type_id];
                 let type_info = ir_meta.get_type(constant.type_id);
+                // SAFETY: Pointers are obtained from C++ and passed back to it.
                 let value = unsafe {
                     ffi::make_composite_constant(
                         &elements.iter().map(|element| self.constants[element]).collect::<Vec<_>>(),
@@ -1894,9 +2108,11 @@ impl ast::Target for Generator<'_> {
                 // For simplicity, small struct constants are also placed in variables (which is
                 // not a common scenario).
                 if type_info.is_array() || type_info.is_struct() {
+                    // SAFETY: Pointers are obtained from C++ and passed back to it.
                     let variable = unsafe {
                         ffi::make_constant_variable(self.legacy_compiler, constant_type, value)
                     };
+                    // SAFETY: Pointers are obtained from C++ and passed back to it.
                     let declaration =
                         unsafe { ffi::declare_variable_with_initializer(variable, value) };
 
@@ -1912,12 +2128,42 @@ impl ast::Target for Generator<'_> {
     }
 
     fn new_variable(&mut self, ir_meta: &IRMeta, id: VariableId, variable: &Variable) {
+        // Some variables are not valid in ESSL, and are declared as internal to the backends.
+        // Some others are not valid in lower ESSL versions, but are not used in ESSL output in the
+        // end.
+        //
+        // Those need to be directly retrieved from BuiltInVariable::gl_Foo, and won't be found in
+        // the symbol table.
+        let internal_variable =
+            match (variable.built_in, ir_meta.get_shader_type(), self.options.shader_version) {
+                // Used by multiview emulation, gl_Layer does not exist in vertex shaders.
+                (Some(BuiltIn::LayerOut), ShaderType::Vertex, _) => {
+                    Some(ffi::make_internal_variable_gl_layer_vs())
+                }
+                // Used by multiview emulation, gl_InstanceID does not exist in ESSL 100.
+                (Some(BuiltIn::InstanceID), _, 100) => {
+                    Some(ffi::make_internal_variable_gl_instanceid_es100())
+                }
+                (Some(BuiltIn::InstanceIndex), _, _) => {
+                    Some(ffi::make_internal_variable_gl_instanceindex())
+                }
+                (Some(BuiltIn::VertexIndex), _, _) => {
+                    Some(ffi::make_internal_variable_gl_vertexindex())
+                }
+                _ => None,
+            };
+        if let Some(legacy_variable) = internal_variable {
+            self.variables.insert(id, legacy_variable);
+            return;
+        };
+
         let var_type = self.types[&variable.type_id];
         let is_global = variable.scope == VariableScope::Global;
         let ast_type = Self::get_ast_type(
             ir_meta.get_shader_type(),
             self.options.is_es1,
             variable.precision,
+            variable.precise,
             &variable.decorations,
             variable.built_in,
             is_global,
@@ -1951,6 +2197,7 @@ impl ast::Target for Generator<'_> {
             _ => false,
         };
 
+        // SAFETY: Pointers are obtained from C++ and passed back to it.
         let legacy_variable = unsafe {
             ffi::make_variable(
                 self.legacy_compiler,
@@ -1972,10 +2219,12 @@ impl ast::Target for Generator<'_> {
         // like `invariant gl_Position;`.  Take those into account here.
         if !is_redeclared_built_in && variable.built_in.is_some() {
             if ast_type.invariant {
+                // SAFETY: Pointers are obtained from C++ and passed back to it.
                 self.global_variables
                     .push(unsafe { ffi::globally_qualify_built_in_invariant(legacy_variable) });
             }
             if ast_type.precise {
+                // SAFETY: Pointers are obtained from C++ and passed back to it.
                 self.global_variables
                     .push(unsafe { ffi::globally_qualify_built_in_precise(legacy_variable) });
             }
@@ -1988,41 +2237,42 @@ impl ast::Target for Generator<'_> {
         debug_assert!(ir_meta.get_type(variable.type_id).is_pointer());
         if let Type::Struct(_, fields, StructSpecialization::InterfaceBlock) =
             ir_meta.get_type(ir_meta.get_type(variable.type_id).get_element_type_id().unwrap())
+            && symbol_type == ffi::ASTSymbolType::Empty
         {
-            if symbol_type == ffi::ASTSymbolType::Empty {
-                for (index, field) in fields.iter().enumerate() {
-                    let field_name = field.name.name;
-                    let field_symbol_type =
-                        field_symbol_type.unwrap_or_else(|| Self::legacy_symbol_type(&field.name));
+            for (index, field) in fields.iter().enumerate() {
+                let field_name = field.name.name;
+                let field_symbol_type =
+                    field_symbol_type.unwrap_or_else(|| Self::legacy_symbol_type(&field.name));
 
-                    let field_type = self.types[&field.type_id];
-                    let field_ast_type = Self::get_ast_type(
-                        ir_meta.get_shader_type(),
-                        self.options.is_es1,
-                        field.precision,
-                        &field.decorations,
-                        None,
-                        true,
-                    );
+                let field_type = self.types[&field.type_id];
+                let field_ast_type = Self::get_ast_type(
+                    ir_meta.get_shader_type(),
+                    self.options.is_es1,
+                    field.precision,
+                    field.precise,
+                    &field.decorations,
+                    None,
+                    true,
+                );
 
-                    let legacy_field_variable = unsafe {
-                        ffi::make_nameless_block_field_variable(
-                            self.legacy_compiler,
-                            legacy_variable,
-                            index as u32,
-                            &ffi::SymbolName {
-                                name: field_name,
-                                symbol_type: field_symbol_type,
-                                id: SYMBOL_NAME_NO_ID,
-                            },
-                            field_type,
-                            &field_ast_type,
-                        )
-                    };
+                // SAFETY: Pointers are obtained from C++ and passed back to it.
+                let legacy_field_variable = unsafe {
+                    ffi::make_nameless_block_field_variable(
+                        self.legacy_compiler,
+                        legacy_variable,
+                        index as u32,
+                        &ffi::SymbolName {
+                            name: field_name,
+                            symbol_type: field_symbol_type,
+                            id: SYMBOL_NAME_NO_ID,
+                        },
+                        field_type,
+                        &field_ast_type,
+                    )
+                };
 
-                    self.nameless_block_field_variables
-                        .insert((id, index as u32), legacy_field_variable);
-                }
+                self.nameless_block_field_variables
+                    .insert((id, index as u32), legacy_field_variable);
             }
         }
     }
@@ -2044,12 +2294,14 @@ impl ast::Target for Generator<'_> {
             ir_meta.get_shader_type(),
             self.options.is_es1,
             function.return_precision,
+            function.return_precise,
             &function.return_decorations,
             None,
             false,
         );
         let symbol_type = Self::legacy_symbol_type(&function.name);
 
+        // SAFETY: Pointers are obtained from C++ and passed back to it.
         let legacy_function = unsafe {
             ffi::make_function(
                 self.legacy_compiler,
@@ -2101,18 +2353,30 @@ impl ast::Target for Generator<'_> {
         });
     }
 
-    fn begin_block(&mut self, ir_meta: &IRMeta, variables: &Vec<VariableId>) -> *mut TIntermBlock {
-        let block = unsafe { ffi::make_interm_block() };
+    fn begin_block(
+        &mut self,
+        ir_meta: &IRMeta,
+        variables: &[VariableId],
+        for_loop_variable: Option<VariableId>,
+    ) -> *mut TIntermBlock {
+        let block = ffi::make_interm_block();
         variables.iter().for_each(|&id| {
             let variable = ir_meta.get_variable(id);
             let declaration = self.declare_variable(self.variables[&id], variable.initializer);
-            unsafe { ffi::append_instructions_to_block(block, &[declaration]) };
+            if for_loop_variable != Some(id) {
+                // SAFETY: Pointers are obtained from C++ and passed back to it.
+                unsafe { ffi::append_instructions_to_block(block, &[declaration]) };
+            } else {
+                // If this is a `for` loop variable, declare it inside the `for` loop itself.
+                self.for_loop_variable_declarations.insert(id, declaration);
+            }
         });
         block
     }
 
     fn merge_blocks(&mut self, blocks: Vec<*mut TIntermBlock>) -> *mut TIntermBlock {
         debug_assert!(!blocks.is_empty());
+        // SAFETY: Pointers are obtained from C++ and passed back to it.
         unsafe { ffi::append_blocks_to_block(blocks[0], &blocks[1..]) };
         blocks[0]
     }
@@ -2124,7 +2388,7 @@ impl ast::Target for Generator<'_> {
         id: TypedId,
         index: u32,
     ) {
-        let expr = unsafe { ffi::swizzle(&self.get_expression(id), &[index]) };
+        let expr = ffi::swizzle(&self.get_expression(id), &[index]);
         self.expressions.insert(result, expr);
     }
 
@@ -2133,9 +2397,9 @@ impl ast::Target for Generator<'_> {
         _block_result: &mut *mut TIntermBlock,
         result: RegisterId,
         id: TypedId,
-        indices: &Vec<u32>,
+        indices: &[u32],
     ) {
-        let expr = unsafe { ffi::swizzle(&self.get_expression(id), indices) };
+        let expr = ffi::swizzle(&self.get_expression(id), indices);
         self.expressions.insert(result, expr);
     }
 
@@ -2146,7 +2410,7 @@ impl ast::Target for Generator<'_> {
         id: TypedId,
         index: TypedId,
     ) {
-        let expr = unsafe { ffi::index(&self.get_expression(id), &self.get_expression(index)) };
+        let expr = ffi::index(&self.get_expression(id), &self.get_expression(index));
         self.expressions.insert(result, expr);
     }
 
@@ -2160,15 +2424,14 @@ impl ast::Target for Generator<'_> {
     ) {
         // When selecting a field of a nameless interface block, the AST expects to see references
         // to the field variables directly.
-        if let Id::Variable(var_id) = id.id {
-            if let Some(&field_variable) = self.nameless_block_field_variables.get(&(var_id, index))
-            {
-                self.expressions.insert(result, field_variable);
-                self.needs_deep_copy.insert(result);
-                return;
-            }
+        if let Id::Variable(var_id) = id.id
+            && let Some(&field_variable) = self.nameless_block_field_variables.get(&(var_id, index))
+        {
+            self.expressions.insert(result, field_variable);
+            self.needs_deep_copy.insert(result);
+            return;
         }
-        let expr = unsafe { ffi::select_field(&self.get_expression(id), index) };
+        let expr = ffi::select_field(&self.get_expression(id), index);
         self.expressions.insert(result, expr);
     }
 
@@ -2179,6 +2442,7 @@ impl ast::Target for Generator<'_> {
         type_id: TypeId,
         id: TypedId,
     ) {
+        // SAFETY: Pointers are obtained from C++ and passed back to it.
         let expr = unsafe { ffi::construct(self.types[&type_id], &[self.get_expression(id)]) };
         self.expressions.insert(result, expr);
     }
@@ -2188,8 +2452,9 @@ impl ast::Target for Generator<'_> {
         _block_result: &mut *mut TIntermBlock,
         result: RegisterId,
         type_id: TypeId,
-        ids: &Vec<TypedId>,
+        ids: &[TypedId],
     ) {
+        // SAFETY: Pointers are obtained from C++ and passed back to it.
         let expr = unsafe {
             ffi::construct(
                 self.types[&type_id],
@@ -2216,8 +2481,8 @@ impl ast::Target for Generator<'_> {
     }
 
     fn store(&mut self, block_result: &mut *mut TIntermBlock, pointer: TypedId, value: TypedId) {
-        let assignment =
-            unsafe { ffi::store(&self.get_expression(pointer), &self.get_expression(value)) };
+        let assignment = ffi::store(&self.get_expression(pointer), &self.get_expression(value));
+        // SAFETY: Pointers are obtained from C++ and passed back to it.
         unsafe { ffi::append_instructions_to_block(*block_result, &[assignment]) };
     }
 
@@ -2226,17 +2491,26 @@ impl ast::Target for Generator<'_> {
         block_result: &mut *mut TIntermBlock,
         result: Option<RegisterId>,
         function_id: FunctionId,
-        params: &Vec<TypedId>,
+        params: &[TypedId],
+        has_side_effect_with_unused_result: bool,
     ) {
         let params = params.iter().map(|&id| self.get_expression(id)).collect::<Vec<_>>();
         let function = self.functions[&function_id];
         match result {
             Some(result) => {
+                // SAFETY: Pointers are obtained from C++ and passed back to it.
                 let expr = unsafe { ffi::call(function, &params) };
-                self.expressions.insert(result, expr);
+                if has_side_effect_with_unused_result {
+                    // SAFETY: Pointers are obtained from C++ and passed back to it.
+                    unsafe { ffi::append_typed_instruction_to_block(*block_result, expr) };
+                } else {
+                    self.expressions.insert(result, expr);
+                }
             }
             None => {
+                // SAFETY: Pointers are obtained from C++ and passed back to it.
                 let statement = unsafe { ffi::call_void(function, &params) };
+                // SAFETY: Pointers are obtained from C++ and passed back to it.
                 unsafe { ffi::append_instructions_to_block(*block_result, &[statement]) };
             }
         };
@@ -2244,12 +2518,14 @@ impl ast::Target for Generator<'_> {
 
     fn unary(
         &mut self,
-        _block_result: &mut *mut TIntermBlock,
+        block_result: &mut *mut TIntermBlock,
         result: RegisterId,
         unary_op: UnaryOpCode,
         id: TypedId,
+        has_side_effect_with_unused_result: bool,
     ) {
         let operand = self.get_expression(id);
+        // SAFETY: Pointers are obtained from C++ and passed back to it.
         let expr = unsafe {
             match unary_op {
                 UnaryOpCode::ArrayLength => ffi::array_length(&operand),
@@ -2371,19 +2647,26 @@ impl ast::Target for Generator<'_> {
                 }
             }
         };
-        self.expressions.insert(result, expr);
+        if has_side_effect_with_unused_result {
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
+            unsafe { ffi::append_typed_instruction_to_block(*block_result, expr) };
+        } else {
+            self.expressions.insert(result, expr);
+        }
     }
 
     fn binary(
         &mut self,
-        _block_result: &mut *mut TIntermBlock,
+        block_result: &mut *mut TIntermBlock,
         result: RegisterId,
         binary_op: BinaryOpCode,
         lhs: TypedId,
         rhs: TypedId,
+        has_side_effect_with_unused_result: bool,
     ) {
         let lhs = self.get_expression(lhs);
         let rhs = self.get_expression(rhs);
+        // SAFETY: Pointers are obtained from C++ and passed back to it.
         let expr = unsafe {
             match binary_op {
                 BinaryOpCode::Add => ffi::add(&lhs, &rhs),
@@ -2470,7 +2753,12 @@ impl ast::Target for Generator<'_> {
                 }
             }
         };
-        self.expressions.insert(result, expr);
+        if has_side_effect_with_unused_result {
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
+            unsafe { ffi::append_typed_instruction_to_block(*block_result, expr) };
+        } else {
+            self.expressions.insert(result, expr);
+        }
     }
 
     fn built_in(
@@ -2478,9 +2766,11 @@ impl ast::Target for Generator<'_> {
         block_result: &mut *mut TIntermBlock,
         result: Option<RegisterId>,
         built_in_op: BuiltInOpCode,
-        args: &Vec<TypedId>,
+        args: &[TypedId],
+        has_side_effect_with_unused_result: bool,
     ) {
         let args = args.iter().map(|&arg| self.get_expression(arg)).collect::<Vec<_>>();
+        // SAFETY: Pointers are obtained from C++ and passed back to it.
         let (expr, statement) = unsafe {
             match built_in_op {
                 BuiltInOpCode::Clamp => {
@@ -2641,8 +2931,14 @@ impl ast::Target for Generator<'_> {
             }
         };
         if let Some(result) = result {
-            self.expressions.insert(result, expr.unwrap());
+            if has_side_effect_with_unused_result {
+                // SAFETY: Pointers are obtained from C++ and passed back to it.
+                unsafe { ffi::append_typed_instruction_to_block(*block_result, expr.unwrap()) };
+            } else {
+                self.expressions.insert(result, expr.unwrap());
+            }
         } else {
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
             unsafe { ffi::append_instructions_to_block(*block_result, &[statement.unwrap()]) };
         }
     }
@@ -2663,6 +2959,7 @@ impl ast::Target for Generator<'_> {
 
         let expr = if let Some(offset) = offset {
             let offset = self.get_expression(offset);
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
             unsafe {
                 ffi::built_in_textureoffset(
                     self.legacy_compiler,
@@ -2671,6 +2968,7 @@ impl ast::Target for Generator<'_> {
                 )
             }
         } else {
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
             unsafe {
                 ffi::built_in_texture(
                     self.legacy_compiler,
@@ -2696,6 +2994,7 @@ impl ast::Target for Generator<'_> {
         let coord = self.get_expression(coord);
         let compare = self.get_expression(compare);
 
+        // SAFETY: Pointers are obtained from C++ and passed back to it.
         let expr = unsafe {
             ffi::built_in_texture_with_compare(self.legacy_compiler, &[sampler, coord, compare])
         };
@@ -2720,6 +3019,7 @@ impl ast::Target for Generator<'_> {
 
         let expr = if let Some(offset) = offset {
             let offset = self.get_expression(offset);
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
             unsafe {
                 ffi::built_in_texturelodoffset(
                     self.legacy_compiler,
@@ -2728,6 +3028,7 @@ impl ast::Target for Generator<'_> {
                 )
             }
         } else {
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
             unsafe {
                 ffi::built_in_texturelod(
                     self.legacy_compiler,
@@ -2755,6 +3056,7 @@ impl ast::Target for Generator<'_> {
         let compare = self.get_expression(compare);
         let lod = self.get_expression(lod);
 
+        // SAFETY: Pointers are obtained from C++ and passed back to it.
         let expr = unsafe {
             ffi::built_in_texturelod_with_compare(
                 self.legacy_compiler,
@@ -2782,6 +3084,7 @@ impl ast::Target for Generator<'_> {
 
         let expr = if let Some(offset) = offset {
             let offset = self.get_expression(offset);
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
             unsafe {
                 ffi::built_in_textureoffset(
                     self.legacy_compiler,
@@ -2790,6 +3093,7 @@ impl ast::Target for Generator<'_> {
                 )
             }
         } else {
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
             unsafe {
                 ffi::built_in_texture(
                     self.legacy_compiler,
@@ -2817,6 +3121,7 @@ impl ast::Target for Generator<'_> {
         let compare = self.get_expression(compare);
         let bias = self.get_expression(bias);
 
+        // SAFETY: Pointers are obtained from C++ and passed back to it.
         let expr = unsafe {
             ffi::built_in_texture_with_compare(
                 self.legacy_compiler,
@@ -2846,6 +3151,7 @@ impl ast::Target for Generator<'_> {
 
         let expr = if let Some(offset) = offset {
             let offset = self.get_expression(offset);
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
             unsafe {
                 ffi::built_in_texturegradoffset(
                     self.legacy_compiler,
@@ -2854,6 +3160,7 @@ impl ast::Target for Generator<'_> {
                 )
             }
         } else {
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
             unsafe {
                 ffi::built_in_texturegrad(
                     self.legacy_compiler,
@@ -2881,6 +3188,7 @@ impl ast::Target for Generator<'_> {
         let expr = if let Some(offset) = offset {
             let is_offset_array = ir_meta.get_type(offset.type_id).is_array();
             let offset = self.get_expression(offset);
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
             unsafe {
                 ffi::built_in_texturegatheroffset(
                     self.legacy_compiler,
@@ -2889,6 +3197,7 @@ impl ast::Target for Generator<'_> {
                 )
             }
         } else {
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
             unsafe { ffi::built_in_texturegather(self.legacy_compiler, &[sampler, coord]) }
         };
         self.expressions.insert(result, expr);
@@ -2911,6 +3220,7 @@ impl ast::Target for Generator<'_> {
         let expr = if let Some(offset) = offset {
             let is_offset_array = ir_meta.get_type(offset.type_id).is_array();
             let offset = self.get_expression(offset);
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
             unsafe {
                 ffi::built_in_texturegatheroffset(
                     self.legacy_compiler,
@@ -2919,6 +3229,7 @@ impl ast::Target for Generator<'_> {
                 )
             }
         } else {
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
             unsafe {
                 ffi::built_in_texturegather(self.legacy_compiler, &[sampler, coord, component])
             }
@@ -2943,6 +3254,7 @@ impl ast::Target for Generator<'_> {
         let expr = if let Some(offset) = offset {
             let is_offset_array = ir_meta.get_type(offset.type_id).is_array();
             let offset = self.get_expression(offset);
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
             unsafe {
                 ffi::built_in_texturegatheroffset(
                     self.legacy_compiler,
@@ -2951,25 +3263,31 @@ impl ast::Target for Generator<'_> {
                 )
             }
         } else {
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
             unsafe { ffi::built_in_texturegather(self.legacy_compiler, &[sampler, coord, refz]) }
         };
         self.expressions.insert(result, expr);
     }
 
     fn branch_discard(&mut self, block: &mut *mut TIntermBlock) {
+        // SAFETY: Pointers are obtained from C++ and passed back to it.
         unsafe { ffi::branch_discard(*block) };
     }
     fn branch_return(&mut self, block: &mut *mut TIntermBlock, value: Option<TypedId>) {
         if let Some(id) = value {
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
             unsafe { ffi::branch_return_value(*block, &self.get_expression(id)) };
         } else {
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
             unsafe { ffi::branch_return(*block) };
         }
     }
     fn branch_break(&mut self, block: &mut *mut TIntermBlock) {
+        // SAFETY: Pointers are obtained from C++ and passed back to it.
         unsafe { ffi::branch_break(*block) };
     }
     fn branch_continue(&mut self, block: &mut *mut TIntermBlock) {
+        // SAFETY: Pointers are obtained from C++ and passed back to it.
         unsafe { ffi::branch_continue(*block) };
     }
     fn branch_if(
@@ -2983,8 +3301,10 @@ impl ast::Target for Generator<'_> {
         let true_block = true_block.unwrap();
         let condition = self.get_expression(condition);
         if let Some(false_block) = false_block {
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
             unsafe { ffi::branch_if_else(*block, &condition, true_block, false_block) };
         } else {
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
             unsafe { ffi::branch_if(*block, &condition, true_block) };
         }
     }
@@ -2995,6 +3315,7 @@ impl ast::Target for Generator<'_> {
         body_block: Option<*mut TIntermBlock>,
     ) {
         // The condition and body blocks should always be present.
+        // SAFETY: Pointers are obtained from C++ and passed back to it.
         unsafe { ffi::branch_loop(*block, loop_condition_block.unwrap(), body_block.unwrap()) };
     }
     fn branch_do_loop(
@@ -3005,30 +3326,73 @@ impl ast::Target for Generator<'_> {
         // The condition and body blocks should always be present.  The difference between
         // DoLoop and Loop is effectively that the condition block is evaluated after the body
         // instead of before.
+        // SAFETY: Pointers are obtained from C++ and passed back to it.
         unsafe { ffi::branch_do_loop(*block, body_block.unwrap()) };
+    }
+    fn branch_for_loop(
+        &mut self,
+        block: &mut *mut TIntermBlock,
+        info: &util::TrivialLoopInfo,
+        body_block: Option<*mut TIntermBlock>,
+    ) {
+        // The condition, continue and body blocks should always be present.  Condition and
+        // continue blocks will also be one-liners.  However, we can't use the continue block if
+        // the source used += or -= because they are expanded during translation.  So instead, the
+        // contents of `info` is passed so that the `for` loop is reconstructed as appropriate for
+        // the AST.
+        let loop_variable_declaration = self.for_loop_variable_declarations[&info.loop_variable];
+        let loop_variable = self.variables[&info.loop_variable];
+        let condition_op = match info.condition_op {
+            BinaryOpCode::Equal => ffi::ASTForLoopConditionOp::Equal,
+            BinaryOpCode::NotEqual => ffi::ASTForLoopConditionOp::NotEqual,
+            BinaryOpCode::LessThan => ffi::ASTForLoopConditionOp::LessThan,
+            BinaryOpCode::GreaterThan => ffi::ASTForLoopConditionOp::GreaterThan,
+            BinaryOpCode::LessThanEqual => ffi::ASTForLoopConditionOp::LessThanEqual,
+            BinaryOpCode::GreaterThanEqual => ffi::ASTForLoopConditionOp::GreaterThanEqual,
+            _ => panic!("Internal error: Invalid for loop condition operator"),
+        };
+        let condition_comparator = self.constants[&info.condition_comparator];
+        let increment_step =
+            info.increment_step.map_or(std::ptr::null_mut(), |id| self.constants[&id]);
+        // SAFETY: Pointers are obtained from C++ and passed back to it.
+        unsafe {
+            ffi::branch_for_loop(
+                *block,
+                loop_variable_declaration,
+                loop_variable,
+                condition_op,
+                condition_comparator,
+                info.ascending,
+                increment_step,
+                body_block.unwrap(),
+            )
+        };
     }
     fn branch_loop_if(&mut self, block: &mut *mut TIntermBlock, condition: TypedId) {
         // The condition block of a loop ends in `if (!condition) break;`
+        // SAFETY: Pointers are obtained from C++ and passed back to it.
         unsafe { ffi::branch_loop_if(*block, &self.get_expression(condition)) };
     }
     fn branch_switch(
         &mut self,
         block: &mut *mut TIntermBlock,
         value: TypedId,
-        case_ids: &Vec<Option<ConstantId>>,
+        case_ids: &[Option<ConstantId>],
         case_blocks: Vec<*mut TIntermBlock>,
     ) {
         let value = self.get_expression(value);
         let case_labels = case_ids
             .iter()
-            .map(|id| id.map(|id| self.constants[&id]).unwrap_or(std::ptr::null_mut()))
+            .map(|id| id.map_or(std::ptr::null_mut(), |id| self.constants[&id]))
             .collect::<Vec<_>>();
 
+        // SAFETY: Pointers are obtained from C++ and passed back to it.
         unsafe { ffi::branch_switch(*block, &value, &case_labels, &case_blocks) };
     }
 
     // Take the current AST and place it as the body of the given function.
     fn end_function(&mut self, block_result: *mut TIntermBlock, id: FunctionId) {
+        // SAFETY: Pointers are obtained from C++ and passed back to it.
         let declaration = unsafe { ffi::declare_function(self.functions[&id], block_result) };
         self.function_declarations.push(declaration);
     }
