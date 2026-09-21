@@ -51,14 +51,22 @@ const char *GetSharedLibraryExtension()
 double GetCurrentSystemTime()
 {
     struct timespec currentTime;
+#ifdef __wasi__
+    clock_gettime(CLOCK_MONOTONIC, &currentTime);
+#else
     clock_gettime(CLOCK_MONOTONIC_RAW, &currentTime);
+#endif
     return currentTime.tv_sec + currentTime.tv_nsec * 1e-9;
 }
 
 uint64_t GetCurrentSystemTimeNs()
 {
     struct timespec currentTime;
+#ifdef __wasi__
+    clock_gettime(CLOCK_MONOTONIC, &currentTime);
+#else
     clock_gettime(CLOCK_MONOTONIC_RAW, &currentTime);
+#endif
     return static_cast<uint64_t>(currentTime.tv_sec) * 1000'000'000 + currentTime.tv_nsec;
 }
 

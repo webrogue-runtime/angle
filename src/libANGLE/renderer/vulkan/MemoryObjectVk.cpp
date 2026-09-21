@@ -277,6 +277,7 @@ angle::Result MemoryObjectVk::createImage(
     return image->initExternalMemory(contextVk, renderer->getMemoryProperties(),
                                      externalMemoryRequirements, 1, &importMemoryInfo,
                                      contextVk->getDeviceQueueIndex(), flags);
+#endif
 }
 
 }  // namespace rx

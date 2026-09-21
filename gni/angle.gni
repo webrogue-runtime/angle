@@ -354,7 +354,7 @@ declare_args() {
   angle_enable_trace_android_logcat = false
   angle_enable_trace_events = false
   angle_enable_perfetto = defined(angle_perfetto_cpp_dir) && angle_has_build &&
-                          (build_with_chromium || is_clang)
+                          (build_with_chromium || is_clang) && !is_wasi
   angle_dump_pipeline_cache_graph = false
 
   angle_always_log_info = false
