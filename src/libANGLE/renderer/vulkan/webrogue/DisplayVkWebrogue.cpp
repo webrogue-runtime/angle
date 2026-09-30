@@ -15,7 +15,7 @@
 #include "libANGLE/renderer/vulkan/DisplayVk.h"
 #include "libANGLE/renderer/vulkan/vk_renderer.h"
 
-#include <webroguegfx/webroguegfx.h>
+#include <libwr4c/wr4c.h>
 
 #include "common/vulkan/vk_headers.h"
 #include "libANGLE/renderer/vulkan/vk_caps_utils.h"
@@ -57,8 +57,8 @@ egl::Error DisplayVkWebrogue::initialize(egl::Display *display)
 egl::ConfigSet DisplayVkWebrogue::generateConfigs()
 {
     std::vector<GLenum> kColorFormats;
-    switch (webroguegfx_get_os_family()) {
-        case WEBROGUE_OS_FAMILY_ANDROID:
+    switch (wr4c_get_os_family()) {
+        case WR4C_OS_FAMILY_ANDROID:
             kColorFormats = {GL_RGBA8, GL_RGB8};
             break;
         default:

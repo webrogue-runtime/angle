@@ -209,7 +209,7 @@ template("angle_vulkan_backend_template") {
 
     if (is_wasi) {
       include_dirs += [
-        "//third_party/webroguegfx/include",
+        "//third_party/libwr4c/include",
       ]
     }
 

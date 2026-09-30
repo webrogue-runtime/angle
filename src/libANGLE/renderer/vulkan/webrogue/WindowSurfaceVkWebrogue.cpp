@@ -10,7 +10,7 @@
 #include "libANGLE/renderer/vulkan/webrogue/WindowSurfaceVkWebrogue.h"
 
 #include "libANGLE/renderer/vulkan/vk_renderer.h"
-#include <webroguegfx/webroguegfx.h>
+#include <libwr4c/wr4c.h>
 
 namespace rx
 {
@@ -26,7 +26,7 @@ angle::Result WindowSurfaceVkWebrogue::createSurfaceVk(vk::ErrorContext *context
 
     createInfo.sType     = VK_STRUCTURE_TYPE_SURFACE_CREATE_INFO_WEBROGUE;
     createInfo.flags     = 0;
-    createInfo.webrogue_window_id = webroguegfx_get_vulkan_window_id((wr_window)mNativeWindowType);
+    createInfo.webrogue_window_id = wr4c_get_vulkan_window_id((wr4c_window_t)mNativeWindowType);
     auto pfn_vkCreateSurfaceWEBROGUE = (PFN_vkCreateSurfaceWEBROGUE)vkGetInstanceProcAddr(context->getRenderer()->getInstance(), "vkCreateSurfaceWEBROGUE");
     ANGLE_VK_CHECK(context, pfn_vkCreateSurfaceWEBROGUE, VK_ERROR_FEATURE_NOT_PRESENT);
     ANGLE_VK_TRY(context, pfn_vkCreateSurfaceWEBROGUE(context->getRenderer()->getInstance(),
@@ -39,7 +39,7 @@ angle::Result WindowSurfaceVkWebrogue::getCurrentWindowSize(vk::ErrorContext *co
                                                          gl::Extents *extentsOut) const
 {
     int width, height;
-    webroguegfx_gl_size((wr_window)mNativeWindowType, &width, &height);
+    wr4c_gl_size((wr4c_window_t)mNativeWindowType, &width, &height);
     *extentsOut = gl::Extents(width, height, 1);
     return angle::Result::Continue;
 }
