@@ -39,7 +39,7 @@ angle::Result WindowSurfaceVkWebrogue::getCurrentWindowSize(vk::ErrorContext *co
                                                          gl::Extents *extentsOut) const
 {
     int width, height;
-    wr4c_gl_size((wr4c_window_t)mNativeWindowType, &width, &height);
+    wr4c_physical_size((wr4c_window_t)mNativeWindowType, &width, &height);
     *extentsOut = gl::Extents(width, height, 1);
     return angle::Result::Continue;
 }
