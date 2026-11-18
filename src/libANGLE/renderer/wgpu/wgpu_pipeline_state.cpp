@@ -64,6 +64,8 @@ RenderPipelineDesc::RenderPipelineDesc()
         std::numeric_limits<decltype(mDepthStencilState.stencilReadMask)>::max();
     mDepthStencilState.stencilWriteMask =
         std::numeric_limits<decltype(mDepthStencilState.stencilWriteMask)>::max();
+    // GL initializes the depth mask to enabled.
+    mDepthStencilState.depthWriteEnabled = 1;
 }
 
 RenderPipelineDesc::~RenderPipelineDesc() = default;
@@ -238,6 +240,17 @@ bool RenderPipelineDesc::setDepthFunc(WGPUCompareFunction compareFunc)
         return false;
     }
     SetBitField(mDepthStencilState.depthCompare, compareFunc);
+    return true;
+}
+
+bool RenderPipelineDesc::setDepthWriteEnabled(bool enabled)
+{
+    const uint32_t packed = enabled ? 1u : 0u;
+    if (mDepthStencilState.depthWriteEnabled == packed)
+    {
+        return false;
+    }
+    mDepthStencilState.depthWriteEnabled = packed;
     return true;
 }
 

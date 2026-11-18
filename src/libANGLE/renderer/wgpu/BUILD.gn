@@ -4,7 +4,6 @@
 #
 # This file houses the build configuration for the ANGLE Wgpu back-end.
 
-import("//third_party/dawn/scripts/dawn_features.gni")
 import("../../../../gni/angle.gni")
 import("wgpu_sources.gni")
 
@@ -13,7 +12,6 @@ if (angle_use_wayland) {
 }
 
 assert(angle_enable_wgpu)
-assert(defined(angle_dawn_dir))
 
 config("angle_wgpu_backend_config") {
   defines = [ "ANGLE_ENABLE_WGPU" ]
@@ -27,11 +25,21 @@ angle_source_set("angle_wgpu_backend") {
 
   deps = [
     "$angle_root:angle_image_util",
-    "${angle_dawn_dir}/include/dawn:headers",
-    "${angle_dawn_dir}/src/dawn:proc",
-    "${angle_dawn_dir}/src/dawn/native",
-    "${angle_root}:translator",
+    "$angle_root:translator",
   ]
+
+  if (is_wasi) {
+    # Webrogue supplies the Dawn-compatible headers, the DawnProcTable and the
+    # WebGPU C API through libwr4c instead of a Dawn checkout.
+    include_dirs = [ "//third_party/libwr4c/include" ]
+  } else {
+    assert(defined(angle_dawn_dir))
+    deps += [
+      "${angle_dawn_dir}/include/dawn:headers",
+      "${angle_dawn_dir}/src/dawn:proc",
+      "${angle_dawn_dir}/src/dawn/native",
+    ]
+  }
 
   if (angle_use_wayland) {
     public_configs += [ "$angle_root:angle_wayland_config" ]

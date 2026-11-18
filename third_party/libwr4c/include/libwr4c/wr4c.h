@@ -3,6 +3,7 @@
 #define WR4C_h_
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -554,12 +555,13 @@ struct wr4c_event_mouse_button_t {
     uint8_t down;
     uint32_t x;
     uint32_t y;
-    uint8_t is_touch;
+    uint32_t touch_id;
 };
 
 struct wr4c_event_mouse_motion_t {
     uint32_t x;
     uint32_t y;
+    uint32_t touch_id;
 };
 
 struct wr4c_event_key_t {
@@ -568,6 +570,11 @@ struct wr4c_event_key_t {
     wr4c_physical_key_t physical_key;
     size_t text_len;
     uint8_t text[32];
+};
+
+struct wr4c_event_raw_mouse_motion_t {
+    float dx;
+    float dy;
 };
 
 enum wr4c_event_tag_t {
@@ -580,6 +587,7 @@ enum wr4c_event_tag_t {
     WR4C_EVENT_TAG_SURFACE_ATTACHED = 8,
     WR4C_EVENT_TAG_REDRAW_REQUESTED = 9,
     WR4C_EVENT_TAG_RESIZED = 10,
+    WR4C_EVENT_TAG_RAW_MOUSE_MOTION = 11,
 };
 
 typedef struct wr4c_event_t {
@@ -588,6 +596,7 @@ typedef struct wr4c_event_t {
         struct wr4c_event_mouse_button_t mouse_button;
         struct wr4c_event_mouse_motion_t mouse_motion;
         struct wr4c_event_key_t key;
+        struct wr4c_event_raw_mouse_motion_t raw_mouse_motion;
     } inner;
     wr4c_window_t window;
 } wr4c_event_t;
@@ -596,10 +605,18 @@ typedef struct wr4c_event_t {
 
 // General
 
-void wr4c_make_window(wr4c_window_t *out_window);
+
+typedef enum wr4c_surface_kind_t {
+    WR4C_SURFACE_KIND_SOFTWARE = 0,
+    WR4C_SURFACE_KIND_VULKAN = 1,
+    WR4C_SURFACE_KIND_WEBGPU = 2,
+} wr4c_surface_kind_t;
+
+void wr4c_make_window(wr4c_window_t *out_window, wr4c_surface_kind_t surface_kind);
 void wr4c_destroy_window(wr4c_window_t window);
 void wr4c_logical_size(wr4c_window_t window, int *width, int *height);
 void wr4c_physical_size(wr4c_window_t window, int *width, int *height);
+bool wr4c_set_mouse_grab(wr4c_window_t window, bool enabled);
 
 wr4c_event_t wr4c_poll();
 wr4c_event_t wr4c_poll_blocking();
@@ -610,7 +627,8 @@ wr4c_event_t wr4c_poll_timeout(double timeout);
 typedef struct wr4c_vulkan_renderer_s wr4c_vulkan_renderer_s;
 typedef wr4c_vulkan_renderer_s *wr4c_vulkan_renderer_t;
 
-uint8_t wr4c_vulkan_check();
+bool wr4c_vulkan_check();
+bool wr4c_webgpu_check();
 uint32_t wr4c_get_vulkan_window_id(wr4c_window_t window);
 void wr4c_vulkan_register_blob(wr4c_vulkan_renderer_t renderer, uint32_t res_id,
                                uint8_t *buf, uint32_t buf_len);

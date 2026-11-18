@@ -94,3 +94,10 @@ if (angle_use_wayland) {
     "linux/wayland/WindowSurfaceWgpuWayland.h",
   ]
 }
+
+if (is_wasi) {
+  wgpu_backend_sources += [
+    "webrogue/WindowSurfaceWgpuWebrogue.cpp",
+    "webrogue/WindowSurfaceWgpuWebrogue.h",
+  ]
+}

@@ -509,6 +509,8 @@ EGLAttrib GetDisplayTypeFromEnvironment()
 #    endif
 #elif defined(ANGLE_ENABLE_METAL)
     return EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE;
+#elif defined(ANGLE_PLATFORM_WEBROGUE) && defined(ANGLE_ENABLE_WGPU)
+    return EGL_PLATFORM_ANGLE_TYPE_WEBGPU_ANGLE;
 #elif defined(ANGLE_ENABLE_VULKAN)
     return EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE;
 #elif defined(ANGLE_ENABLE_NULL)

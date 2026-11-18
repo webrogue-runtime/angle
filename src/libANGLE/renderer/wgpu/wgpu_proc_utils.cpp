@@ -3,13 +3,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
+// wgpu_proc_utils.cpp:
+//    Provides the DawnProcTable the WebGPU backend dispatches through.
+//
+// On Webrogue the table is supplied by libwr4c, which implements the standard
+// WebGPU C API on top of the wasi:webgpu interface.
+//
 
 #include "libANGLE/renderer/wgpu/wgpu_proc_utils.h"
 
-// DawnNative.h includes the webgpu cpp API which depends on wgpu function declarations. To hide the
-// declarations from the rest of the ANGLE WebGPU backend, only enable them in this file.
-#undef WGPU_SKIP_DECLARATIONS
-#include <dawn/native/DawnNative.h>
+#include <libwr4c/wr4c_webgpu.h>
 
 namespace rx
 {
@@ -17,7 +20,7 @@ namespace webgpu
 {
 const DawnProcTable &GetDefaultProcTable()
 {
-    return dawn::native::GetProcs();
+    return *wr4c_get_dawn_proc_table();
 }
 }  // namespace webgpu
 }  // namespace rx

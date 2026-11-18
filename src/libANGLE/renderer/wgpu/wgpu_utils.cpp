@@ -138,6 +138,19 @@ bool IsWgpuError(WGPUMapAsyncStatus mapAsyncStatus)
     return mapAsyncStatus != WGPUMapAsyncStatus_Success;
 }
 
+std::string WgpuStringViewToString(WGPUStringView view)
+{
+    if (view.data == nullptr)
+    {
+        return {};
+    }
+    if (view.length == WGPU_STRLEN)
+    {
+        return std::string(view.data);
+    }
+    return std::string(view.data, view.length);
+}
+
 ClearValuesArray::ClearValuesArray() : mValues{}, mEnabled{} {}
 ClearValuesArray::~ClearValuesArray() = default;
 
@@ -514,14 +527,14 @@ angle::Result ErrorScope::PopScope(ContextWgpu *context,
         {
             ASSERT(ctx->file);
             ASSERT(ctx->function);
-            std::string msgStr(message.data, message.length);
+            std::string msgStr = WgpuStringViewToString(message);
             ctx->context->handleError(GL_INVALID_OPERATION, msgStr.c_str(), ctx->file,
                                       ctx->function, ctx->line);
             ctx->hadError = true;
         }
         else
         {
-            ERR() << "Unhandled WebGPU error: " << std::string(message.data, message.length);
+            ERR() << "Unhandled WebGPU error: " << WgpuStringViewToString(message);
         }
     };
 

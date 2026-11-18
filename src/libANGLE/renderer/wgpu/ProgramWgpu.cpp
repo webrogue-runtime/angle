@@ -10,6 +10,8 @@
 #include "libANGLE/renderer/wgpu/ProgramWgpu.h"
 #include "common/unsafe_buffers.h"
 
+#include <iostream>
+
 #include "GLES2/gl2.h"
 #include "common/PackedEnums.h"
 #include "common/PackedGLEnums_autogen.h"
@@ -84,7 +86,7 @@ std::string FormatWGPUCompilationMessage(const WGPUCompilationMessage &message)
 {
     std::ostringstream oss;
     oss << message.lineNum << ":" << message.linePos << ": "
-        << std::string(message.message.data, message.message.length);
+        << webgpu::WgpuStringViewToString(message.message);
     return oss.str();
 }
 

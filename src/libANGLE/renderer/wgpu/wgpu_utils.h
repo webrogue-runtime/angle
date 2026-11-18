@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <webgpu/webgpu.h>
 #include <climits>
+#include <string>
 
 #include "libANGLE/Caps.h"
 #include "libANGLE/Error.h"
@@ -62,33 +63,61 @@
     PROC(Surface)                 \
     PROC(Sync)
 
-#define ANGLE_WGPU_OBJECTS_X(PROC)                 \
-    PROC(Adapter, adapter)                         \
-    PROC(BindGroup, bindGroup)                     \
-    PROC(BindGroupLayout, bindGroupLayout)         \
-    PROC(Buffer, buffer)                           \
-    PROC(CommandBuffer, commandBuffer)             \
-    PROC(CommandEncoder, commandEncoder)           \
-    PROC(ComputePassEncoder, computePassEncoder)   \
-    PROC(ComputePipeline, computePipeline)         \
-    PROC(Device, device)                           \
-    PROC(ExternalTexture, externalTexture)         \
-    PROC(Instance, instance)                       \
-    PROC(PipelineLayout, pipelineLayout)           \
-    PROC(QuerySet, querySet)                       \
-    PROC(Queue, queue)                             \
-    PROC(RenderBundle, renderBundle)               \
-    PROC(RenderBundleEncoder, renderBundleEncoder) \
-    PROC(RenderPassEncoder, renderPassEncoder)     \
-    PROC(RenderPipeline, renderPipeline)           \
-    PROC(Sampler, sampler)                         \
-    PROC(ShaderModule, shaderModule)               \
-    PROC(SharedBufferMemory, sharedBufferMemory)   \
-    PROC(SharedFence, sharedFence)                 \
-    PROC(SharedTextureMemory, sharedTextureMemory) \
-    PROC(Surface, surface)                         \
-    PROC(Texture, texture)                         \
-    PROC(TextureView, textureView)
+#if defined(ANGLE_PLATFORM_WEBROGUE)
+// The standard webgpu.h does not define the Dawn-only shared memory objects.
+#    define ANGLE_WGPU_OBJECTS_X(PROC)             \
+        PROC(Adapter, adapter)                     \
+        PROC(BindGroup, bindGroup)                 \
+        PROC(BindGroupLayout, bindGroupLayout)     \
+        PROC(Buffer, buffer)                       \
+        PROC(CommandBuffer, commandBuffer)         \
+        PROC(CommandEncoder, commandEncoder)       \
+        PROC(ComputePassEncoder, computePassEncoder) \
+        PROC(ComputePipeline, computePipeline)     \
+        PROC(Device, device)                       \
+        PROC(ExternalTexture, externalTexture)     \
+        PROC(Instance, instance)                   \
+        PROC(PipelineLayout, pipelineLayout)       \
+        PROC(QuerySet, querySet)                   \
+        PROC(Queue, queue)                         \
+        PROC(RenderBundle, renderBundle)           \
+        PROC(RenderBundleEncoder, renderBundleEncoder) \
+        PROC(RenderPassEncoder, renderPassEncoder) \
+        PROC(RenderPipeline, renderPipeline)       \
+        PROC(Sampler, sampler)                     \
+        PROC(ShaderModule, shaderModule)           \
+        PROC(Surface, surface)                     \
+        PROC(Texture, texture)                     \
+        PROC(TextureView, textureView)
+#else
+#    define ANGLE_WGPU_OBJECTS_X(PROC)                 \
+        PROC(Adapter, adapter)                         \
+        PROC(BindGroup, bindGroup)                     \
+        PROC(BindGroupLayout, bindGroupLayout)         \
+        PROC(Buffer, buffer)                           \
+        PROC(CommandBuffer, commandBuffer)             \
+        PROC(CommandEncoder, commandEncoder)           \
+        PROC(ComputePassEncoder, computePassEncoder)   \
+        PROC(ComputePipeline, computePipeline)         \
+        PROC(Device, device)                           \
+        PROC(ExternalTexture, externalTexture)         \
+        PROC(Instance, instance)                       \
+        PROC(PipelineLayout, pipelineLayout)           \
+        PROC(QuerySet, querySet)                       \
+        PROC(Queue, queue)                             \
+        PROC(RenderBundle, renderBundle)               \
+        PROC(RenderBundleEncoder, renderBundleEncoder) \
+        PROC(RenderPassEncoder, renderPassEncoder)     \
+        PROC(RenderPipeline, renderPipeline)           \
+        PROC(Sampler, sampler)                         \
+        PROC(ShaderModule, shaderModule)               \
+        PROC(SharedBufferMemory, sharedBufferMemory)   \
+        PROC(SharedFence, sharedFence)                 \
+        PROC(SharedTextureMemory, sharedTextureMemory) \
+        PROC(Surface, surface)                         \
+        PROC(Texture, texture)                         \
+        PROC(TextureView, textureView)
+#endif
 
 namespace gl
 {
@@ -467,6 +496,12 @@ PackedRenderPassDepthStencilAttachment CreateNewDepthStencilAttachment(
 
 bool IsWgpuError(WGPUWaitStatus waitStatus);
 bool IsWgpuError(WGPUMapAsyncStatus mapAsyncStatus);
+
+// Decodes a WGPUStringView into a std::string, honouring the WGPU_STRLEN
+// sentinel: {NULL, WGPU_STRLEN} is the null value and {data, WGPU_STRLEN} is a
+// null-terminated string. Passing WGPU_STRLEN to std::string's length would
+// otherwise throw std::length_error.
+std::string WgpuStringViewToString(WGPUStringView view);
 
 bool IsStripPrimitiveTopology(WGPUPrimitiveTopology topology);
 

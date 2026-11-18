@@ -750,6 +750,11 @@ angle::Result ContextWgpu::syncState(const gl::Context *context,
                 }
                 break;
             case gl::state::DIRTY_BIT_DEPTH_MASK:
+                if (mRenderPipelineDesc.setDepthWriteEnabled(
+                        glState.getDepthStencilState().depthMask))
+                {
+                    invalidateCurrentRenderPipeline();
+                }
                 break;
             case gl::state::DIRTY_BIT_STENCIL_TEST_ENABLED:
                 // Changing the state of stencil test affects both the front and back funcs, which

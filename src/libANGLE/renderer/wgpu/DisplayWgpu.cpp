@@ -477,7 +477,7 @@ egl::Error DisplayWgpu::createWgpuDevice()
 
         result->status  = status;
         result->adapter = webgpu::AdapterHandle::Acquire(wgpu, adapter);
-        result->message = std::string(message.data, message.length);
+        result->message = webgpu::WgpuStringViewToString(message);
     };
     requestAdapterCallback.userdata1 = &adapterResult;
     requestAdapterCallback.userdata2 = &mProcTable;
@@ -507,7 +507,7 @@ egl::Error DisplayWgpu::createWgpuDevice()
             ASSERT(userdata1 == nullptr);
             ASSERT(userdata2 == nullptr);
             ERR() << "Error: " << static_cast<std::underlying_type<WGPUErrorType>::type>(type)
-                  << " - message: " << std::string(message.data, message.length);
+                  << " - message: " << webgpu::WgpuStringViewToString(message);
         };
 
     struct RequestDeviceResult
@@ -528,7 +528,7 @@ egl::Error DisplayWgpu::createWgpuDevice()
 
         result->status  = status;
         result->device  = webgpu::DeviceHandle::Acquire(wgpu, device);
-        result->message = std::string(message.data, message.length);
+        result->message = webgpu::WgpuStringViewToString(message);
     };
     requestDeviceCallback.userdata1 = &deviceResult;
     requestDeviceCallback.userdata2 = &mProcTable;
