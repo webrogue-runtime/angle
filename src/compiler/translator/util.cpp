@@ -12,6 +12,7 @@
 #include <array>
 #include <limits>
 
+#include "common/angleutils.h"
 #include "common/span.h"
 #include "common/utilities.h"
 #include "compiler/preprocessor/numeric_lex.h"
@@ -468,13 +469,12 @@ ImmutableString ArrayString(const TType &type)
     const angle::Span<const unsigned int> &arraySizes = type.getArraySizes();
     constexpr const size_t kMaxDecimalDigitsPerSize = 10u;
     ImmutableStringBuilder arrayString(arraySizes.size() * (kMaxDecimalDigitsPerSize + 2u));
-    for (auto arraySizeIter = arraySizes.rbegin(); arraySizeIter != arraySizes.rend();
-         ++arraySizeIter)
+    for (unsigned int arraySize : angle::Reversed(arraySizes))
     {
         arrayString << "[";
-        if (*arraySizeIter > 0)
+        if (arraySize > 0)
         {
-            arrayString << *arraySizeIter;
+            arrayString << arraySize;
         }
         arrayString << "]";
     }
@@ -1014,6 +1014,27 @@ bool IsIndexOp(TOperator op)
         default:
             return false;
     }
+}
+
+int GetPerVertexMemberIndex(const ImmutableString &name)
+{
+    if (name == "gl_Position")
+    {
+        return 0;
+    }
+    if (name == "gl_PointSize")
+    {
+        return 1;
+    }
+    if (name == "gl_ClipDistance")
+    {
+        return 2;
+    }
+    if (name == "gl_CullDistance")
+    {
+        return 3;
+    }
+    return -1;
 }
 
 }  // namespace sh

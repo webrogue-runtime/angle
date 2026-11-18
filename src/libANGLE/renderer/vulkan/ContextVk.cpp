@@ -190,6 +190,35 @@ void ApplySampleCoverage(const gl::State &glState, uint32_t coverageSampleCount,
     *maskOut &= coverageMask;
 }
 
+uint32_t DeriveSampleMask(const gl::State &glState, uint32_t rasterizationSamples)
+{
+    static_assert(sizeof(uint32_t) == sizeof(GLbitfield), "Vulkan assumes 32-bit sample masks");
+    ASSERT(glState.getMaxSampleMaskWords() == 1);
+
+    uint32_t mask = std::numeric_limits<uint16_t>::max();
+
+    // The following assumes that supported sample counts for multisampled
+    // rendering does not include 1. This is true in the Vulkan backend,
+    // where 1x multisampling is disallowed.
+    if (rasterizationSamples > 1)
+    {
+        if (glState.isSampleMaskEnabled())
+        {
+            mask = glState.getSampleMaskWord(0) & angle::BitMask<uint32_t>(rasterizationSamples);
+        }
+
+        // If sample coverage is enabled, emulate it by generating and applying a mask on top of the
+        // sample mask.
+        if (glState.isSampleCoverageEnabled())
+        {
+            ApplySampleCoverage(glState, GetCoverageSampleCount(glState, rasterizationSamples),
+                                &mask);
+        }
+    }
+
+    return mask;
+}
+
 SurfaceRotation DetermineSurfaceRotation(const gl::Framebuffer *framebuffer,
                                          const WindowSurfaceVk *windowSurface)
 {
@@ -477,9 +506,9 @@ vk::ImageAccess GetImageWriteAccessAndSubresource(const gl::ImageUnit &imageUnit
 
     *layerStartOut = gl::OwnerLayer(0);
     *layerCountOut = image.getLayerCount();
-    if (imageUnit.layered)
+    if (!imageUnit.layered)
     {
-        *layerStartOut = *layerStartOut + imageUnit.layered;
+        *layerStartOut = *layerStartOut + imageUnit.layer;
         *layerCountOut = 1;
     }
 
@@ -527,7 +556,7 @@ void OnImageBufferWrite(vk::Context *context,
 {
     vk::BufferHelper &buffer = bufferVk->getBuffer();
     VkAccessFlags accessFlags = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-    commandBufferHelper->bufferWrite(context, accessFlags, stages, &buffer);
+    commandBufferHelper->bufferWrite(context, accessFlags, stages, &buffer, kNoMemoryBarrierBits);
     bufferVk->onDataChanged();
 }
 
@@ -830,6 +859,7 @@ ContextVk::ContextVk(const gl::State &state, gl::ErrorSet *errorSet, vk::Rendere
       mCurrentGraphicsPipelineShaders(nullptr),
       mCurrentComputePipeline(nullptr),
       mCurrentDrawMode(gl::PrimitiveMode::Unused1),
+      mCurrentRasterizationSamples(0),
       mCurrentWindowSurface(nullptr),
       mCurrentRotationDrawFramebuffer(SurfaceRotation::Identity),
       mCurrentRotationReadFramebuffer(SurfaceRotation::Identity),
@@ -967,6 +997,50 @@ ContextVk::ContextVk(const gl::State &state, gl::ErrorSet *errorSet, vk::Rendere
     {
         mDynamicStateDirtyBits.set(DIRTY_BIT_DYNAMIC_LOGIC_OP);
     }
+    if (mRenderer->getFeatures().supportsPatchControlPointsDynamicState.enabled)
+    {
+        mDynamicStateDirtyBits.set(DIRTY_BIT_DYNAMIC_PATCH_CONTROL_POINTS);
+    }
+    if (mRenderer->getFeatures().supportsAlphaToCoverageEnableDynamicState.enabled)
+    {
+        mDynamicStateDirtyBits.set(DIRTY_BIT_DYNAMIC_ALPHA_TO_COVERAGE_ENABLE);
+    }
+    if (mRenderer->getFeatures().supportsAlphaToOneEnableDynamicState.enabled)
+    {
+        mDynamicStateDirtyBits.set(DIRTY_BIT_DYNAMIC_ALPHA_TO_ONE_ENABLE);
+    }
+    if (mRenderer->getFeatures().supportsColorBlendEnableDynamicState.enabled)
+    {
+        mDynamicStateDirtyBits.set(DIRTY_BIT_DYNAMIC_COLOR_BLEND_ENABLE);
+    }
+    if (mRenderer->getFeatures().supportsColorBlendEquationDynamicState.enabled)
+    {
+        mDynamicStateDirtyBits.set(DIRTY_BIT_DYNAMIC_COLOR_BLEND_EQUATION);
+    }
+    if (mRenderer->getFeatures().supportsColorWriteMaskDynamicState.enabled)
+    {
+        mDynamicStateDirtyBits.set(DIRTY_BIT_DYNAMIC_COLOR_WRITE_MASK);
+    }
+    if (mRenderer->getFeatures().supportsDepthClampEnableDynamicState.enabled)
+    {
+        mDynamicStateDirtyBits.set(DIRTY_BIT_DYNAMIC_DEPTH_CLAMP_ENABLE);
+    }
+    if (mRenderer->getFeatures().supportsDepthClipNegativeOneToOneDynamicState.enabled)
+    {
+        mDynamicStateDirtyBits.set(DIRTY_BIT_DYNAMIC_DEPTH_CLIP_NEGATIVE_ONE_TO_ONE);
+    }
+    if (mRenderer->getFeatures().supportsLogicOpEnableDynamicState.enabled)
+    {
+        mDynamicStateDirtyBits.set(DIRTY_BIT_DYNAMIC_LOGIC_OP_ENABLE);
+    }
+    if (mRenderer->getFeatures().supportsPolygonModeDynamicState.enabled)
+    {
+        mDynamicStateDirtyBits.set(DIRTY_BIT_DYNAMIC_POLYGON_MODE);
+    }
+    if (mRenderer->getFeatures().supportsSampleMaskDynamicState.enabled)
+    {
+        mDynamicStateDirtyBits.set(DIRTY_BIT_DYNAMIC_SAMPLE_MASK);
+    }
     if (getFeatures().supportsFragmentShadingRate.enabled)
     {
         mDynamicStateDirtyBits.set(DIRTY_BIT_DYNAMIC_FRAGMENT_SHADING_RATE);
@@ -1066,8 +1140,30 @@ ContextVk::ContextVk(const gl::State &state, gl::ErrorSet *errorSet, vk::Rendere
         &ContextVk::handleDirtyGraphicsDynamicDepthBiasEnable;
     mGraphicsDirtyBitHandlers[DIRTY_BIT_DYNAMIC_LOGIC_OP] =
         &ContextVk::handleDirtyGraphicsDynamicLogicOp;
+    mGraphicsDirtyBitHandlers[DIRTY_BIT_DYNAMIC_PATCH_CONTROL_POINTS] =
+        &ContextVk::handleDirtyGraphicsDynamicPatchControlPoints;
     mGraphicsDirtyBitHandlers[DIRTY_BIT_DYNAMIC_PRIMITIVE_RESTART_ENABLE] =
         &ContextVk::handleDirtyGraphicsDynamicPrimitiveRestartEnable;
+    mGraphicsDirtyBitHandlers[DIRTY_BIT_DYNAMIC_ALPHA_TO_COVERAGE_ENABLE] =
+        &ContextVk::handleDirtyGraphicsDynamicAlphaToCoverageEnable;
+    mGraphicsDirtyBitHandlers[DIRTY_BIT_DYNAMIC_ALPHA_TO_ONE_ENABLE] =
+        &ContextVk::handleDirtyGraphicsDynamicAlphaToOneEnable;
+    mGraphicsDirtyBitHandlers[DIRTY_BIT_DYNAMIC_COLOR_BLEND_ENABLE] =
+        &ContextVk::handleDirtyGraphicsDynamicColorBlendEnable;
+    mGraphicsDirtyBitHandlers[DIRTY_BIT_DYNAMIC_COLOR_BLEND_EQUATION] =
+        &ContextVk::handleDirtyGraphicsDynamicColorBlendEquation;
+    mGraphicsDirtyBitHandlers[DIRTY_BIT_DYNAMIC_COLOR_WRITE_MASK] =
+        &ContextVk::handleDirtyGraphicsDynamicColorWriteMask;
+    mGraphicsDirtyBitHandlers[DIRTY_BIT_DYNAMIC_DEPTH_CLAMP_ENABLE] =
+        &ContextVk::handleDirtyGraphicsDynamicDepthClampEnable;
+    mGraphicsDirtyBitHandlers[DIRTY_BIT_DYNAMIC_DEPTH_CLIP_NEGATIVE_ONE_TO_ONE] =
+        &ContextVk::handleDirtyGraphicsDynamicDepthClipNegativeOneToOne;
+    mGraphicsDirtyBitHandlers[DIRTY_BIT_DYNAMIC_LOGIC_OP_ENABLE] =
+        &ContextVk::handleDirtyGraphicsDynamicLogicOpEnable;
+    mGraphicsDirtyBitHandlers[DIRTY_BIT_DYNAMIC_POLYGON_MODE] =
+        &ContextVk::handleDirtyGraphicsDynamicPolygonMode;
+    mGraphicsDirtyBitHandlers[DIRTY_BIT_DYNAMIC_SAMPLE_MASK] =
+        &ContextVk::handleDirtyGraphicsDynamicSampleMask;
     mGraphicsDirtyBitHandlers[DIRTY_BIT_DYNAMIC_FRAGMENT_SHADING_RATE] =
         &ContextVk::handleDirtyGraphicsDynamicFragmentShadingRate;
 
@@ -1194,6 +1290,37 @@ ContextVk::ContextVk(const gl::State &state, gl::ErrorSet *errorSet, vk::Rendere
     {
         mPipelineDirtyBitsMask.reset(gl::state::DIRTY_BIT_POLYGON_OFFSET_FILL_ENABLED);
     }
+    // Dynamic state in VK_EXT_extended_dynamic_state3 (most of which is in "extended" front-end
+    // state, hence cannot be excluded here):
+    if (mRenderer->getFeatures().supportsAlphaToCoverageEnableDynamicState.enabled)
+    {
+        mPipelineDirtyBitsMask.reset(gl::state::DIRTY_BIT_SAMPLE_ALPHA_TO_COVERAGE_ENABLED);
+    }
+    if (mRenderer->getFeatures().supportsAlphaToOneEnableDynamicState.enabled)
+    {
+        mPipelineDirtyBitsMask.reset(gl::state::DIRTY_BIT_SAMPLE_ALPHA_TO_ONE);
+    }
+    if (mRenderer->getFeatures().supportsColorBlendEnableDynamicState.enabled)
+    {
+        mPipelineDirtyBitsMask.reset(gl::state::DIRTY_BIT_BLEND_ENABLED);
+    }
+    if (mRenderer->getFeatures().supportsColorBlendEquationDynamicState.enabled)
+    {
+        mPipelineDirtyBitsMask.reset(gl::state::DIRTY_BIT_BLEND_FUNCS);
+        mPipelineDirtyBitsMask.reset(gl::state::DIRTY_BIT_BLEND_EQUATIONS);
+    }
+    if (mRenderer->getFeatures().supportsColorWriteMaskDynamicState.enabled)
+    {
+        mPipelineDirtyBitsMask.reset(gl::state::DIRTY_BIT_COLOR_MASK);
+    }
+    if (mRenderer->getFeatures().supportsSampleMaskDynamicState.enabled)
+    {
+        mPipelineDirtyBitsMask.reset(gl::state::DIRTY_BIT_SAMPLE_COVERAGE_ENABLED);
+        mPipelineDirtyBitsMask.reset(gl::state::DIRTY_BIT_SAMPLE_COVERAGE);
+        mPipelineDirtyBitsMask.reset(gl::state::DIRTY_BIT_SAMPLE_MASK_ENABLED);
+        mPipelineDirtyBitsMask.reset(gl::state::DIRTY_BIT_SAMPLE_MASK);
+    }
+    // Dynamic state in VK_EXT_vertex_input_dynamic_state
     if (getFeatures().supportsVertexInputDynamicState.enabled)
     {
         mPipelineDirtyBitsMask.reset(gl::state::DIRTY_BIT_VERTEX_ARRAY_BINDING);
@@ -2213,9 +2340,9 @@ angle::Result ContextVk::handleDirtyEventLogImpl(CommandBufferT *commandBuffer)
     label.pLabelName    = oglCmds.c_str();
     // This is #2 from comment above
     commandBuffer->beginDebugUtilsLabelEXT(label);
-    for (uint32_t i = 0; i < mEventLog.size(); ++i)
+    for (const std::string &event : mEventLog)
     {
-        label.pLabelName = mEventLog[i].c_str();
+        label.pLabelName = event.c_str();
         // NOTE: We have to use a begin/end pair here because AGI does not promote the
         // pLabelName from an insertDebugUtilsLabelEXT() call to the Commands panel.
         // Internal bug b/169243237 is tracking this and once the insert* call shows the
@@ -3320,7 +3447,7 @@ angle::Result ContextVk::handleDirtyGraphicsDynamicBlendConstants(
     DirtyBits dirtyBitMask)
 {
     const gl::ColorF &color = mState.getBlendColor();
-    mRenderPassCommandBuffer->setBlendConstants(color.data());
+    mRenderPassCommandBuffer->setBlendConstants(color);
     return angle::Result::Continue;
 }
 
@@ -3482,11 +3609,261 @@ angle::Result ContextVk::handleDirtyGraphicsDynamicLogicOp(DirtyBits::Iterator *
     return angle::Result::Continue;
 }
 
+angle::Result ContextVk::handleDirtyGraphicsDynamicPatchControlPoints(
+    DirtyBits::Iterator *dirtyBitsIterator,
+    DirtyBits dirtyBitMask)
+{
+    mRenderPassCommandBuffer->setPatchControlPoints(mState.getPatchVertices());
+    return angle::Result::Continue;
+}
+
 angle::Result ContextVk::handleDirtyGraphicsDynamicPrimitiveRestartEnable(
     DirtyBits::Iterator *dirtyBitsIterator,
     DirtyBits dirtyBitMask)
 {
     mRenderPassCommandBuffer->setPrimitiveRestartEnable(mState.isPrimitiveRestartEnabled());
+    return angle::Result::Continue;
+}
+
+angle::Result ContextVk::handleDirtyGraphicsDynamicAlphaToCoverageEnable(
+    DirtyBits::Iterator *dirtyBitsIterator,
+    DirtyBits dirtyBitMask)
+{
+    const uint32_t rasterizationSamples = getDrawFramebuffer()->getSamples();
+    mRenderPassCommandBuffer->setAlphaToCoverageEnable(mState.isSampleAlphaToCoverageEnabled() &&
+                                                       rasterizationSamples > 1);
+    return angle::Result::Continue;
+}
+
+angle::Result ContextVk::handleDirtyGraphicsDynamicAlphaToOneEnable(
+    DirtyBits::Iterator *dirtyBitsIterator,
+    DirtyBits dirtyBitMask)
+{
+    mRenderPassCommandBuffer->setAlphaToOneEnable(mState.isMultisamplingEnabled() &&
+                                                  mState.isSampleAlphaToOneEnabled());
+    return angle::Result::Continue;
+}
+
+angle::Result ContextVk::handleDirtyGraphicsDynamicColorBlendEnable(
+    DirtyBits::Iterator *dirtyBitsIterator,
+    DirtyBits dirtyBitMask)
+{
+    FramebufferVk *framebufferVk = vk::GetImpl(mState.getDrawFramebuffer());
+
+    // Set blend enable for every attachment in the framebuffer.
+    const gl::DrawBufferMask dirtyColorAttachments =
+        mDirtyColorBlendEnables & framebufferVk->getState().getColorAttachmentsMask();
+
+    const gl::DrawBufferMask enabledDrawBuffers = framebufferVk->getState().getEnabledDrawBuffers();
+
+    // Filter out blend for disabled attachments.  If advanced blend is enabled, Vulkan forbids
+    // blend from being specified on the other attachments (same as GL, but GL ignores blend on
+    // disabled attachments).
+    const gl::DrawBufferMask enabledBlend =
+        mState.getBlendStateExt().getEnabledMask() & enabledDrawBuffers;
+    const gl::DrawBufferMask advancedBlendMask =
+        mState.getBlendStateExt().getUsesAdvancedBlendEquationMask();
+
+    for (size_t colorIndexGL : dirtyColorAttachments)
+    {
+        // To avoid triggering valid usage error, blending must be disabled for formats that do not
+        // have VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT feature bit set.  From OpenGL ES
+        // clients, this means disabling blending for integer formats.
+        const bool isInt =
+            angle::Format::Get(framebufferVk->getRenderPassDesc()[colorIndexGL]).isInt();
+
+        // The blend fixed-function is enabled with normal blend as well as advanced blend when the
+        // Vulkan extension is present.  When emulating advanced blend in the shader, the blend
+        // fixed-function must be disabled.
+        const bool isEmulatedAdvancedBlend =
+            advancedBlendMask[colorIndexGL] && getFeatures().emulateAdvancedBlendEquations.enabled;
+
+        const VkBool32 colorBlendEnable =
+            enabledBlend[colorIndexGL] && !isInt && !isEmulatedAdvancedBlend;
+        mRenderPassCommandBuffer->setColorBlendEnable(static_cast<uint32_t>(colorIndexGL), 1,
+                                                      &colorBlendEnable);
+    }
+
+    mDirtyColorBlendEnables &= ~dirtyColorAttachments;
+    return angle::Result::Continue;
+}
+
+angle::Result ContextVk::handleDirtyGraphicsDynamicColorBlendEquation(
+    DirtyBits::Iterator *dirtyBitsIterator,
+    DirtyBits dirtyBitMask)
+{
+    FramebufferVk *framebufferVk           = vk::GetImpl(mState.getDrawFramebuffer());
+    const gl::BlendStateExt &blendStateExt = mState.getBlendStateExt();
+
+    // Set blend equation for every attachment in the framebuffer.
+    //
+    // If needed, this can be optimized to enabled attachments and only those for which blend is
+    // enabled; in that case, attachment changes and blend-enable changes should dirty
+    // DIRTY_BIT_DYNAMIC_COLOR_BLEND_EQUATION so that the corresponding blend equations can be set.
+    const gl::DrawBufferMask dirtyColorAttachments =
+        mDirtyColorBlendEquations & framebufferVk->getState().getColorAttachmentsMask();
+
+    // Attachments with advanced blend are configured via a different API.
+    const bool supportsAdvancedBlendThroughEXT =
+        getFeatures().supportsBlendOperationAdvanced.enabled;
+    const gl::DrawBufferMask advancedBlendMask =
+        supportsAdvancedBlendThroughEXT ? blendStateExt.getUsesAdvancedBlendEquationMask()
+                                        : gl::DrawBufferMask();
+
+    const gl::DrawBufferMask enabledBlend = mState.getBlendStateExt().getEnabledMask() &
+                                            framebufferVk->getState().getEnabledDrawBuffers();
+
+    for (size_t colorIndexGL : dirtyColorAttachments)
+    {
+        // Advanced blend can only be used with attachment 0 in GLES.  If the application has
+        // configured advanced blend on any other attachment, that is allowed if blending is
+        // disabled for that attachment.  Guard against that by never using advanced blend for
+        // non-zero attachments.
+        const VkBlendOp colorBlendOp =
+            gl_vk::GetBlendOp(blendStateExt.getEquationColorIndexed(colorIndexGL));
+        const bool isAdvancedBlend = colorBlendOp > VK_BLEND_OP_MAX;
+        if (advancedBlendMask[colorIndexGL] && colorIndexGL == 0)
+        {
+            ASSERT(isAdvancedBlend);
+
+            VkColorBlendAdvancedEXT advancedBlend = {};
+            advancedBlend.advancedBlendOp         = colorBlendOp;
+            advancedBlend.srcPremultiplied        = VK_TRUE;
+            advancedBlend.dstPremultiplied        = VK_TRUE;
+            advancedBlend.blendOverlap            = VK_BLEND_OVERLAP_UNCORRELATED_EXT;
+            advancedBlend.clampResults            = VK_FALSE;
+
+            mRenderPassCommandBuffer->setColorBlendAdvanced(static_cast<uint32_t>(colorIndexGL), 1,
+                                                            &advancedBlend);
+        }
+        else if (isAdvancedBlend &&
+                 (!supportsAdvancedBlendThroughEXT || !enabledBlend[colorIndexGL]))
+        {
+            // When emulated, advanced blend is communicated via uniforms and implemented in the
+            // shader.  Blend itself is disabled, so it doesn't matter what gets set here.
+            //
+            // When using the extension, blend must be disabled (or else the draw call would have
+            // failed) for a non-zero color index with advanced blend.  In that case too, it doesn't
+            // matter what gets set here.  There is no need to dirty blend equations when blend
+            // enable changes for the sake of this code (which checks enabledBlend), because simply
+            // enabling blend for this attachment would make the draw call fail validation; a blend
+            // equation change is needed which results in this function getting called
+            // automatically.
+            VkColorBlendEquationEXT blendEquation = {};
+            mRenderPassCommandBuffer->setColorBlendEquation(static_cast<uint32_t>(colorIndexGL), 1,
+                                                            &blendEquation);
+        }
+        else
+        {
+            VkColorBlendEquationEXT blendEquation = {};
+            blendEquation.srcColorBlendFactor =
+                gl_vk::GetBlendFactor(blendStateExt.getSrcColorIndexed(colorIndexGL));
+            blendEquation.dstColorBlendFactor =
+                gl_vk::GetBlendFactor(blendStateExt.getDstColorIndexed(colorIndexGL));
+            blendEquation.colorBlendOp = isAdvancedBlend ? VK_BLEND_OP_ADD : colorBlendOp;
+            blendEquation.srcAlphaBlendFactor =
+                gl_vk::GetBlendFactor(blendStateExt.getSrcAlphaIndexed(colorIndexGL));
+            blendEquation.dstAlphaBlendFactor =
+                gl_vk::GetBlendFactor(blendStateExt.getDstAlphaIndexed(colorIndexGL));
+            blendEquation.alphaBlendOp =
+                isAdvancedBlend
+                    ? VK_BLEND_OP_ADD
+                    : gl_vk::GetBlendOp(blendStateExt.getEquationAlphaIndexed(colorIndexGL));
+
+            mRenderPassCommandBuffer->setColorBlendEquation(static_cast<uint32_t>(colorIndexGL), 1,
+                                                            &blendEquation);
+        }
+    }
+
+    mDirtyColorBlendEquations &= ~dirtyColorAttachments;
+    return angle::Result::Continue;
+}
+
+angle::Result ContextVk::handleDirtyGraphicsDynamicColorWriteMask(
+    DirtyBits::Iterator *dirtyBitsIterator,
+    DirtyBits dirtyBitMask)
+{
+    FramebufferVk *framebufferVk = vk::GetImpl(mState.getDrawFramebuffer());
+
+    // Set the write mask for every attachment in the framebuffer.
+    const gl::DrawBufferMask dirtyColorAttachments =
+        mDirtyColorWriteMasks & framebufferVk->getState().getColorAttachmentsMask();
+
+    // If format is RGB but emulated with RGBA, the alpha channel is pre-cleared and must be left
+    // untouched during draw.
+    const gl::DrawBufferMask emulatedAlphaAttachmentMask =
+        framebufferVk->getEmulatedAlphaAttachmentMask();
+
+    // Set the mask to 0 if:
+    //
+    // * The draw buffer is disabled, so it must remain untouched
+    // * The draw buffer is present in the framebuffer, but it is never written to in the shader.
+    //   GL_ANGLE_robust_fragment_shader_output defines the behavior in this case
+    const gl::DrawBufferMask enabledDrawBuffers =
+        framebufferVk->getState().getEnabledDrawBuffers() & ~mMissingOutputsMask;
+
+    for (size_t colorIndexGL : dirtyColorAttachments)
+    {
+        const VkColorComponentFlags colorMask =
+            gl::BlendStateExt::ColorMaskStorage::GetValueIndexed(colorIndexGL, mClearColorMasks);
+        VkColorComponentFlags colorWriteMask = 0;
+        if (enabledDrawBuffers[colorIndexGL])
+        {
+            colorWriteMask = emulatedAlphaAttachmentMask[colorIndexGL]
+                                 ? (colorMask & ~VK_COLOR_COMPONENT_A_BIT)
+                                 : colorMask;
+        }
+
+        mRenderPassCommandBuffer->setColorWriteMask(static_cast<uint32_t>(colorIndexGL), 1,
+                                                    &colorWriteMask);
+    }
+
+    mDirtyColorWriteMasks &= ~dirtyColorAttachments;
+    return angle::Result::Continue;
+}
+
+angle::Result ContextVk::handleDirtyGraphicsDynamicDepthClampEnable(
+    DirtyBits::Iterator *dirtyBitsIterator,
+    DirtyBits dirtyBitMask)
+{
+    mRenderPassCommandBuffer->setDepthClampEnable(mState.isDepthClampEnabled());
+    return angle::Result::Continue;
+}
+
+angle::Result ContextVk::handleDirtyGraphicsDynamicDepthClipNegativeOneToOne(
+    DirtyBits::Iterator *dirtyBitsIterator,
+    DirtyBits dirtyBitMask)
+{
+    mRenderPassCommandBuffer->setDepthClipNegativeOneToOne(!mState.isClipDepthModeZeroToOne());
+    return angle::Result::Continue;
+}
+
+angle::Result ContextVk::handleDirtyGraphicsDynamicLogicOpEnable(
+    DirtyBits::Iterator *dirtyBitsIterator,
+    DirtyBits dirtyBitMask)
+{
+    mRenderPassCommandBuffer->setLogicOpEnable(mState.isLogicOpEnabled());
+    return angle::Result::Continue;
+}
+
+angle::Result ContextVk::handleDirtyGraphicsDynamicPolygonMode(
+    DirtyBits::Iterator *dirtyBitsIterator,
+    DirtyBits dirtyBitMask)
+{
+    mRenderPassCommandBuffer->setPolygonMode(gl_vk::GetPolygonMode(mState.getPolygonMode()));
+    return angle::Result::Continue;
+}
+
+angle::Result ContextVk::handleDirtyGraphicsDynamicSampleMask(
+    DirtyBits::Iterator *dirtyBitsIterator,
+    DirtyBits dirtyBitMask)
+{
+    const uint32_t rasterizationSamples = getDrawFramebuffer()->getSamples();
+    const uint32_t mask                 = DeriveSampleMask(mState, rasterizationSamples);
+    ASSERT(rasterizationSamples <= VK_SAMPLE_COUNT_16_BIT);
+    // See comment in SecondaryCommandBuffer::setSampleMask, using a sample count that's higher than
+    // rasterization samples is ok per the Vulkan spec.
+    mRenderPassCommandBuffer->setSampleMask(VK_SAMPLE_COUNT_16_BIT, &mask);
     return angle::Result::Continue;
 }
 
@@ -4716,14 +5093,25 @@ void ContextVk::updateColorMasks()
 
     mClearColorMasks = blendStateExt.getColorMaskBits();
 
-    FramebufferVk *framebufferVk = vk::GetImpl(mState.getDrawFramebuffer());
-    mGraphicsPipelineDesc->updateColorWriteMasks(&mGraphicsPipelineTransition, mClearColorMasks,
-                                                 framebufferVk->getEmulatedAlphaAttachmentMask(),
-                                                 framebufferVk->getState().getEnabledDrawBuffers());
+    if (mRenderer->getFeatures().supportsColorWriteMaskDynamicState.enabled)
+    {
+        mGraphicsDirtyBits.set(DIRTY_BIT_DYNAMIC_COLOR_WRITE_MASK);
+        // Assume all attachments are dirty for simplicity, we don't currently track what the
+        // previous mask was to compare against.
+        mDirtyColorWriteMasks.set();
+    }
+    else
+    {
+        FramebufferVk *framebufferVk = vk::GetImpl(mState.getDrawFramebuffer());
+        mGraphicsPipelineDesc->updateColorWriteMasks(
+            &mGraphicsPipelineTransition, mClearColorMasks,
+            framebufferVk->getEmulatedAlphaAttachmentMask(),
+            framebufferVk->getState().getEnabledDrawBuffers());
 
-    // This function may be called outside of ContextVk::syncState, and so invalidates the graphics
-    // pipeline.
-    invalidateCurrentGraphicsPipeline();
+        // This function may be called outside of ContextVk::syncState, and so invalidates the
+        // graphics pipeline.
+        invalidateCurrentGraphicsPipeline();
+    }
 
     onColorAccessChange();
 }
@@ -4741,8 +5129,19 @@ void ContextVk::updateMissingAttachments()
     const gl::DrawBufferMask shaderOutMask      = executable->getActiveOutputVariablesMask();
     const gl::DrawBufferMask missingOutputsMask = ~shaderOutMask & framebufferMask;
 
+    // Missing output affects the color write mask
+    if (mRenderer->getFeatures().supportsColorWriteMaskDynamicState.enabled &&
+        missingOutputsMask != mMissingOutputsMask)
+    {
+        mGraphicsDirtyBits.set(DIRTY_BIT_DYNAMIC_COLOR_WRITE_MASK);
+        // Only the bits in missingOutputsMask^mMissingOutputsMask (those that have changed) need to
+        // be set, but set all for simplicity.
+        mDirtyColorWriteMasks.set();
+    }
+    mMissingOutputsMask = missingOutputsMask;
+
     mGraphicsPipelineDesc->updateMissingOutputsMask(&mGraphicsPipelineTransition,
-                                                    missingOutputsMask);
+                                                    mMissingOutputsMask);
 
     // Handle missing depth/stencil attachment input.  If gl_LastFragDepth/StencilARM is used by the
     // shader but there is no depth/stencil attachment, the shader is changed not to read from the
@@ -4756,70 +5155,86 @@ void ContextVk::updateMissingAttachments()
 void ContextVk::updateBlendEnabled()
 {
     const gl::DrawBufferMask framebufferMask = mState.getDrawFramebuffer()->getDrawBufferMask();
-    const gl::DrawBufferMask enabledBlend    = mState.getBlendStateExt().getEnabledMask();
 
-    // Filter out blend for disabled attachments.  If advanced blend is enabled, Vulkan
-    // forbids blend from being specified on the other attachments (same as GL, but GL
-    // ignores blend on disabled attachments).
-    mGraphicsPipelineDesc->updateBlendEnabled(&mGraphicsPipelineTransition,
-                                              enabledBlend & framebufferMask);
+    if (mRenderer->getFeatures().supportsColorBlendEnableDynamicState.enabled)
+    {
+        mGraphicsDirtyBits.set(DIRTY_BIT_DYNAMIC_COLOR_BLEND_ENABLE);
+        // Assume all attachments are dirty for simplicity, we don't currently track what the
+        // previous enable flag was to compare against.
+        mDirtyColorBlendEnables.set();
+    }
+    else
+    {
+        const gl::DrawBufferMask enabledBlend = mState.getBlendStateExt().getEnabledMask();
+
+        // Filter out blend for disabled attachments.  If advanced blend is enabled, Vulkan
+        // forbids blend from being specified on the other attachments (same as GL, but GL
+        // ignores blend on disabled attachments).
+        mGraphicsPipelineDesc->updateBlendEnabled(&mGraphicsPipelineTransition,
+                                                  enabledBlend & framebufferMask);
+    }
 }
 
-void ContextVk::updateBlendFuncsAndEquations()
+void ContextVk::updateBlendFuncsAndEquationsOnFramebufferChange()
 {
-    const gl::BlendStateExt &blendStateExt = mState.getBlendStateExt();
+    const gl::DrawBufferMask previousAttachmentsMask = mCachedDrawFramebufferColorAttachmentMask;
+    const gl::DrawBufferMask newAttachmentsMask =
+        getDrawFramebuffer()->getState().getColorAttachmentsMask();
+    mCachedDrawFramebufferColorAttachmentMask = newAttachmentsMask;
 
-    FramebufferVk *framebufferVk              = vk::GetImpl(mState.getDrawFramebuffer());
-    mCachedDrawFramebufferColorAttachmentMask = framebufferVk->getState().getEnabledDrawBuffers();
+    if (mRenderer->getFeatures().supportsColorBlendEquationDynamicState.enabled)
+    {
+        // There is no need to set mDirtyColorBlendEquations, any equation that has been previously
+        // set still applies.  If there is a new attachment that previously didn't exist, then the
+        // blend equation dirty bit needs to be set so the blend equations for the new attachments
+        // are set in the command buffer.
+        const gl::DrawBufferMask dirtyNewAttachments =
+            newAttachmentsMask & ~previousAttachmentsMask & mDirtyColorBlendEquations;
+        if (dirtyNewAttachments.any())
+        {
+            mGraphicsDirtyBits.set(DIRTY_BIT_DYNAMIC_COLOR_BLEND_EQUATION);
+        }
+    }
+    else
+    {
+        mGraphicsPipelineDesc->resetBlendFuncsAndEquations(
+            &mGraphicsPipelineTransition, mState.getBlendStateExt(), previousAttachmentsMask,
+            newAttachmentsMask);
 
-    mGraphicsPipelineDesc->updateBlendFuncs(&mGraphicsPipelineTransition, blendStateExt,
-                                            mCachedDrawFramebufferColorAttachmentMask);
-
-    mGraphicsPipelineDesc->updateBlendEquations(&mGraphicsPipelineTransition, blendStateExt,
-                                                mCachedDrawFramebufferColorAttachmentMask);
-
-    // This function may be called outside of ContextVk::syncState, and so invalidates the graphics
-    // pipeline.
-    invalidateCurrentGraphicsPipeline();
+        // This function may be called outside of ContextVk::syncState, and so invalidates the
+        // graphics pipeline.
+        invalidateCurrentGraphicsPipeline();
+    }
 }
 
 void ContextVk::updateSampleMaskWithRasterizationSamples(const uint32_t rasterizationSamples)
 {
-    static_assert(sizeof(uint32_t) == sizeof(GLbitfield), "Vulkan assumes 32-bit sample masks");
-    ASSERT(mState.getMaxSampleMaskWords() == 1);
-
-    uint32_t mask = std::numeric_limits<uint16_t>::max();
-
-    // The following assumes that supported sample counts for multisampled
-    // rendering does not include 1. This is true in the Vulkan backend,
-    // where 1x multisampling is disallowed.
-    if (rasterizationSamples > 1)
+    if (mRenderer->getFeatures().supportsSampleMaskDynamicState.enabled)
     {
-        if (mState.isSampleMaskEnabled())
-        {
-            mask = mState.getSampleMaskWord(0) & angle::BitMask<uint32_t>(rasterizationSamples);
-        }
-
-        // If sample coverage is enabled, emulate it by generating and applying a mask on top of the
-        // sample mask.
-        if (mState.isSampleCoverageEnabled())
-        {
-            ApplySampleCoverage(mState, GetCoverageSampleCount(mState, rasterizationSamples),
-                                &mask);
-        }
+        mGraphicsDirtyBits.set(DIRTY_BIT_DYNAMIC_SAMPLE_MASK);
     }
-
-    mGraphicsPipelineDesc->updateSampleMask(&mGraphicsPipelineTransition, 0, mask);
+    else
+    {
+        const uint32_t mask = DeriveSampleMask(mState, rasterizationSamples);
+        mGraphicsPipelineDesc->updateSampleMask(&mGraphicsPipelineTransition, 0, mask);
+    }
 }
 
 void ContextVk::updateAlphaToCoverageWithRasterizationSamples(const uint32_t rasterizationSamples)
 {
-    // The following assumes that supported sample counts for multisampled
-    // rendering does not include 1. This is true in the Vulkan backend,
-    // where 1x multisampling is disallowed.
-    mGraphicsPipelineDesc->updateAlphaToCoverageEnable(
-        &mGraphicsPipelineTransition,
-        mState.isSampleAlphaToCoverageEnabled() && rasterizationSamples > 1);
+    if (mRenderer->getFeatures().supportsAlphaToCoverageEnableDynamicState.enabled)
+    {
+        mGraphicsDirtyBits.set(DIRTY_BIT_DYNAMIC_ALPHA_TO_COVERAGE_ENABLE);
+    }
+    else
+    {
+        // The following assumes that supported sample counts for multisampled
+        // rendering does not include 1. This is true in the Vulkan backend,
+        // where 1x multisampling is disallowed.
+        mGraphicsPipelineDesc->updateAlphaToCoverageEnable(
+            &mGraphicsPipelineTransition,
+            mState.isSampleAlphaToCoverageEnabled() && rasterizationSamples > 1);
+    }
 }
 
 void ContextVk::updateFrameBufferFetchSamples(const uint32_t prevSamples, const uint32_t curSamples)
@@ -4928,13 +5343,22 @@ ANGLE_INLINE void ContextVk::updateTopology(gl::PrimitiveMode mode)
     //
     // Note: VK_EXT_extended_dynamic_state3's dynamicPrimitiveTopologyUnrestricted property
     // indicates that the dynamically set primitive topology doesn't need to match even the topology
-    // class used to create the pipeline.  That property seems to only be set on Nvidia.
+    // class used to create the pipeline.  That property is rarely set however.
     if (getFeatures().usePrimitiveTopologyDynamicState.enabled)
     {
         // Update the exact mode dynamically
         mGraphicsDirtyBits.set(DIRTY_BIT_DYNAMIC_PRIMITIVE_TOPOLOGY);
 
-        // Only update the pipeline desc if the primitive class has changed
+        // Nothing to do if dynamicPrimitiveTopologyUnrestricted is set.
+        if (getFeatures().supportsExtendedDynamicState3.enabled &&
+            getRenderer()
+                ->getPhysicalDeviceExtendedDynamicState3Properties()
+                .dynamicPrimitiveTopologyUnrestricted)
+        {
+            return;
+        }
+
+        // Only update the pipeline desc if the primitive class has changed.
         pipelineTopology = kPrimitiveTopologyClass[mode];
         const bool isTopologyClassChanged =
             pipelineTopology != kPrimitiveTopologyClass[currentMode];
@@ -5091,13 +5515,20 @@ void ContextVk::updateSampleShadingWithRasterizationSamples(const uint32_t raste
 // rasterization sample should be updated.
 void ContextVk::updateRasterizationSamples(const uint32_t rasterizationSamples)
 {
-    uint32_t prevSampleCount = mGraphicsPipelineDesc->getRasterizationSamples();
+    uint32_t prevSampleCount = mCurrentRasterizationSamples;
     updateFrameBufferFetchSamples(prevSampleCount, rasterizationSamples);
-    mGraphicsPipelineDesc->updateRasterizationSamples(&mGraphicsPipelineTransition,
-                                                      rasterizationSamples);
     updateSampleShadingWithRasterizationSamples(rasterizationSamples);
     updateSampleMaskWithRasterizationSamples(rasterizationSamples);
     updateAlphaToCoverageWithRasterizationSamples(rasterizationSamples);
+
+    // If rasterization samples is using dynamic state, it's automatically set once at the beginning
+    // of the render pass.
+    if (!mRenderer->getFeatures().supportsRasterizationSamplesDynamicState.enabled)
+    {
+        mGraphicsPipelineDesc->updateRasterizationSamples(&mGraphicsPipelineTransition,
+                                                          rasterizationSamples);
+    }
+    mCurrentRasterizationSamples = rasterizationSamples;
 }
 
 void ContextVk::updateRasterizerDiscardEnabled(bool isPrimitivesGeneratedQueryActive)
@@ -5138,6 +5569,41 @@ void ContextVk::updateRasterizerDiscardEnabled(bool isPrimitivesGeneratedQueryAc
     }
 }
 
+void ContextVk::updateBlendFuncs()
+{
+    if (mRenderer->getFeatures().supportsColorBlendEquationDynamicState.enabled)
+    {
+        mGraphicsDirtyBits.set(DIRTY_BIT_DYNAMIC_COLOR_BLEND_EQUATION);
+        // Assume all attachments are dirty for simplicity, we don't currently track what the
+        // previous blend functions and equations were to compare against.
+        mDirtyColorBlendEquations.set();
+    }
+    else
+    {
+        mGraphicsPipelineDesc->updateBlendFuncs(
+            &mGraphicsPipelineTransition, mState.getBlendStateExt(),
+            getDrawFramebuffer()->getState().getColorAttachmentsMask());
+    }
+}
+
+void ContextVk::updateBlendEquations(const gl::ProgramExecutable *executable)
+{
+    if (mRenderer->getFeatures().supportsColorBlendEquationDynamicState.enabled)
+    {
+        mGraphicsDirtyBits.set(DIRTY_BIT_DYNAMIC_COLOR_BLEND_EQUATION);
+        // Assume all attachments are dirty for simplicity, we don't currently track what the
+        // previous blend functions and equations were to compare against.
+        mDirtyColorBlendEquations.set();
+    }
+    else
+    {
+        mGraphicsPipelineDesc->updateBlendEquations(
+            &mGraphicsPipelineTransition, mState.getBlendStateExt(),
+            getDrawFramebuffer()->getState().getColorAttachmentsMask());
+    }
+    updateAdvancedBlendEquations(executable);
+}
+
 void ContextVk::updateAdvancedBlendEquations(const gl::ProgramExecutable *executable)
 {
     if (!getFeatures().emulateAdvancedBlendEquations.enabled || executable == nullptr)
@@ -5163,6 +5629,14 @@ void ContextVk::updateAdvancedBlendEquations(const gl::ProgramExecutable *execut
         }
         mGraphicsDriverUniforms.updateAdvancedBlendEquation(advancedBlendEquation);
         mGraphicsDirtyBits.set(DIRTY_BIT_DRIVER_UNIFORMS);
+
+        // Advanced blend emulation affects whether blending is enabled.
+        if (getFeatures().supportsColorBlendEnableDynamicState.enabled)
+        {
+            mGraphicsDirtyBits.set(DIRTY_BIT_DYNAMIC_COLOR_BLEND_ENABLE);
+            // Set all for simplicity.
+            mDirtyColorBlendEnables.set();
+        }
     }
 }
 
@@ -5309,6 +5783,30 @@ angle::Result ContextVk::invalidateProgramExecutableHelper(const gl::Context *co
         mIndexedDirtyBitsMask.set(DIRTY_BIT_VERTEX_BUFFERS, useVertexBuffer);
         resetCurrentGraphicsPipeline();
 
+        // Only the gl_ClipDistance output of the last pre-rasterization stage is clipped against.
+        // The values written by the earlier stages are only observable by the following stages
+        // (through gl_in). Let the shaders know which stage is the last one, so that only that
+        // stage zeroes out the disabled clip distances.
+        sh::vk::LastPreRasterizationStage lastPreRasterizationStage =
+            sh::vk::LastPreRasterizationStage::Vertex;
+        switch (gl::GetLastPreFragmentStage(executable->getLinkedShaderStages()))
+        {
+            case gl::ShaderType::Geometry:
+                lastPreRasterizationStage = sh::vk::LastPreRasterizationStage::Geometry;
+                break;
+            case gl::ShaderType::TessEvaluation:
+                lastPreRasterizationStage =
+                    sh::vk::LastPreRasterizationStage::TessellationEvaluation;
+                break;
+            default:
+                break;
+        }
+        if (mGraphicsDriverUniforms.updateLastPreRasterizationStage(
+                static_cast<uint32_t>(lastPreRasterizationStage)))
+        {
+            mGraphicsDirtyBits.set(DIRTY_BIT_DRIVER_UNIFORMS);
+        }
+
         const vk::FramebufferFetchMode framebufferFetchMode =
             vk::GetProgramFramebufferFetchMode(executable);
         const bool hasColorFramebufferFetch =
@@ -5433,15 +5931,10 @@ angle::Result ContextVk::syncState(const gl::Context *context,
                 mGraphicsDirtyBits.set(DIRTY_BIT_DYNAMIC_BLEND_CONSTANTS);
                 break;
             case gl::state::DIRTY_BIT_BLEND_FUNCS:
-                mGraphicsPipelineDesc->updateBlendFuncs(
-                    &mGraphicsPipelineTransition, glState.getBlendStateExt(),
-                    drawFramebufferVk->getState().getColorAttachmentsMask());
+                updateBlendFuncs();
                 break;
             case gl::state::DIRTY_BIT_BLEND_EQUATIONS:
-                mGraphicsPipelineDesc->updateBlendEquations(
-                    &mGraphicsPipelineTransition, glState.getBlendStateExt(),
-                    drawFramebufferVk->getState().getColorAttachmentsMask());
-                updateAdvancedBlendEquations(programExecutable);
+                updateBlendEquations(programExecutable);
                 break;
             case gl::state::DIRTY_BIT_COLOR_MASK:
                 updateColorMasks();
@@ -5449,21 +5942,10 @@ angle::Result ContextVk::syncState(const gl::Context *context,
             case gl::state::DIRTY_BIT_SAMPLE_ALPHA_TO_COVERAGE_ENABLED:
                 updateAlphaToCoverageWithRasterizationSamples(drawFramebufferVk->getSamples());
                 updateStencilWriteWorkaround();
-
-                static_assert(gl::state::DIRTY_BIT_PROGRAM_EXECUTABLE >
-                                  gl::state::DIRTY_BIT_SAMPLE_ALPHA_TO_COVERAGE_ENABLED,
-                              "Dirty bit order");
-                iter.setLaterBit(gl::state::DIRTY_BIT_PROGRAM_EXECUTABLE);
                 break;
             case gl::state::DIRTY_BIT_SAMPLE_COVERAGE_ENABLED:
-                updateSampleMaskWithRasterizationSamples(drawFramebufferVk->getSamples());
-                break;
             case gl::state::DIRTY_BIT_SAMPLE_COVERAGE:
-                updateSampleMaskWithRasterizationSamples(drawFramebufferVk->getSamples());
-                break;
             case gl::state::DIRTY_BIT_SAMPLE_MASK_ENABLED:
-                updateSampleMaskWithRasterizationSamples(drawFramebufferVk->getSamples());
-                break;
             case gl::state::DIRTY_BIT_SAMPLE_MASK:
                 updateSampleMaskWithRasterizationSamples(drawFramebufferVk->getSamples());
                 break;
@@ -5698,15 +6180,7 @@ angle::Result ContextVk::syncState(const gl::Context *context,
                 updateScissor(glState);
                 updateDepthStencil(glState);
                 updateDither();
-
-                // Clear the blend funcs/equations for color attachment indices that no longer
-                // exist.
-                gl::DrawBufferMask newColorAttachmentMask =
-                    drawFramebufferVk->getState().getColorAttachmentsMask();
-                mGraphicsPipelineDesc->resetBlendFuncsAndEquations(
-                    &mGraphicsPipelineTransition, glState.getBlendStateExt(),
-                    mCachedDrawFramebufferColorAttachmentMask, newColorAttachmentMask);
-                mCachedDrawFramebufferColorAttachmentMask = newColorAttachmentMask;
+                updateBlendFuncsAndEquationsOnFramebufferChange();
 
                 if (!getFeatures().preferDynamicRendering.enabled)
                 {
@@ -5743,10 +6217,20 @@ angle::Result ContextVk::syncState(const gl::Context *context,
                 break;
             case gl::state::DIRTY_BIT_VERTEX_ARRAY_BINDING:
             {
-                gl::AttributesMask staleDefaultAttribsMask =
-                    vertexArrayVk->getCurrentDefaultAttribsMask() &
-                    ~programExecutable->getAttributesMask();
-                vertexArrayVk->syncDirtyDisabledAttribs(this, staleDefaultAttribsMask);
+                // The default attribute buffers cached in the newly bound vertex array are
+                // suballocated from mStreamedVertexBuffers, which may have been reallocated (and
+                // the old BufferHelpers freed) while this vertex array was not bound.  Reset all of
+                // them to the empty buffer; the active ones are reallocated by
+                // handleDirtyGraphicsDefaultAttribs() before they are used.
+                //
+                // Note that the active ones cannot be left stale in anticipation of that update:
+                // the state may be synced without a draw (e.g. a multi-draw where every draw is a
+                // no-op), and the program may change before the next draw.  In that case,
+                // handleDirtyGraphicsDefaultAttribs() skips attributes that are not used by the new
+                // program, while the vertex buffers handler still binds (and tracks) every
+                // attribute up to the program's max active attribute location.
+                vertexArrayVk->syncDirtyDisabledAttribs(
+                    this, vertexArrayVk->getCurrentDefaultAttribsMask());
                 invalidateDefaultAttributes(context->getActiveDefaultAttribsMask());
                 ANGLE_TRY(onVertexArrayChange(vertexArrayVk->getCurrentEnabledAttribsMask()));
                 ANGLE_TRY(onIndexBufferChange(vertexArrayVk->getCurrentElementArrayBuffer()));
@@ -5893,9 +6377,16 @@ angle::Result ContextVk::syncState(const gl::Context *context,
                 // This is part of EXT_multisample_compatibility, and requires the alphaToOne Vulkan
                 // feature.
                 // http://anglebug.com/42266123
-                mGraphicsPipelineDesc->updateAlphaToOneEnable(
-                    &mGraphicsPipelineTransition,
-                    glState.isMultisamplingEnabled() && glState.isSampleAlphaToOneEnabled());
+                if (mRenderer->getFeatures().supportsAlphaToOneEnableDynamicState.enabled)
+                {
+                    mGraphicsDirtyBits.set(DIRTY_BIT_DYNAMIC_ALPHA_TO_ONE_ENABLE);
+                }
+                else
+                {
+                    mGraphicsPipelineDesc->updateAlphaToOneEnable(
+                        &mGraphicsPipelineTransition,
+                        glState.isMultisamplingEnabled() && glState.isSampleAlphaToOneEnabled());
+                }
                 break;
             case gl::state::DIRTY_BIT_SAMPLE_SHADING:
                 updateSampleShadingWithRasterizationSamples(drawFramebufferVk->getSamples());
@@ -5918,12 +6409,20 @@ angle::Result ContextVk::syncState(const gl::Context *context,
 
                 // If VK_EXT_depth_clip_control is not enabled, there's nothing needed
                 // for depth correction for EXT_clip_control.
-                // glState will be used to toggle control path of depth correction code
-                // in SPIR-V transform options.
+                // glState will be used to control depth correction code in SPIR-V via driver
+                // uniforms.
                 if (getFeatures().supportsDepthClipControl.enabled)
                 {
-                    mGraphicsPipelineDesc->updateDepthClipControl(
-                        &mGraphicsPipelineTransition, !glState.isClipDepthModeZeroToOne());
+                    if (mRenderer->getFeatures()
+                            .supportsDepthClipNegativeOneToOneDynamicState.enabled)
+                    {
+                        mGraphicsDirtyBits.set(DIRTY_BIT_DYNAMIC_DEPTH_CLIP_NEGATIVE_ONE_TO_ONE);
+                    }
+                    else
+                    {
+                        mGraphicsPipelineDesc->updateDepthClipControl(
+                            &mGraphicsPipelineTransition, !glState.isClipDepthModeZeroToOne());
+                    }
                 }
                 else
                 {
@@ -5947,16 +6446,29 @@ angle::Result ContextVk::syncState(const gl::Context *context,
                             mGraphicsDirtyBits.set(DIRTY_BIT_DRIVER_UNIFORMS);
                             break;
                         case gl::state::EXTENDED_DIRTY_BIT_DEPTH_CLAMP_ENABLED:
-                            // TODO(https://anglebug.com/42266182): Use EDS3
-                            mGraphicsPipelineDesc->updateDepthClampEnabled(
-                                &mGraphicsPipelineTransition, glState.isDepthClampEnabled());
+                            if (mRenderer->getFeatures()
+                                    .supportsDepthClampEnableDynamicState.enabled)
+                            {
+                                mGraphicsDirtyBits.set(DIRTY_BIT_DYNAMIC_DEPTH_CLAMP_ENABLE);
+                            }
+                            else
+                            {
+                                mGraphicsPipelineDesc->updateDepthClampEnabled(
+                                    &mGraphicsPipelineTransition, glState.isDepthClampEnabled());
+                            }
                             break;
                         case gl::state::EXTENDED_DIRTY_BIT_MIPMAP_GENERATION_HINT:
                             break;
                         case gl::state::EXTENDED_DIRTY_BIT_POLYGON_MODE:
-                            // TODO(https://anglebug.com/42266182): Use EDS3
-                            mGraphicsPipelineDesc->updatePolygonMode(&mGraphicsPipelineTransition,
-                                                                     glState.getPolygonMode());
+                            if (mRenderer->getFeatures().supportsPolygonModeDynamicState.enabled)
+                            {
+                                mGraphicsDirtyBits.set(DIRTY_BIT_DYNAMIC_POLYGON_MODE);
+                            }
+                            else
+                            {
+                                mGraphicsPipelineDesc->updatePolygonMode(
+                                    &mGraphicsPipelineTransition, glState.getPolygonMode());
+                            }
                             // When polygon mode is changed, depth bias might need to be toggled.
                             static_assert(
                                 gl::state::EXTENDED_DIRTY_BIT_POLYGON_OFFSET_LINE_ENABLED >
@@ -5980,8 +6492,15 @@ angle::Result ContextVk::syncState(const gl::Context *context,
                         case gl::state::EXTENDED_DIRTY_BIT_SHADER_DERIVATIVE_HINT:
                             break;
                         case gl::state::EXTENDED_DIRTY_BIT_LOGIC_OP_ENABLED:
-                            mGraphicsPipelineDesc->updateLogicOpEnabled(
-                                &mGraphicsPipelineTransition, glState.isLogicOpEnabled());
+                            if (mRenderer->getFeatures().supportsLogicOpEnableDynamicState.enabled)
+                            {
+                                mGraphicsDirtyBits.set(DIRTY_BIT_DYNAMIC_LOGIC_OP_ENABLE);
+                            }
+                            else
+                            {
+                                mGraphicsPipelineDesc->updateLogicOpEnabled(
+                                    &mGraphicsPipelineTransition, glState.isLogicOpEnabled());
+                            }
                             break;
                         case gl::state::EXTENDED_DIRTY_BIT_LOGIC_OP:
                             if (mRenderer->getFeatures().supportsLogicOpDynamicState.enabled)
@@ -6012,8 +6531,15 @@ angle::Result ContextVk::syncState(const gl::Context *context,
                 break;
             }
             case gl::state::DIRTY_BIT_PATCH_VERTICES:
-                mGraphicsPipelineDesc->updatePatchVertices(&mGraphicsPipelineTransition,
-                                                           glState.getPatchVertices());
+                if (mRenderer->getFeatures().supportsPatchControlPointsDynamicState.enabled)
+                {
+                    mGraphicsDirtyBits.set(DIRTY_BIT_DYNAMIC_PATCH_CONTROL_POINTS);
+                }
+                else
+                {
+                    mGraphicsPipelineDesc->updatePatchVertices(&mGraphicsPipelineTransition,
+                                                               glState.getPatchVertices());
+                }
                 break;
             default:
                 UNREACHABLE();
@@ -6430,7 +6956,7 @@ angle::Result ContextVk::onFramebufferChange(FramebufferVk *framebufferVk, gl::C
 {
     // This is called from FramebufferVk::syncState.  Skip these updates if the framebuffer being
     // synced is the read framebuffer (which is not equal the draw framebuffer).
-    if (framebufferVk != vk::GetImpl(mState.getDrawFramebuffer()))
+    if (framebufferVk != getDrawFramebuffer())
     {
         return angle::Result::Continue;
     }
@@ -6441,8 +6967,7 @@ angle::Result ContextVk::onFramebufferChange(FramebufferVk *framebufferVk, gl::C
     onRenderPassFinished(RenderPassClosureReason::FramebufferChange);
 
     // Ensure that the pipeline description is updated.
-    if (mGraphicsPipelineDesc->getRasterizationSamples() !=
-        static_cast<uint32_t>(framebufferVk->getSamples()))
+    if (mCurrentRasterizationSamples != static_cast<uint32_t>(framebufferVk->getSamples()))
     {
         updateRasterizationSamples(framebufferVk->getSamples());
     }
@@ -6656,6 +7181,9 @@ void ContextVk::invalidateComputeDescriptorSet(DescriptorSetIndex usedDescriptor
 void ContextVk::invalidateAllDynamicState()
 {
     mGraphicsDirtyBits |= mDynamicStateDirtyBits;
+    mDirtyColorWriteMasks.set();
+    mDirtyColorBlendEnables.set();
+    mDirtyColorBlendEquations.set();
 }
 
 angle::Result ContextVk::dispatchCompute(const gl::Context *context,
@@ -7013,7 +7541,7 @@ void ContextVk::handleError(VkResult errorCode,
     }
     collector.releaseCommandBuffers();
 
-    mGraphicsDirtyBits |= mNewRenderPassDirtyBits;
+    markNewRenderPassDirtyBits();
     mComputeDirtyBits |= mNewComputeCommandBufferDirtyBits;
 
     mOutsideRenderPassSerialFactory.reset();
@@ -7189,12 +7717,13 @@ angle::Result ContextVk::initImageAllocation(vk::ImageHelper *imageHelper,
     if (result != VK_SUCCESS)
     {
         uint32_t pendingMemoryTypeIndex;
-        bool allocateDedicatedMemory =
-            mRenderer->getImageMemorySuballocator().needsDedicatedMemory(memoryRequirements.size);
+        bool allocateDedicatedMemory = mRenderer->getImageMemorySuballocator().needsDedicatedMemory(
+            mRenderer, memoryRequirements.size);
 
         if (vma::FindMemoryTypeIndexForImageInfo(
                 mRenderer->getAllocator().getHandle(), &imageHelper->getVkImageCreateInfo(), flags,
-                flags, allocateDedicatedMemory, &pendingMemoryTypeIndex) == VK_SUCCESS)
+                flags, memoryRequirements.memoryTypeBits, allocateDedicatedMemory,
+                &pendingMemoryTypeIndex) == VK_SUCCESS)
         {
             mRenderer->getMemoryAllocationTracker()->setPendingMemoryAlloc(
                 allocationType, memoryRequirements.size, pendingMemoryTypeIndex);
@@ -7460,12 +7989,9 @@ angle::Result ContextVk::updateActiveImages(CommandBufferHelperT *commandBufferH
 
     // If there are memoryBarrier call being made that requires we insert barriers for images we
     // must do so.
-    bool memoryBarrierRequired = false;
-    if ((mDeferredMemoryBarriers & kWriteAfterAccessImageMemoryBarriers) != 0)
-    {
-        memoryBarrierRequired = true;
-        mDeferredMemoryBarriers &= ~kWriteAfterAccessImageMemoryBarriers;
-    }
+    const GLbitfield memoryBarrierBits =
+        mDeferredMemoryBarriers & kWriteAfterAccessImageMemoryBarriers;
+    mDeferredMemoryBarriers &= ~kWriteAfterAccessImageMemoryBarriers;
 
     FillWithNullptr(&mActiveImages);
 
@@ -7524,7 +8050,7 @@ angle::Result ContextVk::updateActiveImages(CommandBufferHelperT *commandBufferH
         const vk::ImageAccess imageAccess = GetImageWriteAccessAndSubresource(
             imageUnit, *image, shaderStages, &level, &layerStart, &layerCount);
 
-        if (imageAccess == image->getCurrentImageAccess() && !memoryBarrierRequired)
+        if (imageAccess == image->getCurrentImageAccess() && memoryBarrierBits == 0)
         {
             // GL spec does not require implementation to do WAW barriers for shader image access.
             // If there is no layout change, we skip the barrier here unless there is prior
@@ -7534,7 +8060,8 @@ angle::Result ContextVk::updateActiveImages(CommandBufferHelperT *commandBufferH
         else
         {
             commandBufferHelper->imageWrite(this, level, layerStart, layerCount,
-                                            image->getAspectFlags(), imageAccess, image);
+                                            image->getAspectFlags(), imageAccess, image,
+                                            memoryBarrierBits);
         }
     }
 
@@ -7875,6 +8402,58 @@ angle::Result ContextVk::beginNewRenderPass(
         ASSERT(mCurrentGraphicsPipeline->valid());
         mCurrentGraphicsPipeline->retainInRenderPass(mRenderPassCommands);
     }
+
+    // Set all dynamic state that is constant throughout the render pass:
+    //
+    // - Bresenham lines
+    // - Provoking vertex mode
+    // - Rasterization samples
+    // - Rasterization stream
+    // - Tessellation domain origin
+    if (mRenderer->getFeatures().supportsLineRasterizationModeDynamicState.enabled)
+    {
+        // VUID-vkCmdDraw-None-10608:
+        //
+        // > If ... the current lineRasterizationMode is VK_LINE_RASTERIZATION_MODE_BRESENHAM ...,
+        // > then the current alphaToCoverageEnable, alphaToOneEnable and sampleShadingEnable states
+        // > must all be VK_FALSE
+        //
+        // So we cannot use bresenham lines under those conditions.  Additionally, bresenham lines
+        // should not be used when multisampling (http://anglebug.com/42262723):
+        //
+        // > When Bresenham lines are being rasterized, sample locations may all be treated as being
+        // > at the pixel center
+        //
+        // ANGLE already disables alpha to coverage and alpha to one when the render pass is
+        // single-sampled, and sample shading doesn't apply in that case either.  So all that really
+        // needs to be done here is to disable Bresenham lines if multisampling.
+        (*commandBufferOut)
+            ->setLineRasterizationMode(renderPassDesc.samples() > 1
+                                           ? VK_LINE_RASTERIZATION_MODE_DEFAULT
+                                           : VK_LINE_RASTERIZATION_MODE_BRESENHAM);
+        if (mRenderer->supportsStippledLines())
+        {
+            (*commandBufferOut)->setLineStippleEnable(VK_FALSE);
+        }
+    }
+    if (mRenderer->useProvokingVertexModeDynamicState())
+    {
+        (*commandBufferOut)->setProvokingVertexMode(VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT);
+    }
+    if (mRenderer->getFeatures().supportsRasterizationSamplesDynamicState.enabled)
+    {
+        (*commandBufferOut)
+            ->setRasterizationSamples(static_cast<VkSampleCountFlagBits>(renderPassDesc.samples()));
+    }
+    if (mRenderer->useRasterizationStreamDynamicState())
+    {
+        (*commandBufferOut)->setRasterizationStream(0);
+    }
+    if (mRenderer->useTessellationDomainOriginDynamicState())
+    {
+        (*commandBufferOut)->setTessellationDomainOrigin(VK_TESSELLATION_DOMAIN_ORIGIN_LOWER_LEFT);
+    }
+
     return angle::Result::Continue;
 }
 
@@ -7948,6 +8527,14 @@ uint32_t ContextVk::getCurrentViewCount() const
     return drawFBO->getRenderPassDesc().viewCount();
 }
 
+void ContextVk::markNewRenderPassDirtyBits()
+{
+    mGraphicsDirtyBits |= mNewRenderPassDirtyBits;
+    mDirtyColorWriteMasks.set();
+    mDirtyColorBlendEnables.set();
+    mDirtyColorBlendEquations.set();
+}
+
 angle::Result ContextVk::flushCommandsAndEndRenderPassWithoutSubmit(RenderPassClosureReason reason)
 {
     // Ensure we flush the RenderPass *after* the prior commands.
@@ -7961,7 +8548,7 @@ angle::Result ContextVk::flushCommandsAndEndRenderPassWithoutSubmit(RenderPassCl
     }
 
     // Set dirty bits if render pass was open (and thus will be closed).
-    mGraphicsDirtyBits |= mNewRenderPassDirtyBits;
+    markNewRenderPassDirtyBits();
 
     mCurrentTransformFeedbackQueueSerial = QueueSerial();
 
@@ -8110,7 +8697,7 @@ angle::Result ContextVk::flushDirtyGraphicsRenderPass(DirtyBits::Iterator *dirty
     // Additionally, make sure any dirty bits not included in the mask are left for future
     // processing.  Note that |dirtyBitMask| is removed from |mNewGraphicsCommandBufferDirtyBits|
     // after dirty bits are iterated, so there's no need to mask them out.
-    mGraphicsDirtyBits |= mNewRenderPassDirtyBits;
+    markNewRenderPassDirtyBits();
     // Because dirtyBitMask always contains DIRTY_BIT_DRIVER_UNIFORMS, we don't need to explicitly
     // add DIRTY_BIT_DRIVER_UNIFORMS to mGraphicsDirtyBits here.
     ASSERT(dirtyBitMask.test(DIRTY_BIT_DRIVER_UNIFORMS));
@@ -8276,7 +8863,22 @@ angle::Result ContextVk::flushAndSubmitOutsideRenderPassCommands(QueueSubmitReas
     }
     ASSERT(QueueSerialsHaveDifferentIndexOrSmaller(mLastSubmittedQueueSerial,
                                                    mLastFlushedQueueSerial));
-    return submitCommands(nullptr, nullptr, reason);
+
+    vk::ImageHelper *imageWithTileMemory = mImageWithTileMemory;
+
+    ANGLE_TRY(submitCommands(nullptr, nullptr, reason));
+
+    // Continue to use the image whose allocation is in the tile memory.  The submission of the
+    // outside render pass commands has no bearing on the render pass's use of this image.  Tile
+    // memory binding is per command buffer, so rebind it for the still open render pass.
+    if (imageWithTileMemory != nullptr && mRenderPassCommands->started() &&
+        mRenderPassCommands->usesImage(*imageWithTileMemory))
+    {
+        ASSERT(!imageWithTileMemory->isVkImageContentDefined());
+        addImageWithTileMemory(imageWithTileMemory);
+    }
+
+    return angle::Result::Continue;
 }
 
 angle::Result ContextVk::flushOutsideRenderPassCommands()
@@ -8672,8 +9274,8 @@ angle::Result ContextVk::onResourceAccess(const vk::CommandResources &resources)
                                   writeImage.layerStart, writeImage.layerCount,
                                   mOutsideRenderPassCommands);
         mOutsideRenderPassCommands->retainImage(mRenderer, image);
-        image->onWrite(writeImage.levelStart, writeImage.levelCount, writeImage.layerStart,
-                       writeImage.layerCount, writeImage.image.aspectFlags);
+        image->onWrite(image->toVkLevel(writeImage.levelStart), writeImage.levelCount,
+                       writeImage.layerStart, writeImage.layerCount, writeImage.image.aspectFlags);
     }
 
     for (const vk::CommandResourceBuffer &readBuffer : resources.getReadBuffers())
@@ -9140,9 +9742,21 @@ angle::Result ContextVk::onVertexArrayChange(const gl::AttributesMask dirtyAttri
 
     if (ANGLE_UNLIKELY(mCurrentTransformFeedbackQueueSerial.valid()))
     {
+        // Only enabled non-streamed attributes need to be checked, as only they source their data
+        // from GL buffer objects, which may have been written by transform feedback.  Default
+        // attributes and streamed attributes (client memory or emulated divisor) use internal
+        // buffers suballocated from mStreamedVertexBuffers, which are written by the host.  (The
+        // GL buffer of an emulated divisor attribute is read on the CPU when streamed, which
+        // already waits for any pending GPU write.)  Additionally, mStreamedVertexBuffers may have
+        // been reallocated (and the old BufferHelpers freed) since the streamed attributes were
+        // last streamed, e.g. while the vertex array was not bound, so their buffers must not be
+        // accessed until they are streamed again by setupDraw().
+        const gl::AttributesMask enabledNonStreamingAttribDirtyBits =
+            dirtyAttribBits & vertexArray.getCurrentEnabledAttribsMask() &
+            ~vertexArray.getStreamingVertexAttribsMask();
         const gl::AttribArray<vk::BufferHelper *> &buffers = vertexArray.getCurrentArrayBuffers();
         bool breakRenderPass                               = false;
-        for (size_t attribIndex : dirtyAttribBits)
+        for (size_t attribIndex : enabledNonStreamingAttribDirtyBits)
         {
             ASSERT(buffers[attribIndex] != nullptr);
             if (buffers[attribIndex]->writtenByCommandBuffer(mCurrentTransformFeedbackQueueSerial))
@@ -9223,10 +9837,9 @@ angle::Result ContextVk::finalizeImageWithTileMemory()
         params.level                           = vk::LevelIndex(0);
         params.layer                           = vk::LayerIndex(0);
         params.clearValue                      = {};
-        params.clearArea                       = gl::Box(0, 0, 0, 0, 0, 1);
+        params.clearArea = gl::Rectangle(0, 0, mImageWithTileMemory->getExtents().width,
+                                         mImageWithTileMemory->getExtents().height);
         params.aspectFlags                     = mImageWithTileMemory->getAspectFlags();
-        params.clearArea.width                 = mImageWithTileMemory->getExtents().width;
-        params.clearArea.height                = mImageWithTileMemory->getExtents().height;
         ANGLE_TRY(mUtils.clearTextureNoFlush(this, mImageWithTileMemory, params));
 
         // Since this may called from submitCommands, use no submit version to avoid

@@ -1289,7 +1289,10 @@ TEST_P(GLSLTest, ScopedStructsOrderBug3)
     // Try IDs between 25 to 35 for IR ids, and 3000 to 3020 for AST ids.
     // For IR, the first 27 or so type ids are reserved, so user ids start at that value.
     // For AST, user ids start at 3000.
-    for (uint32_t id = 25; id <= 3020; ++id)
+    const bool useIr       = getEGLWindow()->isFeatureEnabled(Feature::UseIr);
+    const uint32_t idStart = useIr ? 25 : 3000;
+    const uint32_t idEnd   = useIr ? 35 : 3020;
+    for (uint32_t id = idStart; id <= idEnd; ++id)
     {
         std::ostringstream fs;
         fs << R"(precision mediump float;
@@ -1318,11 +1321,6 @@ void main()
 })";
 
         ANGLE_GL_PROGRAM(program, essl1_shaders::vs::Simple(), fs.str().c_str());
-
-        if (id == 35)
-        {
-            id = 2999;
-        }
     }
 }
 
@@ -1392,7 +1390,10 @@ TEST_P(GLSLTest_ES3, UBOVsStructsNameCollision)
     // by both to suffix global struct names.
     // For IR, the first 27 or so type ids are reserved, so user ids start at that value.
     // For AST, user ids start at 3000.
-    for (uint32_t id = 0; id <= 3020; ++id)
+    const bool useIr       = getEGLWindow()->isFeatureEnabled(Feature::UseIr);
+    const uint32_t idStart = useIr ? 0 : 3000;
+    const uint32_t idEnd   = useIr ? 35 : 3020;
+    for (uint32_t id = idStart; id <= idEnd; ++id)
     {
         std::ostringstream fs;
         fs << R"(#version 300 es
@@ -1433,10 +1434,6 @@ void main()
         {
             id = 24;
         }
-        else if (id == 35)
-        {
-            id = 2999;
-        }
     }
 }
 
@@ -1448,7 +1445,10 @@ TEST_P(GLSLTest_ES31, SSBOVsStructsNameCollision)
     // by both to suffix global struct names.
     // For IR, the first 27 or so type ids are reserved, so user ids start at that value.
     // For AST, user ids start at 3000.
-    for (uint32_t id = 0; id <= 3020; ++id)
+    const bool useIr       = getEGLWindow()->isFeatureEnabled(Feature::UseIr);
+    const uint32_t idStart = useIr ? 0 : 3000;
+    const uint32_t idEnd   = useIr ? 35 : 3020;
+    for (uint32_t id = idStart; id <= idEnd; ++id)
     {
         std::ostringstream fs;
         fs << R"(#version 310 es
@@ -1489,10 +1489,6 @@ void main()
         {
             id = 24;
         }
-        else if (id == 35)
-        {
-            id = 2999;
-        }
     }
 }
 
@@ -1506,7 +1502,10 @@ TEST_P(GLSLTest_ES31, IOBlockVsStructsNameCollision)
     // by both to suffix global struct names.
     // For IR, the first 27 or so type ids are reserved, so user ids start at that value.
     // For AST, user ids start at 3000.
-    for (uint32_t id = 0; id <= 3020; ++id)
+    const bool useIr       = getEGLWindow()->isFeatureEnabled(Feature::UseIr);
+    const uint32_t idStart = useIr ? 0 : 3000;
+    const uint32_t idEnd   = useIr ? 35 : 3020;
+    for (uint32_t id = idStart; id <= idEnd; ++id)
     {
         std::ostringstream fs;
         fs << R"(#version 310 es
@@ -1548,11 +1547,136 @@ void main()
         {
             id = 24;
         }
-        else if (id == 35)
-        {
-            id = 2999;
-        }
     }
+}
+
+// Test that defining an interface variable with an "id" suffix does not collide with a local
+// variable definition without such a suffix.
+TEST_P(GLSLTest_ES3, InterfaceVsPrivateVariableNameCollision)
+{
+    // With the IR, the test fails while code generation is done in AST.  Once code generation is
+    // done from IR directly, different variable types get a different prefix and so there won't be
+    // a collision.  Not an issue with SPIR-V, where the names don't matter in the output, and HLSL
+    // which already assigns different prefixes to variables.
+    ANGLE_SKIP_TEST_IF(getEGLWindow()->isFeatureEnabled(Feature::UseIr) &&
+                       !(IsVulkan() || IsD3D11()));
+
+    // Try IDs between 0 to 10 for IR ids, and 3000 to 3015 for AST ids.
+    // For IR, variable ids start at 0.
+    // For AST, user ids start at 3000.
+    const bool useIr       = getEGLWindow()->isFeatureEnabled(Feature::UseIr);
+    const uint32_t idStart = useIr ? 0 : 3000;
+    const uint32_t idEnd   = useIr ? 10 : 3020;
+    for (uint32_t id = idStart; id <= idEnd; ++id)
+    {
+        const std::string name = "q_" + ToString(id);
+        std::ostringstream vs;
+        vs << R"(#version 300 es
+in vec2 position;
+out highp float )"
+           << name << R"([4];
+out highp float verify[2];
+void main() {
+for (int i = 0; i < 4; ++i)
+{
+    // Should be overwritten below:
+    )" << name
+           << R"([i] = 0.123;
+    float q[2];
+    q[0] = 0.6;
+    q[1] = 0.8;
+    // Name should not alias the local variable
+    )" << name
+           << R"([i] = float(i) / 4.0 + 0.25;
+    verify[0] = q[0];
+    verify[1] = q[1];
+    gl_Position = vec4(position, 0, 1.0);
+}
+})";
+        std::ostringstream fs;
+        fs << R"(#version 300 es
+precision highp float;
+in float )" << name
+           << R"([4];
+in float verify[2];
+out vec4 color;
+void main() {
+if (abs(verify[0] - 0.6) > 1e-3 || abs(verify[1] - 0.8) > 1e-3)
+{
+    color = vec4(1, 0, 0, 1);
+}
+else
+{
+    color = vec4()"
+           << name << R"([0], )" << name << R"([1], )" << name << R"([2], )" << name << R"([3]);
+}
+})";
+
+        ANGLE_GL_PROGRAM(program, vs.str().c_str(), fs.str().c_str());
+        drawQuad(program, "position", 0.5f);
+        EXPECT_PIXEL_COLOR_NEAR(0, 0, GLColor(63, 127, 191, 255), 1);
+    }
+}
+
+// Test that defining structs with long names and a common prefix works.
+TEST_P(GLSLTest_ES3, LongStructNameCollision)
+{
+    for (uint32_t prefixLength : {64, 1011, 1012, 1013, 1023})
+    {
+        const std::string prefix(prefixLength, 'p');
+        const std::string struct1 = prefix + std::string(1024 - prefixLength, '1');
+        const std::string struct2 = prefix + std::string(1024 - prefixLength, '2');
+        const std::string fs = R"(#version 300 es
+precision highp float;
+struct )" + struct1 + R"( { vec4 s; };
+struct )" + struct2 + R"( { vec4 s; };
+uniform )" + struct1 + R"( u1;
+uniform )" + struct2 + R"( u2;
+out vec4 color;
+void main()
+{
+    color = u1.s + u2.s;
+})";
+
+        ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), fs.c_str());
+        glUseProgram(program);
+
+        glUniform4f(glGetUniformLocation(program, "u1.s"), 1, 0, 0, 0.6);
+        glUniform4f(glGetUniformLocation(program, "u2.s"), 0, 1, 0, 0.5);
+
+        drawQuad(program, essl1_shaders::PositionAttrib(), 0.5f);
+        EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::yellow);
+        ASSERT_GL_NO_ERROR();
+    }
+}
+
+// Test that defining a struct with long name and another with the hashed version of the name works.
+// This test is based on the internals of how the hashed names are generated.
+TEST_P(GLSLTest_ES3, LongStructNameCollisionWithHashedName)
+{
+    const std::string struct1 = std::string(1013, 'S');
+    const std::string struct2 = "struct05300D813A0A9261C532679370E94435C004C330";
+    const std::string fs = R"(#version 300 es
+precision highp float;
+struct )" + struct1 + R"( { vec4 s; };
+struct )" + struct2 + R"( { vec4 s; };
+uniform )" + struct1 + R"( u1;
+uniform )" + struct2 + R"( u2;
+out vec4 color;
+void main()
+{
+    color = u1.s + u2.s;
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), fs.c_str());
+    glUseProgram(program);
+
+    glUniform4f(glGetUniformLocation(program, "u1.s"), 1, 0, 0, 0.6);
+    glUniform4f(glGetUniformLocation(program, "u2.s"), 0, 1, 0, 0.5);
+
+    drawQuad(program, essl1_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::yellow);
+    ASSERT_GL_NO_ERROR();
 }
 
 // Test that inactive uniforms of struct type don't cause any errors.
@@ -1839,10 +1963,10 @@ TEST_P(GLSLTest_ES3, GLVertexIDIntegerTextureDrawElements)
     EXPECT_EQ(42, GetFirstIntPixelRedValue());
 
     const int kIndexDataSize = 5;
-    GLushort indexData[]     = {1, 2, 5, 3, 10000};
+    std::array<GLushort, 5> indexData = {1, 2, 5, 3, 10000};
     GLBuffer indexBuffer;
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBuffer);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indexData), indexData, GL_STATIC_DRAW);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indexData), indexData.data(), GL_STATIC_DRAW);
 
     for (size_t first = 0; first < kIndexDataSize; ++first)
     {
@@ -7420,6 +7544,70 @@ void main()
     EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::red);
 }
 
+// Test that structs with only samplers can be used on the right-hand side of a comma, where the
+// expression has side effect.
+TEST_P(GLSLTest_ES3, StructWithOnlySamplersRHSOfCommaWithSideEffect)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision mediump float;
+uniform struct S {
+    sampler2D n;
+} s[4];
+ivec4 global = ivec4(0);
+out vec4 color;
+void main()
+{
+    int i = 0;
+    (i += 1), s;
+    (global.x = 10), s[0];
+    for (int j = 0; j < 1; ++j, i += 2, s[1])
+    {
+        global.y = 22;
+    }
+
+    color = vec4(i == 3,
+                 global.x == 10,
+                 global.y == 22, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::white);
+}
+
+// Test that structs with only samplers can be used on the right-hand side of a comma, where the
+// expression has side effect, and the result is passed to a function
+TEST_P(GLSLTest_ES3, StructWithOnlySamplersRHSOfCommaWithSideEffectAsFuncArg)
+{
+    // Only correctly handled by the IR.  Skipped on all backends except GL, which does not use
+    // RewriteStructSamplers.
+    ANGLE_SKIP_TEST_IF(!getEGLWindow()->isFeatureEnabled(Feature::UseIr) && !IsOpenGL());
+
+    constexpr char kFS[] = R"(#version 300 es
+precision mediump float;
+uniform struct S {
+    sampler2D n;
+} s[4];
+out vec4 color;
+
+int f(S arg)
+{
+    return int(texture(arg.n, vec2(0, 0)).x * 100.0);
+}
+
+void main()
+{
+    int i = 0;
+    int zero = f((i += 4, s[2]));
+
+    color = vec4(i == 4, zero == 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::yellow);
+}
+
 // Test that samplers in structs can be extracted if the first reference to the struct does not
 // select an attribute.
 TEST_P(GLSLTest, SamplerInStructNoMemberIndexing)
@@ -8308,6 +8496,95 @@ TEST_P(GLSLTest_ES3, NoPerspectiveSample)
         })";
 
     ANGLE_GL_PROGRAM(program, kVS, kFS);
+}
+
+// Test that an input array can be referenced without an index after one of its elements has been
+// used with an interpolation function.
+TEST_P(GLSLTest_ES3, InterpolantArrayReferencedWithoutIndex)
+{
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_OES_shader_multisample_interpolation"));
+
+    constexpr char kVS[] =
+        R"(#version 300 es
+        #extension GL_OES_shader_multisample_interpolation : require
+
+        in vec4 a_position;
+
+        out mediump vec3 smoothArray[2];
+        centroid out mediump vec3 centroidArray[2];
+        sample out mediump vec3 sampleArray[2];
+
+        void main()
+        {
+            gl_Position = a_position;
+
+            // Keep the values constant so that every read returns the same result.
+            smoothArray[0] = vec3(10.0);
+            smoothArray[1] = vec3(11.0);
+            centroidArray[0] = vec3(20.0);
+            centroidArray[1] = vec3(21.0);
+            sampleArray[0] = vec3(30.0);
+            sampleArray[1] = vec3(31.0);
+        })";
+
+    constexpr char kFS[] =
+        R"(#version 300 es
+        #extension GL_OES_shader_multisample_interpolation : require
+
+        precision mediump float;
+
+        in vec3 smoothArray[2];
+        centroid in vec3 centroidArray[2];
+        sample in vec3 sampleArray[2];
+
+        out vec4 color;
+
+        bool check(vec3 values[2], float base)
+        {
+            return all(lessThan(abs(values[0] - vec3(base)), vec3(0.01))) &&
+                   all(lessThan(abs(values[1] - vec3(base + 1.0)), vec3(0.01)));
+        }
+
+        void main()
+        {
+            // Marks each input as an interpolant, which is what made the uses below fail.
+            vec3 unused = interpolateAtCentroid(smoothArray[0]) +
+                          interpolateAtCentroid(centroidArray[0]) +
+                          interpolateAtCentroid(sampleArray[0]);
+
+            // Assign the whole array.
+            vec3 assignedSmooth[2];
+            vec3 assignedCentroid[2];
+            vec3 assignedSample[2];
+            assignedSmooth = smoothArray;
+            assignedCentroid = centroidArray;
+            assignedSample = sampleArray;
+
+            // Initialize from the whole array.
+            vec3 initializedSmooth[2] = smoothArray;
+            vec3 initializedCentroid[2] = centroidArray;
+            vec3 initializedSample[2] = sampleArray;
+
+            // Pass the whole array to a function.
+            bool ok = check(smoothArray, 10.0) &&
+                      check(centroidArray, 20.0) &&
+                      check(sampleArray, 30.0) &&
+                      check(assignedSmooth, 10.0) &&
+                      check(assignedCentroid, 20.0) &&
+                      check(assignedSample, 30.0) &&
+                      check(initializedSmooth, 10.0) &&
+                      check(initializedCentroid, 20.0) &&
+                      check(initializedSample, 30.0) &&
+                      unused.x > 0.0;
+
+            color = ok ? vec4(0.0, 1.0, 0.0, 1.0) : vec4(1.0, 0.0, 0.0, 1.0);
+        })";
+
+    ANGLE_GL_PROGRAM(program, kVS, kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    ASSERT_GL_NO_ERROR();
+
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
 }
 
 // Test that a shader with sample in / sample out can be used successfully when the varying
@@ -9520,6 +9797,79 @@ void main()
 
     EXPECT_PIXEL_COLOR_EQ(1, 1, GLColor::green);
 }
+
+// Test corner case involving comma and passing struct with sampler to function
+TEST_P(GLSLTest_ES3, SamplerInStructAsFunctionArgInCommaCornerCase)
+{
+    // The monomorphization AST pass run by multiple backends does not correctly handle comma
+    // expressions.
+    ANGLE_SKIP_TEST_IF(!getEGLWindow()->isFeatureEnabled(Feature::UseIr));
+
+    const char kFragmentShader[] = R"(#version 300 es
+precision mediump float;
+struct S
+{
+    sampler2D s;
+    int f;
+};
+uniform S u;
+int global = 0;
+
+out vec4 color;
+
+float sampleTex(S s) { ++global; return texture(s.s, vec2(0)).x; }
+float forwardToSample(S s) { return sampleTex(s); }
+
+// Need to forward `u` to `broken` via an intermediate call to cause multiple passes of
+// monomorphization in some backends before the tricky expression is handled.
+void broken(S s) { sampleTex((forwardToSample(s), u)); }
+void forward(S s) { broken(s); }
+
+void main() {
+    forward(u);
+    color = vec4(float(global) / 2.0, 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFragmentShader);
+    drawQuad(program, essl1_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(1, 1, GLColor::red);
+}
+
+// Test calling a function with a uniform struct containing a sampler from within another function
+// that is itself called with that uniform.
+TEST_P(GLSLTest_ES3, SamplerInStructAsFunctionArgInNestedCalls)
+{
+    const char kFragmentShader[] = R"(#version 300 es
+precision mediump float;
+struct S
+{
+    sampler2D s;
+};
+uniform S u;
+
+out vec4 color;
+
+float inner(S s) { return texture(s.s, vec2(0)).x; }
+float outer(S p) { return inner(u); }
+
+void main() {
+    color = vec4(outer(u), 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFragmentShader);
+    glUseProgram(program);
+    GLTexture tex;
+    glBindTexture(GL_TEXTURE_2D, tex);
+    const GLColor kTextureColor = GLColor::red;
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, &kTextureColor);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glUniform1i(glGetUniformLocation(program, "u.s"), 0);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_GL_NO_ERROR();
+    EXPECT_PIXEL_COLOR_EQ(0, 0, kTextureColor);
+}
+
 // Test that a global variable declared after main() works. This is a regression test for an issue
 // in global variable initialization.
 TEST_P(WebGLGLSLTest, GlobalVariableDeclaredAfterMain)
@@ -10145,6 +10495,140 @@ void main()
     ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
     drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
     EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+}
+
+// Test switch/case where a variable is declared inside one of the cases and is accessed by a
+// subsequent case.  The variable shadows another outside the switch.
+TEST_P(GLSLTest_ES3, SwitchWithShadowVariableDeclaration)
+{
+    constexpr char kFS[] = R"(#version 300 es
+
+precision highp float;
+out vec4 my_FragColor;
+
+uniform int u_zero;
+
+void main()
+{
+    vec4 result = vec4(0, 0, 0, 1);
+    switch (u_zero)
+    {
+        case 0:
+            result.x = 1.0;
+            // Shadow the variable that is outside the switch
+            vec4 result = vec4(0, 1, 0, 0);
+        default:
+            result.w = 1.0;
+    }
+    my_FragColor = result;
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::red);
+}
+
+// Test switch/case where a variable is declared inside one of the cases after branch and is
+// accessed by a subsequent case.  The variable shadows another outside the switch.
+TEST_P(GLSLTest_ES3, SwitchWithShadowVariableDeclarationInDeadCode)
+{
+    constexpr char kFS[] = R"(#version 300 es
+
+precision highp float;
+out vec4 my_FragColor;
+
+uniform int u_zero;
+
+void main()
+{
+    vec4 result = vec4(0, 0, 0, 1);
+    switch (u_zero)
+    {
+        case 0:
+            result.x = 1.0;
+            break;
+            // Shadow the variable that is outside the switch
+            vec4 result = vec4(0, 1, 0, 0);
+        default:
+            result.w = 1.0;
+    }
+    my_FragColor = result;
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::red);
+}
+
+// Test indexing a large array in a loop continue statement, where the array is shadowed by a small
+// one in the loop body.  The loop declares two variables, which triggers an AST transformation to
+// simplify it.
+TEST_P(GLSLTest_ES3, ArrayVariableShadowVsMultiDeclarationsInLoop)
+{
+    // Fails with AST transforms when debug info (variable names) are retained.
+    ANGLE_SKIP_TEST_IF(!getEGLWindow()->isFeatureEnabled(Feature::UseIr) &&
+                       getEGLWindow()->isFeatureEnabled(Feature::RetainShaderDebugInfo));
+
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+out vec4 color;
+float array[1000];
+void main() {
+    float red = 0.;
+    for (int i = 0, j = 0; i < 2; (array[999] = 0.5)) {
+        float array[1] = float[1](0.2);
+        red += array[0];
+        ++j;
+        ++i;
+        // Add a continue in the same scope as |array|, so that replicating |array[999] = 0.5| before
+        // the continue would cause an error.
+        continue;
+    }
+    color = vec4(red, array[999], 0.0, 1.0);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_NEAR(0, 0, GLColor(102, 127, 0, 255), 1);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test indexing a large array in a loop continue statement, where the array is shadowed by a small
+// one in the loop body.  The loop declares two variables, which triggers an AST transformation to
+// simplify it.
+TEST_P(GLSLTest_ES3, ArrayVariableShadowVsMultiDeclarationsInLoop2)
+{
+    // Fails with AST transforms when debug info (variable names) are retained.
+    ANGLE_SKIP_TEST_IF(!getEGLWindow()->isFeatureEnabled(Feature::UseIr) &&
+                       getEGLWindow()->isFeatureEnabled(Feature::RetainShaderDebugInfo));
+
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+out vec4 color;
+float f(out float array[1000])
+{
+    float red = 0.;
+    for (int i = 0, j = 0; i < 2; (array[999] = 0.5)) {
+        float array[1] = float[1](0.2);
+        red += array[0];
+        ++j;
+        ++i;
+        // Add a continue in the same scope as |array|, so that replicating |array[999] = 0.5| before
+        // the continue would cause an error.
+        continue;
+    }
+    return red;
+}
+void main() {
+    float array[1000];
+    float red = f(array);
+    color = vec4(red, array[999], 0.0, 1.0);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_NEAR(0, 0, GLColor(102, 127, 0, 255), 1);
+    ASSERT_GL_NO_ERROR();
 }
 
 // Test that an empty switch/case statement is translated in a way that compiles and executes the
@@ -11862,6 +12346,40 @@ void main()
     drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
     EXPECT_PIXEL_COLOR_NEAR(0, 0, GLColor::yellow, 1);
     ASSERT_GL_NO_ERROR();
+}
+
+// Test that gl_FragCoord.zw are correct.  The translator replaces gl_FragCoord with a flipped copy,
+// and the .zw components must be carried over unchanged.
+TEST_P(GLSLTest_ES3, FragCoordZW)
+{
+    constexpr char kVS[] = R"(#version 300 es
+in vec4 a_position;
+void main()
+{
+    // Clip-space w of 4 gives gl_FragCoord.w = 0.25.  z = 0 gives gl_FragCoord.z = 0.5.
+    gl_Position = vec4(a_position.xy * 4.0, 0.0, 4.0);
+})";
+
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+out vec4 colorOut;
+void main()
+{
+    colorOut = vec4(gl_FragCoord.z, gl_FragCoord.w, 0.0, 1.0);
+})";
+
+    ANGLE_GL_PROGRAM(program, kVS, kFS);
+    drawQuad(program, "a_position", 0.5f);
+    ASSERT_GL_NO_ERROR();
+
+    const GLColor kExpected(128, 64, 0, 255);
+    const int w = getWindowWidth();
+    const int h = getWindowHeight();
+    EXPECT_PIXEL_COLOR_NEAR(0, 0, kExpected, 1);
+    EXPECT_PIXEL_COLOR_NEAR(w - 1, 0, kExpected, 1);
+    EXPECT_PIXEL_COLOR_NEAR(0, h - 1, kExpected, 1);
+    EXPECT_PIXEL_COLOR_NEAR(w - 1, h - 1, kExpected, 1);
+    EXPECT_PIXEL_COLOR_NEAR(w / 2, h / 2, kExpected, 1);
 }
 
 bool SubrectEquals(const std::vector<GLColor> &bigArray,
@@ -17909,7 +18427,8 @@ void main()
             int d = 31;
             // fallthrough
         case 123:
-            result += 2 + d;
+            // Note: because the initialization of d has never executed, it's value is undefined
+            result += 2 + d * 0;
             // fallthrough
         case 3:
             result += 4;
@@ -17918,7 +18437,7 @@ void main()
             result += 100000;
     }
 
-    color = result == 48 ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
+    color = result == 17 ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
 })";
 
     ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
@@ -18618,6 +19137,7 @@ TEST_P(GLSLTestLoops, ForContinueInSwitchComplex)
 {
     constexpr char kFS[] = R"(#version 300 es
 precision mediump float;
+precision highp int;
 out vec4 color;
 
 void main()
@@ -22792,6 +23312,1012 @@ void main()
     EXPECT_PIXEL_COLOR_NEAR(0, 0, GLColor(191, 0, 63, 127), 1);
 }
 
+// Variable declared in switch case that is never executed should be initialized
+TEST_P(GLSLTest_ES3_InitShaderVariables, UninitializedVariableInCase)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+out vec4 color;
+uniform int zero;
+float var = 0.1;
+void main()
+{
+    float var = 0.3;
+    float result;
+    switch (zero)
+    {
+    case 1:
+        float var;
+        break;
+    case 0:
+        var += 0.6;
+        switch (zero + 1)
+        {
+        case 2:
+            float var;
+            break;
+        default:
+            var += 0.1;
+            result = var;
+        }
+        result += var;
+        break;
+    default:
+        color = vec4(1, 0, 0, 1);
+        return;
+    }
+
+    color = vec4(var, result, 0, 1);
+}
+)";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_NEAR(0, 0, GLColor(77, 178, 0, 255), 1);
+}
+
+// Variable declared in switch case that has an initializer (that is executed) should be initialized
+TEST_P(GLSLTest_ES3_InitShaderVariables, VariableWithInitializerInCase)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+out vec4 color;
+uniform int zero;
+float var = 0.1;
+void main()
+{
+    float var = 0.3;
+    float result;
+    switch (zero)
+    {
+    case 1:
+        break;
+    case 0:
+        float var = 0.2;
+        result = var;
+        switch (zero + 1)
+        {
+        case 2:
+            break;
+        default:
+            float var = 0.1;
+            result += var;
+        }
+        result += var;
+        break;
+    default:
+        color = vec4(1, 0, 0, 1);
+        return;
+    }
+
+    color = vec4(var, result, 0, 1);
+}
+)";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_NEAR(0, 0, GLColor(77, 127, 0, 255), 1);
+}
+
+// Tests for constant switch statement folding (https://crbug.com/548066294).
+// Test that a constant switch with matching case executes and draws correctly.
+TEST_P(GLSLTest_ES3, BasicConstantSwitch)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+out vec4 color;
+void main()
+{
+    float f = 0.0;
+    switch (0)
+    {
+        case 156: f = 1234.0; break;
+        case 0:   f = 2.0; break;
+        default:  f = 3.0; break;
+    }
+    color = (f == 2.0) ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test nested constant switch statements (the pattern from https://crbug.com/548066294).
+TEST_P(GLSLTest_ES3, NestedConstantSwitch)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+out vec4 color;
+void main()
+{
+    int result = 0;
+    switch (0)
+    {
+        case 0:
+            result += 1;
+            switch (1)
+            {
+                case 0:
+                    result += 10;
+                    break;
+                case 1:
+                    result += 20;
+                    switch (2)
+                    {
+                        case 2:
+                            result += 300;
+                            break;
+                        default:
+                            result += 400;
+                            break;
+                    }
+                    break;
+                default:
+                    result += 50;
+                    break;
+            }
+            break;
+        case 1:
+            result += 1000;
+            break;
+        default:
+            result += 2000;
+            break;
+    }
+    color = (result == 321) ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test nested constant switch statements (the pattern from https://crbug.com/548066294).
+// The selector is length() in this test.
+TEST_P(GLSLTest_ES3, NestedConstantSwitchWithLength)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+out vec4 color;
+int sideEffects = 0;
+int[1] one()
+{
+    sideEffects += 1;
+    return int[1](1);
+}
+int[2] two()
+{
+    sideEffects += 1;
+    return int[2](2, 2);
+}
+void main()
+{
+    int result = 0;
+    switch (one().length() - 1)
+    {
+        case 0:
+            result += 1;
+            switch (one().length())
+            {
+                case 0:
+                    result += 10;
+                    break;
+                case 1:
+                    result += 20;
+                    switch (two().length())
+                    {
+                        case 2:
+                            result += 300;
+                            break;
+                        default:
+                            result += 400;
+                            break;
+                    }
+                    break;
+                default:
+                    result += 50;
+                    break;
+            }
+            break;
+        case 1:
+            result += 1000;
+            break;
+        default:
+            result += 2000;
+            break;
+    }
+    color = result == 321 && sideEffects == 3 ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test fall-through across cases in a constant switch.
+TEST_P(GLSLTest_ES3, FallThrough)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+out vec4 color;
+void main()
+{
+    float f = 0.0;
+    switch (1)
+    {
+        case 1: f += 5.0;
+        case 2: f += 2.0; break;
+        case 3: f += 4.0; break;
+    }
+    color = (f == 7.0) ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test that conditional break inside folded switch statements executes correctly with wrapper.
+TEST_P(GLSLTest_ES3, ConditionalBreak)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+uniform int u_zero;
+out vec4 color;
+void main()
+{
+    float f = 0.0;
+    switch (0)
+    {
+        case 0:
+            if (u_zero != 0) { break; }
+            f = 2.0;
+            break;
+        default:
+            f = 5.0;
+            break;
+    }
+    color = (f == 2.0) ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test that continue targeting an enclosing loop from within a constant switch works properly.
+TEST_P(GLSLTest_ES3, ContinueInEnclosingForLoop)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+uniform int u_zero;
+out vec4 color;
+void main()
+{
+    int count = 0;
+    for (int i = 0; i < 4; ++i)
+    {
+        switch (0)
+        {
+            case 0:
+                if (u_zero != 0) { break; }
+                if (i == 2) { continue; }
+                count += 1;
+                break;
+            default:
+                count += 100;
+                break;
+        }
+        count += 10;
+    }
+    color = (count == 33) ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test that continue targeting an enclosing loop from within a constant switch works properly.
+TEST_P(GLSLTest_ES3, ContinueInEnclosingWhileLoop)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+uniform int u_zero;
+out vec4 color;
+void main()
+{
+    int count = 0;
+    int i = 0;
+    while (i < 4)
+    {
+        switch (0)
+        {
+            case 0:
+                if (u_zero != 0) { break; }
+                if (i == 2) { ++i; continue; }
+                count += 1;
+                break;
+            default:
+                count += 100;
+                break;
+        }
+        count += 10;
+        ++i;
+    }
+    color = (count == 33) ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test that continue targeting an enclosing loop from within a constant switch works properly.
+TEST_P(GLSLTest_ES3, ContinueInEnclosingDoWhileLoop)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+uniform int u_zero;
+out vec4 color;
+void main()
+{
+    int count = 0;
+    int i = 0;
+    do
+    {
+        if (i >= 4)
+        {
+            break;
+        }
+        switch (0)
+        {
+            case 0:
+                if (u_zero != 0) { break; }
+                if (i == 2) { ++i; continue; }
+                count += 1;
+                break;
+            default:
+                count += 100;
+                break;
+        }
+        count += 10;
+        ++i;
+    }
+    while (true);
+    color = (count == 33) ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test that declarations in skipped cases are preserved and accessible in the executed case.
+TEST_P(GLSLTest_ES3, SkippedDeclaration)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+uniform int u;
+out vec4 color;
+void main()
+{
+    float res = 0.0;
+    switch (true ? 1 : u)
+    {
+        case 0:
+            float d = 4.0;
+            break;
+        case 2:
+            float e = 5.0;
+            break;
+        case 1:
+            d = 2.0;
+            res = d;
+            break;
+    }
+    color = (res == 2.0) ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test that dynamic switch selectors are not folded and execute correctly.
+TEST_P(GLSLTest_ES3, DynamicSelectorUntouched)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+uniform int u_zero;
+out vec4 color;
+void main()
+{
+    float f = 0.0;
+    switch (u_zero)
+    {
+        case 0: f = 1.0; break;
+        default: f = 2.0; break;
+    }
+    color = (f == 1.0) ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test that switch selectors with side effects in sequence expressions are not folded.
+TEST_P(GLSLTest_ES3, SequenceOperatorInSelector)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+out vec4 color;
+void main()
+{
+    int v = 0;
+    switch (v += 1, 0)
+    {
+        case 0:
+            switch (v += 2, 1)
+            {
+                case 1:
+                    v += 4;
+                    break;
+            }
+            break;
+    }
+    color = (v == 7) ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test that return inside a folded constant switch statement returns from the function properly.
+TEST_P(GLSLTest_ES3, ReturnInConstantSwitch)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+out vec4 color;
+float eval()
+{
+    float f = 0.0;
+    switch (1)
+    {
+        case 1: f += 1.0;
+        case 2: f += 2.0; return f;
+        case 3: f += 4.0; break;
+    }
+    return f;
+}
+void main()
+{
+    color = eval() == 3.0 ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test that return inside a folded constant switch inside a loop returns properly from the
+// function.
+TEST_P(GLSLTest_ES3, ReturnInConstantSwitchInsideLoop)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+uniform int u;
+out vec4 color;
+float eval()
+{
+    float f = 0.0;
+    for (int i = 0; i < 4; ++i)
+    {
+        switch (u, 1)
+        {
+            case 1: f += 1.0;
+            case 2: f += 2.0; return f;
+            case 3: f += 4.0; break;
+        }
+    }
+    return f;
+}
+void main()
+{
+    color = eval() == 3.0 ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test shadow variable declaration in constant switch.
+TEST_P(GLSLTest_ES3, ConstantSwitchShadowVariable)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+uniform int u;
+out vec4 color;
+void main()
+{
+    vec4 c = vec4(0, 0.8, 0, 1);
+    vec4 d;
+    switch (1)
+    {
+        case 0:
+            {
+                vec4 c = vec4(0.1, 0, 0, 1);
+                vec4 d = vec4(0.4, 0, 0, 1);
+            }
+            break;
+        case 1:
+            // Shadows c outside switch, but is declared in the case that matches the selector.
+            vec4 c = vec4(0, 0.3, 0, 0);
+            d = c;
+            break;
+        case 2:
+            vec4 d = vec4(0, 0, 1, 1);
+            break;
+    }
+    color = c + d;
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test shadow variable declaration in constant switch.
+TEST_P(GLSLTest_ES3, ConstantSwitchShadowVariable2)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+uniform int u;
+out vec4 color;
+void main()
+{
+    vec4 c = vec4(0, 0.8, 0, 1);
+    vec4 d;
+    switch (1)
+    {
+        case 0:
+            // Shadows c outside switch, but is declared before the case that matches the selector.
+            vec4 c = vec4(0.1, 0, 0, 1);
+            break;
+        case 1:
+            // Make sure the shadow variable is not dead-code eliminated.  However, its value cannot
+            // be relied upon because its initialization never runs.
+            d = vec4(c.y * 0.0, 0.3, 0, 0);
+            break;
+        case 2:
+            break;
+    }
+    color = c + d;
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test that nested constant switches inside a loop targeting the loop with continue work properly.
+TEST_P(GLSLTest_ES3, NestedSwitchContinueInEnclosingLoop)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+out vec4 color;
+void main()
+{
+    int count = 0;
+    switch (0)
+    {
+        case 0:
+            for (int i = 0; i < 4; ++i)
+            {
+                count += 1;
+                switch (1)
+                {
+                    case 1:
+                        switch (2)
+                        {
+                            case 2:
+                                continue;
+                        }
+                        break;
+                }
+                break;
+            }
+            break;
+    }
+    color = count == 4 ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test that nested constant switches inside a loop targeting the loop with continue work properly.
+// The nested switch is not a constant
+TEST_P(GLSLTest_ES3, NestedSwitchContinueInEnclosingLoop2)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+uniform int u;
+out vec4 color;
+void main()
+{
+    int count = 0;
+    switch (0)
+    {
+        case 0:
+            for (int i = 0; i < 4; ++i)
+            {
+                count += 1;
+                switch (1)
+                {
+                    case 1:
+                        switch (u)
+                        {
+                            case 0:
+                                continue;
+                        }
+                        break;
+                }
+                break;
+            }
+            break;
+    }
+    color = count == 4 ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test that nested constant switches inside a loop targeting the loop with continue work properly.
+// The enclosing switch is not a constant
+TEST_P(GLSLTest_ES3, NestedSwitchContinueInEnclosingLoop3)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+uniform int u;
+out vec4 color;
+void main()
+{
+    int count = 0;
+    switch (0)
+    {
+        case 0:
+            for (int i = 0; i < 4; ++i)
+            {
+                count += 1;
+                switch (u + 1)
+                {
+                    case 1:
+                        switch (0)
+                        {
+                            case 0:
+                                continue;
+                        }
+                        break;
+                }
+                break;
+            }
+            break;
+    }
+    color = count == 4 ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test that nested switches with continues in both inner and outer switch execute correctly.
+TEST_P(GLSLTest_ES3, NestedSwitchMultipleContinues)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+out vec4 color;
+void main()
+{
+    int count = 0;
+    switch (0)
+    {
+        case 0:
+            for (int i = 0; i < 4; ++i)
+            {
+                count += 1;
+                switch (1)
+                {
+                    case 1:
+                        switch (2)
+                        {
+                            case 2:
+                                continue;
+                        }
+                        continue;
+                }
+                break;
+            }
+            break;
+    }
+    color = count == 4 ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test that nested switches with false conditional continue fall through to break and exit the
+// loop.
+TEST_P(GLSLTest_ES3, NestedSwitchConditionalContinueFalse)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+uniform int u_zero;
+out vec4 color;
+void main()
+{
+    int count = 0;
+    switch (0)
+    {
+        case 0:
+            for (int i = 0; i < 4; ++i)
+            {
+                count += 1;
+                switch (1)
+                {
+                    case 1:
+                        switch (2)
+                        {
+                            case 2:
+                                if (u_zero != 0)
+                                {
+                                    continue;
+                                }
+                        }
+                        break;
+                }
+                break;
+            }
+            break;
+    }
+    color = count == 1 ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test that nested switches with true conditional continue jump to the loop header and continue
+// iterating.
+TEST_P(GLSLTest_ES3, NestedSwitchConditionalContinueTrue)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+uniform int u_zero;
+out vec4 color;
+void main()
+{
+    int count = 0;
+    switch (0)
+    {
+        case 0:
+            for (int i = 0; i < 4; ++i)
+            {
+                count += 1;
+                switch (1)
+                {
+                    case 1:
+                        switch (2)
+                        {
+                            case 2:
+                                if (u_zero == 0)
+                                {
+                                    continue;
+                                }
+                        }
+                        break;
+                }
+                break;
+            }
+            break;
+    }
+    color = count == 4 ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test that nested switches with conditional continue jump to the loop header and continue
+// iterating.
+TEST_P(GLSLTest_ES3, NestedSwitchConditionalContinueWhile)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+uniform int u_zero;
+out vec4 color;
+void main()
+{
+    int count = 0;
+    switch (0)
+    {
+        case 0:
+            int i = 0;
+            while (i < 4)
+            {
+                count += 1;
+                switch (1)
+                {
+                    case 1:
+                        switch (2)
+                        {
+                            case 2:
+                                ++i;
+                                continue;
+                        }
+                        break;
+                }
+                break;
+            }
+            break;
+    }
+    color = count == 4 ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test that nested switches with conditional continue jump to the loop header and continue
+// iterating.
+TEST_P(GLSLTest_ES3, NestedSwitchConditionalContinueDoWhile)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+uniform int u_zero;
+out vec4 color;
+void main()
+{
+    int count = 0;
+    switch (0)
+    {
+        case 0:
+            int i = 0;
+            do
+            {
+                if (i >= 4)
+                {
+                    break;
+                }
+                count += 1;
+                switch (1)
+                {
+                    case 1:
+                        switch (2)
+                        {
+                            case 2:
+                                ++i;
+                                continue;
+                        }
+                        break;
+                }
+                break;
+            }
+            while (true);
+            break;
+    }
+    color = count == 4 ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test that case blocks with compound statements ({ ... break; }) are properly truncated and do
+// not execute subsequent cases or emit redundant wrappers.
+TEST_P(GLSLTest_ES3, CaseWithCompoundStatementBlock)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+out vec4 color;
+void main()
+{
+    float f = 0.0;
+    switch (0)
+    {
+        case 0:
+        {
+            f = 2.0;
+            break;
+        }
+        case 1:
+        {
+            f = 5.0;
+            break;
+        }
+    }
+    color = f == 2.0 ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test that case blocks with compound statement returning from function ({ ... return; }) properly
+// return and do not execute subsequent cases.
+TEST_P(GLSLTest_ES3, CaseWithCompoundStatementReturn)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+out vec4 color;
+float eval()
+{
+    float f = 0.0;
+    switch (0)
+    {
+        case 0:
+        {
+            f = 2.0;
+            return f;
+        }
+        case 1:
+        {
+            f = 5.0;
+            break;
+        }
+    }
+    return f;
+}
+void main()
+{
+    color = eval() == 2.0 ? vec4(0, 1, 0, 1) : vec4(1, 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    ASSERT_GL_NO_ERROR();
+}
+
 // Test that lowp and mediump varyings can be correctly matched between VS and FS.
 TEST_P(GLSLTest, LowpMediumpVarying)
 {
@@ -22856,6 +24382,7 @@ TEST_P(GLSLTest_ES3, DenormFloatsToIntValues)
     constexpr char kFS[] =
         "#version 300 es\n"
         "precision highp float;\n"
+        "precision highp int;\n"
         "out vec4 out_color;\n"
         "uniform float u;\n"
         "void main()\n"
@@ -24362,16 +25889,13 @@ void main() {
     ASSERT_GL_NO_ERROR();
 }
 
-class GLSLTest_ES3_Blend : public GLSLTest_ES3
-{};
-
 // Test alpha blend where both the framebuffer and shader miss the alpha channel.  The spec says
 // that:
 //
 // > If a color buffer has no A value, then A_d is taken to be 1.
 //
 // But it says nothing about what happens if the shader does not write to alpha and A_s.
-TEST_P(GLSLTest_ES3_Blend, AlphaBlendNoAlphaChannelInSrcAndDst)
+TEST_P(GLSLTest_ES3, AlphaBlendNoAlphaChannelInSrcAndDst)
 {
     GLTexture color;
     glBindTexture(GL_TEXTURE_2D, color);
@@ -24407,7 +25931,7 @@ void main() {
 }
 
 // Test alpha blend where the framebuffer misses the alpha channel, but the shader writes to alpha.
-TEST_P(GLSLTest_ES3_Blend, AlphaBlendNoAlphaChannelInDst)
+TEST_P(GLSLTest_ES3, AlphaBlendNoAlphaChannelInDst)
 {
     GLTexture color;
     glBindTexture(GL_TEXTURE_2D, color);
@@ -24438,7 +25962,7 @@ void main() {
 
 // Test blend where the framebuffer misses the alpha channel.  Uses (GL_DST_COLOR, GL_ZERO) blend
 // that hits an optimization path in the mesa/Radeon driver.
-TEST_P(GLSLTest_ES3_Blend, ColorBlendNoAlphaChannelInDst)
+TEST_P(GLSLTest_ES3, ColorBlendNoAlphaChannelInDst)
 {
     GLTexture color;
     glBindTexture(GL_TEXTURE_2D, color);
@@ -25278,16 +26802,67 @@ TEST_P(GLSLTest_ES3, LongIdentifiers)
     glBufferData(GL_UNIFORM_BUFFER, sizeof(kUBOValue), &kUBOValue, GL_STATIC_COPY);
     glBindBufferBase(GL_UNIFORM_BUFFER, 0, ubo);
 
-    // If symbols are at least 1022 characters, they don't get prefixed.  If they are below 1022,
-    // they do.  Either way, this test makes sure these symbols work.  This is particularly needed
-    // given these symbols may get suffixed with `_id`.
-    for (uint32_t len = 1020; len <= 1024; len += 2)
+    // If symbols are longer than 1022 characters, they don't get prefixed.  If they are at most
+    // 1022, they do.  Either way, this test makes sure these symbols work.  This is particularly
+    // needed given these symbols may get suffixed with `_id`.
+    for (uint32_t len = 1020; len <= 1024; ++len)
     {
         const std::string longUBO(len, 'b');
         const std::string longUniform(len, 'u');
         const std::string longGlobalStruct(len, 'S');
         const std::string longLocalStruct(len, 'L');
         const std::string longVariable(len, 'v');
+
+        std::string shader = R"(#version 300 es
+precision mediump float;
+uniform )" + longUBO + R"({
+    float u;
+};
+struct )" + longGlobalStruct +
+                             R"({
+    float f;
+} g;
+uniform float )" + longUniform +
+                             R"(;
+out vec4 color;
+
+void main() {
+    struct )" + longLocalStruct +
+                             R"({
+        float f2;
+    } l;
+    float )" + longVariable + R"( = 0.1 + u;
+    g.f = )" + longUniform + R"(;
+    l.f2 = g.f + 0.25;
+    color = vec4()" + longVariable +
+                             R"(, g.f, l.f2, 1.0);
+})";
+
+        ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), shader.c_str());
+        drawQuad(program, essl1_shaders::PositionAttrib(), 0.5f, 1.0f);
+        EXPECT_PIXEL_COLOR_NEAR(0, 0, GLColor(127, 0, 63, 255), 1);
+        ASSERT_GL_NO_ERROR();
+    }
+}
+
+// Test that long symbols starting with underscore work
+TEST_P(GLSLTest_ES3, LongIdentifiersWithUnderscore)
+{
+    constexpr GLfloat kUBOValue = 0.4f;
+    GLBuffer ubo;
+    glBindBuffer(GL_UNIFORM_BUFFER, ubo);
+    glBufferData(GL_UNIFORM_BUFFER, sizeof(kUBOValue), &kUBOValue, GL_STATIC_COPY);
+    glBindBufferBase(GL_UNIFORM_BUFFER, 0, ubo);
+
+    // If symbols are longer than 1022 characters, the shader must fail validation (tested in
+    // GLSLValidationTest.cpp).  If they are at most 1022, they are prefixed with.
+    for (uint32_t len = 1020; len <= 1022; ++len)
+    {
+        const std::string longUBO          = '_' + std::string(len - 1, 'b');
+        const std::string longUniform      = '_' + std::string(len - 1, 'u');
+        const std::string longGlobalStruct = '_' + std::string(len - 1, 'S');
+        const std::string longLocalStruct  = '_' + std::string(len - 1, 'L');
+        const std::string longVariable     = '_' + std::string(len - 1, 'v');
 
         std::string shader = R"(#version 300 es
 precision mediump float;
@@ -25582,20 +27157,147 @@ void main()
     EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::white);
 }
 
+// Test that uninitialized local struct containing arrays compiles when both
+// AvoidComplexExpressionsInStructConstructor and ForceInitShaderVariables are enabled.
+// https://crbug.com/562777838
+TEST_P(GLSLTest_ES3, StructConstructorUninitializedWithArrayMember)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+precision mediump int;
+uniform int u_zero;
+struct S {
+    int prime_numbers[10];
+};
+
+out vec4 color;
+void main()
+{
+    S s;
+    s.prime_numbers[0] = u_zero + 42;
+    color = vec4(s.prime_numbers[0] == 42, 0.0, 0.0, 1.0);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::red);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test that uninitialized local array of structs compiles when both
+// AvoidComplexExpressionsInStructConstructor and ForceInitShaderVariables are enabled.
+// https://crbug.com/562777838
+TEST_P(GLSLTest_ES3, StructConstructorUninitializedArrayOfStructs)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+precision mediump int;
+uniform int u_zero;
+struct BST {
+    int data;
+    int leftIndex;
+    int rightIndex;
+};
+
+out vec4 color;
+void main()
+{
+    BST tree[10];
+    tree[0].data = u_zero + 42;
+    color = vec4(tree[0].data == 42, 0.0, 0.0, 1.0);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::red);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test that uninitialized nested local struct containing arrays compiles when both
+// AvoidComplexExpressionsInStructConstructor and ForceInitShaderVariables are enabled.
+// https://crbug.com/562777838
+TEST_P(GLSLTest_ES3, StructConstructorUninitializedNestedWithArrayMember)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+uniform float u_zero;
+struct Leaf {
+    float a[4];
+};
+struct Branch {
+    Leaf leaves[3];
+};
+struct Tree {
+    Branch branches[2];
+};
+
+out vec4 color;
+void main()
+{
+    Tree t;
+    t.branches[1].leaves[2].a[3] = u_zero + 1.0;
+    color = vec4(t.branches[1].leaves[2].a[3] == 1.0, 0.0, 0.0, 1.0);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::red);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test that a function returning a struct with an array member and missing a final return
+// statement compiles when AvoidComplexExpressionsInStructConstructor is enabled.
+// https://crbug.com/569158181
+TEST_P(GLSLTest_ES3, StructConstructorDefaultReturnWithArrayMember)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+uniform int u_zero;
+struct S {
+    float a;
+    float b;
+};
+struct T {
+    S s[2];
+};
+
+T makeT()
+{
+    if (u_zero == 0)
+    {
+        T t;
+        t.s[0] = S(1.0, 0.0);
+        t.s[1] = S(0.0, 1.0);
+        return t;
+    }
+}
+
+out vec4 color;
+void main()
+{
+    T t = makeT();
+    color = vec4(t.s[0].a, t.s[0].b, t.s[1].a, t.s[1].b);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::red);
+    ASSERT_GL_NO_ERROR();
+}
+
 // Test that having dynamic indexing of a vector inside the right hand side of logical or works
 // correctly.
 TEST_P(GLSLTest_ES3, DynamicIndexingOfVectorOnRightSideOfLogicalOr)
 {
-    const std::string &fragShader =
-        "#version 300 es\n"
-        "precision highp float;\n"
-        "out vec4 my_FragColor;\n"
-        "uniform int u1;\n"
-        "void main() {\n"
-        "   bvec4 v = bvec4(true, true, true, false);\n"
-        "   my_FragColor = vec4(v[u1 + 1] || v[u1]);\n"
-        "}\n";
-    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), fragShader.c_str());
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+out vec4 my_FragColor;
+uniform int u1;
+void main() {
+   bvec4 v = bvec4(true, true, true, false);
+   my_FragColor = vec4(v[u1 + 1] || v[u1]);
+})";
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
     glUseProgram(program);
     GLint u1Loc = glGetUniformLocation(program, "u1");
     ASSERT_NE(-1, u1Loc);
@@ -25609,37 +27311,35 @@ TEST_P(GLSLTest_ES3, DynamicIndexingOfVectorOnRightSideOfLogicalOr)
 // without a prefix.
 TEST_P(GLSLTest, RewriteElseBlockReturningStruct)
 {
-    const std::string &vs =
-        "attribute vec4 a_position;\n"
-        "struct foo\n"
-        "{\n"
-        "    float member;\n"
-        "};\n"
-        "uniform bool b;\n"
-        "varying float outMember;\n"
-        "foo getFoo()\n"
-        "{\n"
-        "    if (b)\n"
-        "    {\n"
-        "        return foo(0.5);\n"
-        "    }\n"
-        "    else\n"
-        "    {\n"
-        "        return foo(1.0);\n"
-        "    }\n"
-        "}\n"
-        "void main()\n"
-        "{\n"
-        "   gl_Position = a_position;\n"
-        "   outMember = getFoo().member;\n"
-        "}\n";
-    const std::string &fs =
-        "precision mediump float;\n"
-        "varying float outMember;\n"
-        "void main() {\n"
-        "   gl_FragColor = vec4(outMember, 0.0, 0.0, 1.0);\n"
-        "}\n";
-    ANGLE_GL_PROGRAM(program, vs.c_str(), fs.c_str());
+    constexpr char kVS[] = R"(attribute vec4 a_position;
+struct foo
+{
+    float member;
+};
+uniform bool b;
+varying float outMember;
+foo getFoo()
+{
+    if (b)
+    {
+        return foo(0.5);
+    }
+    else
+    {
+        return foo(1.0);
+    }
+}
+void main()
+{
+   gl_Position = a_position;
+   outMember = getFoo().member;
+})";
+    constexpr char kFS[] = R"(precision mediump float;
+varying float outMember;
+void main() {
+   gl_FragColor = vec4(outMember, 0.0, 0.0, 1.0);
+})";
+    ANGLE_GL_PROGRAM(program, kVS, kFS);
     glUseProgram(program);
     GLint bLoc = glGetUniformLocation(program, "b");
     ASSERT_NE(-1, bLoc);
@@ -25653,14 +27353,14 @@ TEST_P(GLSLTest, RewriteElseBlockReturningStruct)
 // test.
 TEST_P(GLSLTest, RemoveDynamicingIndexIndexPrecisionBug)
 {
-    const char vs[] = R"(void main()
+    constexpr char kVS[] = R"(void main()
 {
     mat3 tmp;
     vec3 res = vec3(0);
     for (int i = 0; res += 0., ivec3(0)[i], ivec3(tmp)[i], i < 0;);
     gl_Position = vec4(0.0);
 })";
-    ANGLE_GL_PROGRAM(program, vs, essl1_shaders::fs::Red());
+    ANGLE_GL_PROGRAM(program, kVS, essl1_shaders::fs::Red());
     EXPECT_GL_NO_ERROR();
 }
 
@@ -25668,16 +27368,15 @@ TEST_P(GLSLTest, RemoveDynamicingIndexIndexPrecisionBug)
 // output. This test has a constant array constructor statement.
 TEST_P(GLSLTest_ES3, ConstArrayConstructorStatement)
 {
-    const std::string &fs =
-        "#version 300 es\n"
-        "precision mediump float;\n"
-        "out vec4 outColor;\n"
-        "void main()\n"
-        "{\n"
-        "    int[1](0);\n"
-        "    outColor = vec4(0.0, 1.0, 0.0, 1.0);\n"
-        "}\n";
-    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), fs.c_str());
+    constexpr char kFS[] = R"(#version 300 es
+precision mediump float;
+out vec4 outColor;
+void main()
+{
+    int[1](0);
+    outColor = vec4(0.0, 1.0, 0.0, 1.0);
+})";
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
     glUseProgram(program);
     drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
     EXPECT_GL_NO_ERROR();
@@ -25688,16 +27387,15 @@ TEST_P(GLSLTest_ES3, ConstArrayConstructorStatement)
 // output.
 TEST_P(GLSLTest_ES3, ArrayConstructorStatement)
 {
-    const std::string &fs =
-        "#version 300 es\n"
-        "precision mediump float;\n"
-        "out vec4 outColor;\n"
-        "void main()\n"
-        "{\n"
-        "    outColor = vec4(0.0, 0.0, 0.0, 1.0);\n"
-        "    float[1](outColor[1]++);\n"
-        "}\n";
-    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), fs.c_str());
+    constexpr char kFS[] = R"(#version 300 es
+precision mediump float;
+out vec4 outColor;
+void main()
+{
+    outColor = vec4(0.0, 0.0, 0.0, 1.0);
+    float[1](outColor[1]++);
+})";
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
     glUseProgram(program);
     drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
     EXPECT_GL_NO_ERROR();
@@ -25707,16 +27405,15 @@ TEST_P(GLSLTest_ES3, ArrayConstructorStatement)
 // Test an array of arrays constructor as a statement.
 TEST_P(GLSLTest_ES31, ArrayOfArraysStatement)
 {
-    const std::string &fs =
-        "#version 310 es\n"
-        "precision mediump float;\n"
-        "out vec4 outColor;\n"
-        "void main()\n"
-        "{\n"
-        "    outColor = vec4(0.0, 0.0, 0.0, 1.0);\n"
-        "    float[2][2](float[2](outColor[1]++, 0.0), float[2](1.0, 2.0));\n"
-        "}\n";
-    ANGLE_GL_PROGRAM(program, essl31_shaders::vs::Simple(), fs.c_str());
+    constexpr char kFS[] = R"(#version 310 es
+precision mediump float;
+out vec4 outColor;
+void main()
+{
+    outColor = vec4(0.0, 0.0, 0.0, 1.0);
+    float[2][2](float[2](outColor[1]++, 0.0), float[2](1.0, 2.0));
+})";
+    ANGLE_GL_PROGRAM(program, essl31_shaders::vs::Simple(), kFS);
     glUseProgram(program);
     drawQuad(program, essl31_shaders::PositionAttrib(), 0.5f);
     EXPECT_GL_NO_ERROR();
@@ -25727,17 +27424,16 @@ TEST_P(GLSLTest_ES31, ArrayOfArraysStatement)
 // indexing have correct data that subsequent traversal steps rely on.
 TEST_P(GLSLTest_ES3, VectorDynamicIndexing)
 {
-    const std::string &fs =
-        "#version 300 es\n"
-        "precision mediump float;\n"
-        "out vec4 outColor;\n"
-        "uniform int i;\n"
-        "void main()\n"
-        "{\n"
-        "    vec4 foo = vec4(0.0, 0.5, 0.0, 1.0);\n"
-        "    outColor = vec4(0.0, foo[i], 0.0, 1.0);\n"
-        "}\n";
-    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), fs.c_str());
+    constexpr char kFS[] = R"(#version 300 es
+precision mediump float;
+out vec4 outColor;
+uniform int i;
+void main()
+{
+    vec4 foo = vec4(0.0, 0.5, 0.0, 1.0);
+    outColor = vec4(0.0, foo[i], 0.0, 1.0);
+})";
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
     glUseProgram(program);
     GLint iLoc = glGetUniformLocation(program, "i");
     ASSERT_NE(-1, iLoc);
@@ -25751,21 +27447,20 @@ TEST_P(GLSLTest_ES3, VectorDynamicIndexing)
 // changed consistently when the user-defined function is changed to have an array out parameter.
 TEST_P(GLSLTest_ES31, ArrayReturnValue)
 {
-    const std::string &fs =
-        "#version 310 es\n"
-        "precision highp float;\n"
-        "uniform float u;\n"
-        "out vec4 outColor;\n"
-        "float[2] getArray(float f)\n"
-        "{\n"
-        "    return float[2](f, f + 0.5);\n"
-        "}\n"
-        "void main()\n"
-        "{\n"
-        "    float[2] arr = getArray(u);\n"
-        "    outColor = vec4(arr[0], arr[1], 0.0, 1.0);\n"
-        "}\n";
-    ANGLE_GL_PROGRAM(program, essl31_shaders::vs::Simple(), fs.c_str());
+    constexpr char kFS[] = R"(#version 310 es
+precision highp float;
+uniform float u;
+out vec4 outColor;
+float[2] getArray(float f)
+{
+    return float[2](f, f + 0.5);
+}
+void main()
+{
+    float[2] arr = getArray(u);
+    outColor = vec4(arr[0], arr[1], 0.0, 1.0);
+})";
+    ANGLE_GL_PROGRAM(program, essl31_shaders::vs::Simple(), kFS);
     glUseProgram(program);
     GLint uLoc = glGetUniformLocation(program, "u");
     ASSERT_NE(-1, uLoc);
@@ -25778,18 +27473,17 @@ TEST_P(GLSLTest_ES31, ArrayReturnValue)
 // Test that writing parameters without a name doesn't assert.
 TEST_P(GLSLTest, ParameterWithNoName)
 {
-    const std::string &fs =
-        "precision mediump float;\n"
-        "uniform vec4 v;\n"
-        "vec4 s(vec4)\n"
-        "{\n"
-        "    return v;\n"
-        "}\n"
-        "void main()\n"
-        "{\n"
-        "    gl_FragColor = s(v);\n"
-        "}\n";
-    ANGLE_GL_PROGRAM(program, essl1_shaders::vs::Simple(), fs.c_str());
+    constexpr char kFS[] = R"(precision mediump float;
+uniform vec4 v;
+vec4 s(vec4)
+{
+    return v;
+}
+void main()
+{
+    gl_FragColor = s(v);
+})";
+    ANGLE_GL_PROGRAM(program, essl1_shaders::vs::Simple(), kFS);
     glUseProgram(program);
     GLint vLoc = glGetUniformLocation(program, "v");
     ASSERT_NE(-1, vLoc);
@@ -25802,21 +27496,20 @@ TEST_P(GLSLTest, ParameterWithNoName)
 // Test that array dimensions are written out correctly.
 TEST_P(GLSLTest_ES3, ArrayDimensionsCompile)
 {
-    const std::string &fs =
-        "#version 300 es\n"
-        "precision mediump float;\n"
-        "uniform float uf;\n"
-        "out vec4 my_FragColor;\n"
-        "void main()\n"
-        "{\n"
-        "    my_FragColor = vec4(0.0, 0.0, 0.0, 1.0);\n"
-        "    float arr[2];\n"
-        "    for (int i = 0; i < 2; ++i) {\n"
-        "        arr[i] = uf * 0.25;\n"
-        "        my_FragColor.x += arr[i];\n"
-        "    }\n"
-        "}\n";
-    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), fs.c_str());
+    constexpr char kFS[] = R"(#version 300 es
+precision mediump float;
+uniform float uf;
+out vec4 my_FragColor;
+void main()
+{
+    my_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+    float arr[2];
+    for (int i = 0; i < 2; ++i) {
+        arr[i] = uf * 0.25;
+        my_FragColor.x += arr[i];
+    }
+})";
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
     glUseProgram(program);
     GLint ufLoc = glGetUniformLocation(program, "uf");
     ASSERT_NE(-1, ufLoc);
@@ -25829,19 +27522,18 @@ TEST_P(GLSLTest_ES3, ArrayDimensionsCompile)
 // Test that initializing array with previously declared array will not be overwritten
 TEST_P(GLSLTest_ES3, SameNameArray)
 {
-    const std::string &fs =
-        "#version 300 es\n"
-        "precision highp float;\n"
-        "out vec4 my_FragColor;\n"
-        "void main()\n"
-        "{\n"
-        "  float arr[2] = float[2](0.5, 1.0);\n"
-        "  {\n"
-        "    float arr[2] = arr;\n"
-        "    my_FragColor = vec4(0.0, arr[0], 0.0, arr[1]);\n"
-        "  }\n"
-        "}\n";
-    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), fs.c_str());
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+out vec4 my_FragColor;
+void main()
+{
+  float arr[2] = float[2](0.5, 1.0);
+  {
+    float arr[2] = arr;
+    my_FragColor = vec4(0.0, arr[0], 0.0, arr[1]);
+  }
+})";
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
     glUseProgram(program);
     drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
     EXPECT_GL_NO_ERROR();
@@ -25852,7 +27544,7 @@ TEST_P(GLSLTest_ES3, SameNameArray)
 // struct mapping.
 TEST_P(GLSLTest_ES3, NonStructMemberAsFunctionArgument)
 {
-    const std::string &fs = R"(#version 300 es
+    constexpr char kFS[] = R"(#version 300 es
     precision highp float;
     out vec4 my_FragColor;
     struct InstancingData
@@ -25871,7 +27563,7 @@ TEST_P(GLSLTest_ES3, NonStructMemberAsFunctionArgument)
         float result = dot(instances[index].data, vec4(0.25, 0.25, 0.25, 0.25));
         my_FragColor = vec4(result, 0.0, 0.0, 1.0);
     })";
-    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), fs.c_str());
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
     glUseProgram(program);
     GLuint blockIndex = glGetUniformBlockIndex(program, "InstanceBlock");
     ASSERT_NE(GL_INVALID_INDEX, blockIndex);
@@ -25905,7 +27597,7 @@ TEST_P(GLSLTest_ES3, UniformBlockWithUnsupportedFieldStructuredBufferFallback)
     // If translation incorrectly used StructuredBuffer, the GPU would read element 49 from offset
     // 49 * 52 = 2548 instead of the correct CPU offset 49 * 64 = 3136, reading garbage and
     // rendering a wrong color.
-    const std::string &fs = R"(#version 300 es
+    constexpr char kFS[] = R"(#version 300 es
 precision highp float;
 struct S {
     vec4 a;
@@ -25920,7 +27612,7 @@ void main() {
     fragColor = buf[u_index].a + vec4(buf[u_index].b[0], 0.0);
 })";
 
-    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), fs.c_str());
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
     glUseProgram(program);
     GLuint blockIndex = glGetUniformBlockIndex(program, "Block");
     ASSERT_NE(GL_INVALID_INDEX, blockIndex);
@@ -25964,7 +27656,7 @@ void main() {
 // rendered correctly.
 TEST_P(GLSLTest_ES3, UniformBlockWithSupportedFieldsStructuredBuffer)
 {
-    const std::string &fs = R"(#version 300 es
+    constexpr char kFS[] = R"(#version 300 es
 precision highp float;
 struct S {
     vec4 a;
@@ -25979,7 +27671,7 @@ void main() {
     fragColor = buf[u_index].a + buf[u_index].b[0];
 })";
 
-    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), fs.c_str());
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
     glUseProgram(program);
     GLuint blockIndex = glGetUniformBlockIndex(program, "Block");
     ASSERT_NE(GL_INVALID_INDEX, blockIndex);
@@ -26020,6 +27712,440 @@ void main() {
     EXPECT_PIXEL_COLOR_NEAR(0, 0, GLColor(125, 125, 0, 255), 2);
 }
 
+// Test that computed lvalue index expression is evaluated before the rhs comma expression mutates
+// it.
+TEST_P(GLSLTest, AccessChainIndexPreservedAcrossCommaStore)
+{
+    // The AST translator's GLSL, HLSL and WGSL output does not handle this hazard; it is fixed only
+    // in the IR translator.
+    ANGLE_SKIP_TEST_IF(!getEGLWindow()->isFeatureEnabled(Feature::UseIr) &&
+                       (IsOpenGL() || IsOpenGLES() || IsD3D11() || IsWebGPU()));
+
+    constexpr char kFS[] = R"(precision mediump float;
+void main()
+{
+    vec4 v[2];
+    v[0] = vec4(0.0, 1.0, 2.0, 3.0);
+    v[1] = vec4(4.0, 5.0, 6.0, 7.0);
+
+    v[int(v[0].x)].y = (v[0].x = 1.0, 9.0);
+
+    // Left half shows v[0], right half shows v[1].
+    gl_FragColor = (gl_FragCoord.x < 64.0 ? v[0] : v[1]) / 255.0;
+})";
+
+    ANGLE_GL_PROGRAM(program, essl1_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl1_shaders::PositionAttrib(), 0.5f);
+    EXPECT_GL_NO_ERROR();
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor(1, 9, 2, 3)) << "v[0]";
+    EXPECT_PIXEL_COLOR_EQ(getWindowWidth() - 1, 0, GLColor(4, 5, 6, 7)) << "v[1]";
+}
+
+// Test that a computed lvalue index expression is evaluated before an rhs comma expression with an
+// inout call mutates it.
+TEST_P(GLSLTest, AccessChainIndexPreservedAcrossInoutCall)
+{
+    // The AST translator's GLSL, HLSL and WGSL output does not handle this hazard; it is fixed only
+    // in the IR translator.
+    ANGLE_SKIP_TEST_IF(!getEGLWindow()->isFeatureEnabled(Feature::UseIr) &&
+                       (IsOpenGL() || IsOpenGLES() || IsD3D11() || IsWebGPU()));
+
+    constexpr char kFS[] = R"(precision mediump float;
+float modify(inout float x)
+{
+    x = 1.0;
+    return 9.0;
+}
+void main()
+{
+    vec4 v[2];
+    v[0] = vec4(0.0, 1.0, 2.0, 3.0);
+    v[1] = vec4(4.0, 5.0, 6.0, 7.0);
+
+    v[int(v[0].x)].y = (modify(v[0].x), 9.0);
+
+    // Left half shows v[0], right half shows v[1].
+    gl_FragColor = (gl_FragCoord.x < 64.0 ? v[0] : v[1]) / 255.0;
+})";
+
+    ANGLE_GL_PROGRAM(program, essl1_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl1_shaders::PositionAttrib(), 0.5f);
+    EXPECT_GL_NO_ERROR();
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor(1, 9, 2, 3)) << "v[0]";
+    EXPECT_PIXEL_COLOR_EQ(getWindowWidth() - 1, 0, GLColor(4, 5, 6, 7)) << "v[1]";
+}
+
+// Test that a computed lvalue index expression is evaluated before an rhs comma expression with an
+// increment mutates it.
+TEST_P(GLSLTest, AccessChainIndexPreservedAcrossIncrement)
+{
+    // The AST translator's GLSL, HLSL and WGSL output does not handle this hazard; it is fixed only
+    // in the IR translator.
+    ANGLE_SKIP_TEST_IF(!getEGLWindow()->isFeatureEnabled(Feature::UseIr) &&
+                       (IsOpenGL() || IsOpenGLES() || IsD3D11() || IsWebGPU()));
+
+    constexpr char kFS[] = R"(precision mediump float;
+void main()
+{
+    vec4 v[2];
+    v[0] = vec4(0.0, 1.0, 2.0, 3.0);
+    v[1] = vec4(4.0, 5.0, 6.0, 7.0);
+
+    v[int(v[0].x)].y = (v[0].x++, 9.0);
+
+    // Left half shows v[0], right half shows v[1].
+    gl_FragColor = (gl_FragCoord.x < 64.0 ? v[0] : v[1]) / 255.0;
+})";
+
+    ANGLE_GL_PROGRAM(program, essl1_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl1_shaders::PositionAttrib(), 0.5f);
+    EXPECT_GL_NO_ERROR();
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor(1, 9, 2, 3)) << "v[0]";
+    EXPECT_PIXEL_COLOR_EQ(getWindowWidth() - 1, 0, GLColor(4, 5, 6, 7)) << "v[1]";
+}
+
+// Test that local variable declarations in dead code outside a switch statement do not crash.
+TEST_P(GLSLTest, DeadCodeVariableDeclaration)
+{
+    constexpr char kFS[] = R"(precision mediump float;
+float getGreen()
+{
+    return 1.0;
+    float deadHelper = 0.25;
+    return deadHelper;
+}
+void main()
+{
+    gl_FragColor = vec4(0.0, getGreen(), 0.0, 1.0);
+    return;
+    vec4 deadUninit;
+    vec4 deadInit = vec4(1.0, 0.0, 0.0, 1.0);
+    gl_FragColor = deadInit + deadUninit;
+})";
+
+    ANGLE_GL_PROGRAM(program, essl1_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl1_shaders::PositionAttrib(), 0.5f);
+    EXPECT_GL_NO_ERROR();
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+}
+
+// Tests mat2 arr[2] multi-index access chain where sub-index is preserved across mutating comma
+// assignment.
+TEST_P(GLSLTest_ES3, MultiIndexAccessChainPreservedAcrossCommaStore)
+{
+    // The AST translator's GLSL, HLSL and WGSL output does not handle this hazard; it is fixed only
+    // in the IR translator.
+    ANGLE_SKIP_TEST_IF(!getEGLWindow()->isFeatureEnabled(Feature::UseIr) &&
+                       (IsOpenGL() || IsOpenGLES() || IsD3D11() || IsWebGPU()));
+
+    constexpr char kFS[] = R"(#version 300 es
+precision mediump float;
+out vec4 fragColor;
+void main()
+{
+    mat2 arr[2];
+    arr[0] = mat2(0.0, 0.0, 2.0, 3.0);
+    arr[1] = mat2(4.0, 5.0, 6.0, 7.0);
+
+    arr[int(arr[0][0].x)][int(arr[0][0].y)].y = (arr[0][0].x = 1.0, 10.0);
+
+    // Left half shows arr[0], right half shows arr[1].
+    vec4 left  = vec4(arr[0][0], arr[0][1]);
+    vec4 right = vec4(arr[1][0], arr[1][1]);
+    fragColor  = (gl_FragCoord.x < 64.0 ? left : right) / 255.0;
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_GL_NO_ERROR();
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor(1, 10, 2, 3)) << "arr[0]";
+    EXPECT_PIXEL_COLOR_EQ(getWindowWidth() - 1, 0, GLColor(4, 5, 6, 7)) << "arr[1]";
+}
+
+// Test indexing a uniform vector with a non-constant index
+TEST_P(WebGL2GLSLTest, UniformVectorDynamicIndex)
+{
+    constexpr char kVS[] = R"(precision highp float;
+attribute vec2 position;
+uniform vec4 u;
+uniform int zero;
+varying float v;
+void main()
+{
+    gl_Position = vec4(position, 0, 1);
+    v = u[zero];
+})";
+
+    constexpr char kFS[] = R"(precision highp float;
+varying float v;
+void main()
+{
+    gl_FragColor = vec4(v, 0, 0, 1);
+})";
+
+    ANGLE_GL_PROGRAM(program, kVS, kFS);
+    glUseProgram(program);
+    glUniform4f(glGetUniformLocation(program, "u"), 0.5, 0.2, 0.8, 0.1);
+    drawQuad(program, "position", 0.5f, 1.0f, true);
+    EXPECT_PIXEL_COLOR_NEAR(0, 0, GLColor(127, 0, 0, 255), 1);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test indexing a uniform matrix with a non-constant index
+TEST_P(WebGL2GLSLTest, UniformMatrixDynamicIndex)
+{
+    constexpr char kVS[] = R"(precision highp float;
+attribute vec2 position;
+uniform mat4 u;
+uniform int zero;
+varying vec4 v;
+void main()
+{
+    gl_Position = vec4(position, 0, 1);
+    v = u[zero + 1];
+})";
+
+    constexpr char kFS[] = R"(precision highp float;
+varying vec4 v;
+void main()
+{
+    gl_FragColor = v;
+})";
+
+    ANGLE_GL_PROGRAM(program, kVS, kFS);
+    glUseProgram(program);
+    static constexpr std::array<float, 16> kMatrix = {
+        // Column 0
+        0.123,
+        0.234,
+        0.345,
+        0.456,
+        // Column 1, selected by the shader
+        0.5,
+        0.25,
+        0.75,
+        1.0,
+        // Column 2
+        0.567,
+        0.678,
+        0.789,
+        0.890,
+        // Column 3
+        0.901,
+        0.012,
+        0.123,
+        0.234,
+    };
+    glUniformMatrix4fv(glGetUniformLocation(program, "u"), 1, false, kMatrix.data());
+    drawQuad(program, "position", 0.5f, 1.0f, true);
+    EXPECT_PIXEL_COLOR_NEAR(0, 0, GLColor(127, 63, 191, 255), 1);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test indexing a uniform array with a non-constant index
+TEST_P(WebGL2GLSLTest, UniformArrayDynamicIndex)
+{
+    constexpr char kVS[] = R"(precision highp float;
+attribute vec2 position;
+uniform vec4 u[5];
+uniform int zero;
+varying vec4 v;
+void main()
+{
+    gl_Position = vec4(position, 0, 1);
+    v = u[zero + 2];
+})";
+
+    constexpr char kFS[] = R"(precision highp float;
+varying vec4 v;
+void main()
+{
+    gl_FragColor = v;
+})";
+
+    ANGLE_GL_PROGRAM(program, kVS, kFS);
+    glUseProgram(program);
+    glUniform4f(glGetUniformLocation(program, "u[0]"), 0.123, 0.234, 0.345, 0.456);
+    glUniform4f(glGetUniformLocation(program, "u[1]"), 0.567, 0.678, 0.789, 0.890);
+    glUniform4f(glGetUniformLocation(program, "u[2]"), 0.25, 0.75, 0.5, 1.0);
+    glUniform4f(glGetUniformLocation(program, "u[3]"), 0.901, 0.012, 0.123, 0.234);
+    glUniform4f(glGetUniformLocation(program, "u[4]"), 0.901, 0.012, 0.123, 0.234);
+    drawQuad(program, "position", 0.5f, 1.0f, true);
+    EXPECT_PIXEL_COLOR_NEAR(0, 0, GLColor(63, 191, 127, 255), 1);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test indexing multiple uniform arrays with a non-constant index
+TEST_P(WebGL2GLSLTest, UniformArraysDynamicIndex)
+{
+    constexpr char kVS[] = R"(#version 300 es
+precision highp float;
+in vec2 position;
+// Test power-of-two array size.  Non-power-of-two is tested in the |Array| test above.
+uniform vec4 u[4];
+// Test 1-element array:
+uniform ivec2 u2[1];
+uniform int zero;
+out vec4 v;
+void main()
+{
+    gl_Position = vec4(position, 0, 1);
+    v = vec4(u2[zero], 0, 0) + u[zero + 2];
+})";
+
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+in vec4 v;
+out vec4 color;
+void main()
+{
+    color = v;
+})";
+
+    ANGLE_GL_PROGRAM(program, kVS, kFS);
+    glUseProgram(program);
+    glUniform4f(glGetUniformLocation(program, "u[0]"), 0.123, 0.234, 0.345, 0.456);
+    glUniform4f(glGetUniformLocation(program, "u[1]"), 0.567, 0.678, 0.789, 0.890);
+    glUniform4f(glGetUniformLocation(program, "u[2]"), 0.25, 0.75, 0.5, 1.0);
+    glUniform4f(glGetUniformLocation(program, "u[3]"), 0.901, 0.012, 0.123, 0.234);
+    glUniform2i(glGetUniformLocation(program, "u2[0]"), 1, 0);
+    drawQuad(program, "position", 0.5f, 1.0f, true);
+    EXPECT_PIXEL_COLOR_NEAR(0, 0, GLColor(255, 191, 127, 255), 1);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test indexing a uniform array with a non-constant index with side effect after short circuit
+TEST_P(WebGL2GLSLTest, UniformArrayDynamicIndexShortCircuit)
+{
+    constexpr char kVS[] = R"(#version 300 es
+precision highp float;
+in vec2 position;
+uniform vec4 u[3];
+uniform int zero;
+out vec4 v;
+void main()
+{
+    gl_Position = vec4(position, 0, 1);
+    // Branch not taken, test access to uniform array after short circuit with side effect in index.
+    // Simultaneously, test uint index
+    uint i = uint(zero) + 1u;
+    if (position.x == 12345.0 && u[++i].x > 0.)
+    {
+        gl_Position = vec4(0, 0, 0, 1);
+    }
+    v = u[zero + 2];
+    if (i != 1u)
+    {
+        v.b = 1.0;
+    }
+})";
+
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+in vec4 v;
+out vec4 color;
+void main()
+{
+    color = v;
+})";
+
+    ANGLE_GL_PROGRAM(program, kVS, kFS);
+    glUseProgram(program);
+    glUniform4f(glGetUniformLocation(program, "u[0]"), 0.123, 0.234, 0.345, 0.456);
+    glUniform4f(glGetUniformLocation(program, "u[1]"), 0.567, 0.678, 0.789, 0.890);
+    glUniform4f(glGetUniformLocation(program, "u[2]"), 0.25, 0.75, 0.5, 1.0);
+    drawQuad(program, "position", 0.5f, 1.0f, true);
+    EXPECT_PIXEL_COLOR_NEAR(0, 0, GLColor(63, 191, 127, 255), 1);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test `bool_var ? bvec4(true) : bvec4(false)`
+TEST_P(GLSLTest_ES3, BoolSelectorBVecConstantValues)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+uniform bool b;
+out vec4 color;
+void main()
+{
+    bvec4 result = b ? bvec4(true) : bvec4(false);
+    color = vec4(!result.x, result.yz, !result.w);
+})";
+
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::red);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test that when calling interpolateAt* built-in functions on varyings whose precision is
+// mismatched between shader stages, regardless of whether we apply precision fixer in shader
+// translator, the shaders should compile fine.
+TEST_P(GLSLTest_ES3, InterpolateOnVaryingWithPrecisionMismatch)
+{
+    ANGLE_SKIP_TEST_IF(!EnsureGLExtensionEnabled("GL_OES_shader_multisample_interpolation"));
+    constexpr char kVS[] = R"(#version 300 es
+in highp vec2 position;
+out mediump vec4 v_var;
+void main() {
+v_var = vec4(0.2, 0.25, 0.3, 1.0);
+gl_Position = vec4(position, 0, 1);
+})";
+
+    constexpr char kFS[] = R"(#version 300 es
+#extension GL_OES_shader_multisample_interpolation : require
+precision highp float;
+in highp vec4 v_var;
+out vec4 outColor;
+void main() {
+  outColor = interpolateAtCentroid(v_var)
+           + interpolateAtOffset(v_var, vec2(0.0, 0.0))
+           + interpolateAtSample(v_var, 0);
+})";
+
+    ANGLE_GL_PROGRAM(program, kVS, kFS);
+    ASSERT_GL_NO_ERROR();
+
+    glUseProgram(program);
+    drawQuad(program, "position", 0.5f, 1.0f, true);
+    EXPECT_PIXEL_COLOR_NEAR(0, 0, GLColor(153, 191, 230, 255), 1);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test that when calling interpolateAt* built-in functions on array type varying whose precision is
+// mismatched between shader stages, regardless of whether we apply precision fixer in shader
+// translator, the shaders should compile fine.
+TEST_P(GLSLTest_ES3, InterpolateOnArrayVaryingWithPrecisionMismatch)
+{
+    ANGLE_SKIP_TEST_IF(!EnsureGLExtensionEnabled("GL_OES_shader_multisample_interpolation"));
+    constexpr char kVS[] = R"(#version 300 es
+in highp vec2 position;
+out mediump vec4 v_var[3];
+void main() {
+v_var[0] = vec4(0.1, 0.1, 0.1, 1.0);
+v_var[1] = vec4(0.2, 0.2, 0.2, 1.0);
+v_var[2] = vec4(0.3, 0.3, 0.3, 1.0);
+gl_Position = vec4(position, 0, 1);
+})";
+
+    constexpr char kFS[] = R"(#version 300 es
+#extension GL_OES_shader_multisample_interpolation : require
+precision highp float;
+in highp vec4 v_var[3];
+out vec4 outColor;
+void main() {
+  outColor = interpolateAtCentroid(v_var[0])
+           + interpolateAtOffset(v_var[1], vec2(0.0, 0.0))
+           + interpolateAtSample(v_var[2], 0);
+})";
+    ANGLE_GL_PROGRAM(program, kVS, kFS);
+    ASSERT_GL_NO_ERROR();
+
+    glUseProgram(program);
+    drawQuad(program, "position", 0.5f, 1.0f, true);
+    EXPECT_PIXEL_COLOR_NEAR(0, 0, GLColor(153, 153, 153, 255), 1);
+    ASSERT_GL_NO_ERROR();
+}
 }  // anonymous namespace
 
 ANGLE_INSTANTIATE_TEST_ES2_AND_ES3_AND_ES31_AND_ES32(
@@ -26027,8 +28153,18 @@ ANGLE_INSTANTIATE_TEST_ES2_AND_ES3_AND_ES31_AND_ES32(
     ES3_OPENGL().enable(Feature::ForceInitShaderVariables),
     ES3_OPENGL().enable(Feature::ScalarizeVecAndMatConstructorArgs),
     ES3_OPENGL().enable(Feature::AvoidComplexExpressionsInStructConstructor),
+    ES3_OPENGL()
+        .enable(Feature::AvoidComplexExpressionsInStructConstructor)
+        .enable(Feature::ForceInitShaderVariables),
     ES3_OPENGLES().enable(Feature::ScalarizeVecAndMatConstructorArgs),
     ES3_OPENGLES().enable(Feature::AvoidComplexExpressionsInStructConstructor),
+    ES3_OPENGLES()
+        .enable(Feature::AvoidComplexExpressionsInStructConstructor)
+        .enable(Feature::ForceInitShaderVariables),
+    ES3_OPENGL().enable(Feature::RetainShaderDebugInfo),
+    ES3_OPENGLES().enable(Feature::RetainShaderDebugInfo),
+    ES3_D3D11().enable(Feature::RetainShaderDebugInfo),
+    ES3_METAL().enable(Feature::RetainShaderDebugInfo),
     ES3_VULKAN().enable(Feature::AvoidOpSelectWithMismatchingRelaxedPrecision),
     ES3_VULKAN().enable(Feature::ForceInitShaderVariables),
     ES3_VULKAN().disable(Feature::SupportsSPIRV14),
@@ -26045,9 +28181,20 @@ ANGLE_INSTANTIATE_TEST_ES3_AND(
     ES3_OPENGL().enable(Feature::ForceInitShaderVariables),
     ES3_OPENGL().enable(Feature::ScalarizeVecAndMatConstructorArgs),
     ES3_OPENGL().enable(Feature::AvoidComplexExpressionsInStructConstructor),
+    ES3_OPENGL()
+        .enable(Feature::AvoidComplexExpressionsInStructConstructor)
+        .enable(Feature::ForceInitShaderVariables),
     ES3_OPENGLES().enable(Feature::ScalarizeVecAndMatConstructorArgs),
     ES3_OPENGLES().enable(Feature::AvoidComplexExpressionsInStructConstructor),
+    ES3_OPENGLES()
+        .enable(Feature::AvoidComplexExpressionsInStructConstructor)
+        .enable(Feature::ForceInitShaderVariables),
+    ES3_OPENGL().enable(Feature::RetainShaderDebugInfo),
+    ES3_OPENGLES().enable(Feature::RetainShaderDebugInfo),
+    ES3_D3D11().enable(Feature::RetainShaderDebugInfo),
+    ES3_METAL().enable(Feature::RetainShaderDebugInfo),
     ES3_VULKAN().enable(Feature::AvoidOpSelectWithMismatchingRelaxedPrecision),
+    ES3_VULKAN().enable(Feature::VaryingsRequireMatchingPrecisionInSpirv),
     ES3_VULKAN().enable(Feature::ForceInitShaderVariables),
     ES3_VULKAN().disable(Feature::SupportsSPIRV14),
     ES3_VULKAN().enable(Feature::EmulatedPrerotation90),
@@ -26060,29 +28207,53 @@ ANGLE_INSTANTIATE_TEST_ES3_AND(
     ES3_OPENGL().enable(Feature::ForceInitShaderVariables),
     ES3_OPENGL().enable(Feature::ScalarizeVecAndMatConstructorArgs),
     ES3_OPENGLES().enable(Feature::ScalarizeVecAndMatConstructorArgs),
+    ES3_OPENGL().enable(Feature::RetainShaderDebugInfo),
+    ES3_OPENGLES().enable(Feature::RetainShaderDebugInfo),
+    ES3_D3D11().enable(Feature::RetainShaderDebugInfo),
+    ES3_METAL().enable(Feature::RetainShaderDebugInfo),
     ES3_VULKAN().enable(Feature::AvoidOpSelectWithMismatchingRelaxedPrecision),
     ES3_VULKAN().enable(Feature::ForceInitShaderVariables),
     ES3_VULKAN().disable(Feature::SupportsSPIRV14));
 
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(GLSLTestLoops);
-ANGLE_INSTANTIATE_TEST_ES3(GLSLTestLoops);
+ANGLE_INSTANTIATE_TEST_ES3_AND(GLSLTestLoops,
+                               ES3_OPENGL().enable(Feature::RetainShaderDebugInfo),
+                               ES3_OPENGLES().enable(Feature::RetainShaderDebugInfo),
+                               ES3_D3D11().enable(Feature::RetainShaderDebugInfo),
+                               ES3_METAL().enable(Feature::RetainShaderDebugInfo));
 
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(GLSLTestLoops_ES31);
-ANGLE_INSTANTIATE_TEST_ES31(GLSLTestLoops_ES31);
+ANGLE_INSTANTIATE_TEST_ES31_AND(GLSLTestLoops_ES31,
+                                ES31_OPENGL().enable(Feature::RetainShaderDebugInfo),
+                                ES31_OPENGLES().enable(Feature::RetainShaderDebugInfo));
 
-ANGLE_INSTANTIATE_TEST_ES2(WebGLGLSLTest);
+ANGLE_INSTANTIATE_TEST_ES2_AND(WebGLGLSLTest,
+                               ES2_OPENGL().enable(Feature::RetainShaderDebugInfo),
+                               ES2_OPENGLES().enable(Feature::RetainShaderDebugInfo),
+                               ES2_D3D11().enable(Feature::RetainShaderDebugInfo),
+                               ES2_METAL().enable(Feature::RetainShaderDebugInfo));
 
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(GLSLTest_ClampPointSize);
 ANGLE_INSTANTIATE_TEST_ES2_AND(GLSLTest_ClampPointSize,
                                ES2_OPENGL().enable(Feature::ClampPointSize),
-                               ES2_VULKAN().enable(Feature::ClampPointSize));
+                               ES2_VULKAN().enable(Feature::ClampPointSize),
+                               ES2_OPENGL().enable(Feature::RetainShaderDebugInfo),
+                               ES2_OPENGLES().enable(Feature::RetainShaderDebugInfo),
+                               ES2_D3D11().enable(Feature::RetainShaderDebugInfo),
+                               ES2_METAL().enable(Feature::RetainShaderDebugInfo));
 
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(WebGL2GLSLTest);
-ANGLE_INSTANTIATE_TEST_ES3(WebGL2GLSLTest);
+ANGLE_INSTANTIATE_TEST_ES3_AND(WebGL2GLSLTest,
+                               ES3_OPENGL().enable(Feature::RetainShaderDebugInfo),
+                               ES3_OPENGLES().enable(Feature::RetainShaderDebugInfo),
+                               ES3_D3D11().enable(Feature::RetainShaderDebugInfo),
+                               ES3_METAL().enable(Feature::RetainShaderDebugInfo));
 
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(GLSLTest_ES31);
 ANGLE_INSTANTIATE_TEST_ES31_AND(
     GLSLTest_ES31,
+    ES31_OPENGL().enable(Feature::RetainShaderDebugInfo),
+    ES31_OPENGLES().enable(Feature::RetainShaderDebugInfo),
     ES31_VULKAN().enable(Feature::ForceInitShaderVariables),
     ES31_VULKAN().enable(Feature::VaryingsRequireMatchingPrecisionInSpirv),
     ES31_VULKAN().disable(Feature::SupportsSPIRV14));
@@ -26095,7 +28266,11 @@ ANGLE_INSTANTIATE_TEST(
     ES3_OPENGLES().enable(Feature::ForceInitShaderVariables),
     ES3_METAL().enable(Feature::ForceInitShaderVariables),
     ES3_VULKAN().enable(Feature::ForceInitShaderVariables),
-    ES3_VULKAN().disable(Feature::SupportsSPIRV14).enable(Feature::ForceInitShaderVariables));
+    ES3_VULKAN().disable(Feature::SupportsSPIRV14).enable(Feature::ForceInitShaderVariables),
+    ES3_OPENGL().enable(Feature::ForceInitShaderVariables).enable(Feature::RetainShaderDebugInfo),
+    ES3_OPENGLES().enable(Feature::ForceInitShaderVariables).enable(Feature::RetainShaderDebugInfo),
+    ES3_D3D11().enable(Feature::ForceInitShaderVariables).enable(Feature::RetainShaderDebugInfo),
+    ES3_METAL().enable(Feature::ForceInitShaderVariables).enable(Feature::RetainShaderDebugInfo));
 
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(GLSLTest_ES31_InitShaderVariables);
 ANGLE_INSTANTIATE_TEST(
@@ -26110,12 +28285,11 @@ ANGLE_INSTANTIATE_TEST(GLSLTest_ES3_PackUnpackEmulation,
                        ES3_OPENGL().enable(Feature::EmitMaxGlsl400ForTesting),
                        ES3_OPENGLES(),
                        ES3_METAL(),
-                       ES3_VULKAN());
-
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(GLSLTest_ES3_Blend);
-ANGLE_INSTANTIATE_TEST_ES3_AND(GLSLTest_ES3_Blend,
-                               ES3_OPENGL().enable(Feature::ExpandFragmentOutputsToVec4),
-                               ES3_OPENGLES().enable(Feature::ExpandFragmentOutputsToVec4));
+                       ES3_VULKAN(),
+                       ES3_OPENGL().enable(Feature::RetainShaderDebugInfo),
+                       ES3_OPENGLES().enable(Feature::RetainShaderDebugInfo),
+                       ES3_D3D11().enable(Feature::RetainShaderDebugInfo),
+                       ES3_METAL().enable(Feature::RetainShaderDebugInfo));
 
 ANGLE_INSTANTIATE_TEST_ES2_AND(GLSLTestPassthrough,
                                ES2_OPENGLES().enable(Feature::ForcePassthroughShaders));

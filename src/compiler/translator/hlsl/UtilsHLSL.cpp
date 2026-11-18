@@ -817,10 +817,17 @@ TString DecorateField(const ImmutableString &string, const TStructure &structure
 {
     if (structure.symbolType() != SymbolType::BuiltIn)
     {
-        return Decorate(string);
+        return DecorateUserStructField(string);
     }
 
     return TString(string.data());
+}
+
+TString DecorateUserStructField(const ImmutableString &string)
+{
+    // Matches interface variables, because of nameless blocks where the field can be accessed
+    // directly as if it was a variable.
+    return "_u" + TString(string.data());
 }
 
 TString DecoratePrivate(const ImmutableString &privateText)
@@ -830,17 +837,40 @@ TString DecoratePrivate(const ImmutableString &privateText)
 
 TString Decorate(const ImmutableString &string)
 {
+    // Only call this function to decorate shader-private variables.  For interface variables
+    // (uniforms, etc), call DecorateInterfaceVariable which gets a different prefix to avoid name
+    // collisions.
+    ASSERT(!gl::IsBuiltInName(string.data()));
+    return "_t" + TString(string.data());
+}
+
+TString DecorateInterfaceVariable(const ImmutableString &string)
+{
     if (!gl::IsBuiltInName(string.data()))
     {
-        return "_" + TString(string.data());
+        return "_u" + TString(string.data());
     }
 
     return TString(string.data());
 }
 
-TString DecorateVariableIfNeeded(const TVariable &variable)
+TString DecorateStruct(const ImmutableString &string)
+{
+    return "_s" + TString(string.data());
+}
+
+TString DecorateVariableIfNeeded(const TVariable &variable, DebugNames debugNames)
 {
     const TQualifier qualifier = variable.getType().getQualifier();
+
+    // If this is a private variable and we're not interested in retaining debug info, use a temp
+    // name.
+    if (debugNames == DebugNames::Drop && variable.symbolType() == SymbolType::UserDefined &&
+        IsPrivate(qualifier))
+    {
+        return TString(variable.getTempName().data());
+    }
+
     if (variable.symbolType() == SymbolType::AngleInternal ||
         variable.symbolType() == SymbolType::BuiltIn || variable.symbolType() == SymbolType::Empty)
     {
@@ -848,7 +878,9 @@ TString DecorateVariableIfNeeded(const TVariable &variable)
         const ImmutableString &name = variable.name();
         // The name should not have a prefix reserved for user-defined variables or functions.
         ASSERT(!name.beginsWith("f_"));
-        ASSERT(!name.beginsWith("_"));
+        ASSERT(!name.beginsWith("_u"));
+        ASSERT(!name.beginsWith("_t"));
+        ASSERT(!name.beginsWith("_s"));
         return TString(name.data());
     }
     // For user defined variables, combine variable name with unique id
@@ -858,11 +890,11 @@ TString DecorateVariableIfNeeded(const TVariable &variable)
               qualifier == EvqParamIn || qualifier == EvqParamOut || qualifier == EvqParamInOut ||
               qualifier == EvqParamConst))
     {
-        return Decorate(variable.name()) + str(variable.uniqueId().get());
+        return Decorate(variable.name()) + '_' + str(variable.uniqueId().get());
     }
     else
     {
-        return Decorate(variable.name());
+        return DecorateInterfaceVariable(variable.name());
     }
 }
 
@@ -980,7 +1012,7 @@ TString StructNameString(const TStructure &structure)
     // translation so that we can link between shader stages.
     if (structure.atGlobalScope())
     {
-        return Decorate(structure.name());
+        return DecorateStruct(structure.name());
     }
 
     return "ss" + str(structure.uniqueId().get()) + "_" + TString(structure.name().data());

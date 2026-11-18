@@ -155,6 +155,8 @@ void SetOptions(TCompiler *compiler, const ShCompileOptions &options, ffi::Compi
     opt->retain_inactive_fragment_outputs            = options.retainInactiveFragmentOutputs;
     opt->scalarize_vec_and_mat_constructor_args      = options.scalarizeVecAndMatConstructorArgs;
     opt->clamp_indirect_indices                      = options.clampIndirectArrayBounds;
+    opt->expand_fragment_outputs_to_vec4             = options.expandFragmentOutputsToVec4;
+    opt->add_vulkan_xfb_emulation_support_code       = options.addVulkanXfbEmulationSupportCode;
 
     opt->rewrite_pixel_local_storage = compiler->hasPixelLocalStorageUniforms();
     opt->pls_options.implementation  = static_cast<ffi::PixelLocalStorageImpl>(options.pls.type);
@@ -250,6 +252,7 @@ Output GenerateAST(IR ir, TCompiler *compiler, const ShCompileOptions &options)
 
     Output out;
     out.root          = output.ast;
+    out.outputSource  = std::string(output.output_source);
     out.inputs        = ConvertShaderVariables(output.inputs);
     out.outputs       = ConvertShaderVariables(output.outputs);
     out.uniforms      = ConvertShaderVariables(output.uniforms);

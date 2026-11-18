@@ -7,11 +7,12 @@
 // DrawBaseVertexBaseInstanceTest: Tests of GL_ANGLE_base_vertex_base_instance
 // DrawBaseInstanceTest: Tests of GL_EXT_base_instance
 
+#include <array>
+#include <numeric>
+
 #include "gpu_info_util/SystemInfo.h"
 #include "test_utils/ANGLETest.h"
 #include "test_utils/gl_raii.h"
-
-#include <numeric>
 
 using namespace angle;
 
@@ -1370,8 +1371,9 @@ void main()
     }
 };
 
-// gl_BaseVertex and gl_BaseInstance are translated to angle_BaseVertex and angle_BaseInstance
-// internally.  Check that a user-defined angle_BaseVertex or angle_BaseInstance is permitted
+// gl_BaseVertex and gl_BaseInstance are translated to AngleInternal_BaseVertex and
+// AngleInternal_BaseInstance internally.  Check that a user-defined AngleInternal_BaseVertex or
+// AngleInternal_BaseInstance is permitted
 TEST_P(DrawBaseVertexBaseInstanceTest_ES3, AllowsUserDefinedANGLEDrawID)
 {
     ANGLE_SKIP_TEST_IF(!EnsureGLExtensionEnabled("GL_ANGLE_base_vertex_base_instance"));
@@ -1381,16 +1383,16 @@ TEST_P(DrawBaseVertexBaseInstanceTest_ES3, AllowsUserDefinedANGLEDrawID)
     constexpr char kVS[] = R"(#version 300 es
 #extension GL_ANGLE_base_vertex_base_instance_shader_builtin : require
 in vec2 position;
-uniform int angle_BaseVertex;
-uniform int angle_BaseInstance;
+uniform int AngleInternal_BaseVertex;
+uniform int AngleInternal_BaseInstance;
 out vec4 verified;
 
 void main()
 {
-    // Expect gl_BaseVertex and gl_BaseInstance to be untouched when angle_BaseVertex and
-    // angle_BaseInstance are not.
+    // Expect gl_BaseVertex and gl_BaseInstance to be untouched when AngleInternal_BaseVertex and
+    // AngleInternal_BaseInstance are not.
     verified = vec4(gl_BaseVertex == 2, gl_BaseInstance == 0,
-                    angle_BaseVertex == 3, angle_BaseInstance == 5);
+                    AngleInternal_BaseVertex == 3, AngleInternal_BaseInstance == 5);
     gl_Position = vec4(position, 0, 1);
 })";
 
@@ -1406,8 +1408,8 @@ void main()
 
     ANGLE_GL_PROGRAM(program, kVS, kFS);
     glUseProgram(program);
-    glUniform1i(glGetUniformLocation(program, "angle_BaseVertex"), 3);
-    glUniform1i(glGetUniformLocation(program, "angle_BaseInstance"), 5);
+    glUniform1i(glGetUniformLocation(program, "AngleInternal_BaseVertex"), 3);
+    glUniform1i(glGetUniformLocation(program, "AngleInternal_BaseInstance"), 5);
 
     constexpr std::array<GLfloat, 5 * 2> kVertexData = {
         // Vertex 0, unused
@@ -1745,10 +1747,10 @@ void main()
 
     // Per-instance attribute: 8 distinct integer values, divisor = 3.
     // Each value is a unique identifier for its buffer index.
-    const GLint instValues[] = {0, 1, 2, 3, 4, 5, 6, 7};
+    const std::array<GLint, 8> instValues = {0, 1, 2, 3, 4, 5, 6, 7};
     GLBuffer instBuffer;
     glBindBuffer(GL_ARRAY_BUFFER, instBuffer);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(instValues), instValues, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(instValues), instValues.data(), GL_STATIC_DRAW);
     glEnableVertexAttribArray(instLoc);
     glVertexAttribIPointer(instLoc, 1, GL_INT, 0, nullptr);
     glVertexAttribDivisor(instLoc, 3);
@@ -1777,8 +1779,7 @@ void main()
                                                subcase.baseInstance);
         ASSERT_GL_NO_ERROR();
         GLint lastInstanceAttrIndex = subcase.baseInstance + (subcase.instanceCount - 1) / 3;
-        // SAFETY: Values chosen in the test cases, max value within 0..7.
-        GLint lastInstValue  = ANGLE_UNSAFE_BUFFERS(instValues[lastInstanceAttrIndex]);
+        GLint lastInstValue         = instValues[lastInstanceAttrIndex];
         GLint lastInstanceID = subcase.instanceCount - 1;
         // R == instValue (per-instance attribute), G == gl_InstanceID, B == gl_BaseInstance.
         GLColor32I expected(lastInstValue, lastInstanceID, static_cast<GLint>(subcase.baseInstance),

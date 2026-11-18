@@ -401,10 +401,15 @@ fn append_decorations(
 }
 
 fn field_str(field: &Field, index: usize) -> String {
+    let built_in = field
+        .built_in
+        .map(|built_in| format!(" <{}>", built_in_str(built_in)))
+        .unwrap_or("".to_string());
     let mut result = format!(
-        "{}: {}",
+        "{}: {}{}",
         name_str(&field.name, TEMP_STRUCT_FIELD_PREFIX, USER_VARIABLE_PREFIX, index as u32),
-        type_id_str(field.type_id)
+        type_id_str(field.type_id),
+        built_in,
     );
     append_decorations(&mut result, field.precision, field.precise, &field.decorations);
     result
@@ -713,6 +718,7 @@ fn built_in_opcode_str(op: BuiltInOpCode) -> &'static str {
         BuiltInOpCode::InterpolateAtCenter => "InterpolateAtCenter",
         BuiltInOpCode::Saturate => "Saturate",
         BuiltInOpCode::LoopForwardProgress => "LoopForwardProgress",
+        BuiltInOpCode::ConvertFromUniformLayout => "ConvertFromUniformLayout",
     }
 }
 

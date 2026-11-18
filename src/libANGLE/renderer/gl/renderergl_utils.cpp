@@ -67,10 +67,9 @@ bool IsMesa(const FunctionsGL *functions, std::array<int, 3> *version)
         return false;
     }
 
-    int *data = version->data();
-    ANGLE_UNSAFE_TODO(data[0] = data[1] = data[2] = 0);
-    ANGLE_UNSAFE_TODO(
-        std::sscanf(nativeVersionString.c_str() + pos, "Mesa %d.%d.%d", data, data + 1, data + 2));
+    version->fill(0);
+    ANGLE_UNSAFE_TODO(std::sscanf(nativeVersionString.c_str() + pos, "Mesa %d.%d.%d",
+                                  &(*version)[0], &(*version)[1], &(*version)[2]));
 
     return true;
 }
@@ -164,6 +163,12 @@ bool IsAdreno5xx(const FunctionsGL *functions)
     return number != 0 && number >= 500 && number < 600;
 }
 
+bool IsAdreno6xxOrOlder(const FunctionsGL *functions)
+{
+    int number = getAdrenoNumber(functions);
+    return number != 0 && number < 700;
+}
+
 bool IsMaliT8xxOrOlder(const FunctionsGL *functions)
 {
     int number = getMaliTNumber(functions);
@@ -174,6 +179,12 @@ bool IsMaliG31OrOlder(const FunctionsGL *functions)
 {
     int number = getMaliGNumber(functions);
     return number != 0 && number <= 31;
+}
+
+bool IsMaliG52OrG72OrOlder(const FunctionsGL *functions)
+{
+    int number = getMaliGNumber(functions);
+    return number == 31 || number == 51 || number == 71 || number == 52 || number == 72;
 }
 
 bool IsMaliG72OrG76OrG51(const FunctionsGL *functions)
@@ -444,6 +455,26 @@ static bool MeetsRequirements(const FunctionsGL *functions,
     }
 }
 
+namespace
+{
+// Restores |previousFramebuffer| and deletes |temporaryFramebuffer|, which a renderability check
+// creates while caps are generated, before StateManagerGL and its placeholder framebuffer exist.
+// With the ensurePreviousFramebufferNotDeleted workaround, |temporaryFramebuffer| is the driver's
+// previously bound framebuffer after the restore, so it is intentionally not deleted; it is
+// reclaimed with the native context.
+void RestoreFramebufferAndDeleteTemporary(const FunctionsGL *functions,
+                                          const angle::FeaturesGL &features,
+                                          GLuint previousFramebuffer,
+                                          GLuint temporaryFramebuffer)
+{
+    functions->bindFramebuffer(GL_FRAMEBUFFER, previousFramebuffer);
+    if (!features.ensurePreviousFramebufferNotDeleted.enabled)
+    {
+        functions->deleteFramebuffers(1, &temporaryFramebuffer);
+    }
+}
+}  // namespace
+
 static bool CheckSizedInternalFormatTextureRenderability(const FunctionsGL *functions,
                                                          const angle::FeaturesGL &features,
                                                          GLenum internalFormat)
@@ -482,9 +513,9 @@ static bool CheckSizedInternalFormatTextureRenderability(const FunctionsGL *func
 
     bool supported = functions->checkFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
 
-    // Delete the framebuffer and restore the previous binding
-    functions->deleteFramebuffers(1, &fbo);
-    functions->bindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(oldFramebufferBinding));
+    // Restore the previous binding and delete the framebuffer
+    RestoreFramebufferAndDeleteTemporary(functions, features,
+                                         static_cast<GLuint>(oldFramebufferBinding), fbo);
 
     // Delete the texture and restore the previous binding
     functions->deleteTextures(1, &texture);
@@ -534,9 +565,9 @@ static bool CheckInternalFormatRenderbufferRenderability(const FunctionsGL *func
 
     bool supported = functions->checkFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
 
-    // Delete the framebuffer and restore the previous binding
-    functions->deleteFramebuffers(1, &fbo);
-    functions->bindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(oldFramebufferBinding));
+    // Restore the previous binding and delete the framebuffer
+    RestoreFramebufferAndDeleteTemporary(functions, features,
+                                         static_cast<GLuint>(oldFramebufferBinding), fbo);
 
     // Delete the renderbuffer and restore the previous binding
     functions->deleteRenderbuffers(1, &renderbuffer);
@@ -644,15 +675,15 @@ static gl::TextureCaps GenerateTextureFormatCaps(const FunctionsGL *functions,
             functions->getInternalformativ(GL_RENDERBUFFER, queryInternalFormat, GL_SAMPLES,
                                            static_cast<GLsizei>(samples.size()), &samples[0]);
 
-            for (size_t sampleIndex = 0; sampleIndex < samples.size(); sampleIndex++)
+            for (int sample : samples)
             {
-                if (features.limitMaxMSAASamplesTo4.enabled && samples[sampleIndex] > 4)
+                if (features.limitMaxMSAASamplesTo4.enabled && sample > 4)
                 {
                     continue;
                 }
 
                 // Supporting MSAA=1 is not required on OpenGL for non-conformant drivers.
-                if (features.disableMSAASampleCount1.enabled && samples[sampleIndex] == 1)
+                if (features.disableMSAASampleCount1.enabled && sample == 1)
                 {
                     continue;
                 }
@@ -666,25 +697,25 @@ static gl::TextureCaps GenerateTextureFormatCaps(const FunctionsGL *functions,
                 {
                     ASSERT(functions->getError() == GL_NO_ERROR);
                     functions->getInternalformatSampleivNV(GL_RENDERBUFFER, queryInternalFormat,
-                                                           samples[sampleIndex], GL_CONFORMANT_NV,
-                                                           1, &conformant);
+                                                           sample, GL_CONFORMANT_NV, 1,
+                                                           &conformant);
                     // getInternalFormatSampleivNV does not work for all formats on NVIDIA Shield TV
                     // drivers. Assume that formats with large sample counts are non-conformant in
                     // case the query generates an error.
                     if (functions->getError() != GL_NO_ERROR)
                     {
-                        conformant = (samples[sampleIndex] <= 8) ? GL_TRUE : GL_FALSE;
+                        conformant = (sample <= 8) ? GL_TRUE : GL_FALSE;
                     }
                 }
                 if (conformant == GL_TRUE)
                 {
-                    if (gl::isPow2(samples[sampleIndex]))
+                    if (gl::isPow2(sample))
                     {
-                        textureCaps.sampleCounts.insert(samples[sampleIndex]);
+                        textureCaps.sampleCounts.insert(sample);
                     }
                     else
                     {
-                        WARN() << "Skipping unexpected sample count " << samples[sampleIndex]
+                        WARN() << "Skipping unexpected sample count " << sample
                                << " for internal format " << gl::FmtHex(queryInternalFormat) << ".";
                     }
                 }
@@ -723,9 +754,9 @@ static GLint QuerySingleIndexGLInt(const FunctionsGL *functions, GLenum name, GL
 
 static GLint QueryGLIntRange(const FunctionsGL *functions, GLenum name, size_t index)
 {
-    GLint result[2] = {};
-    functions->getIntegerv(name, result);
-    return ANGLE_UNSAFE_TODO(result[index]);
+    std::array<GLint, 2> result = {};
+    functions->getIntegerv(name, result.data());
+    return result[index];
 }
 
 static GLint64 QuerySingleGLInt64(const FunctionsGL *functions, GLenum name)
@@ -1706,85 +1737,89 @@ void GenerateCaps(const FunctionsGL *functions,
                                         functions->hasGLExtension("GL_ARB_stencil_texturing") ||
                                         functions->isAtLeastGLES(gl::Version(3, 1));
 
-    if (features.supportsShaderFramebufferFetchEXT.enabled && extensions->drawBuffersIndexedAny())
+    if (!features.disablePixelLocalStorage.enabled)
     {
-        // We can support PLS natively, probably in tiled memory.
-        extensions->shaderPixelLocalStorageANGLE         = true;
-        extensions->shaderPixelLocalStorageCoherentANGLE = true;
-        plsOptions->type             = ShPixelLocalStorageType::FramebufferFetch;
-        plsOptions->fragmentSyncType = ShFragmentSynchronizationType::Automatic;
-        plsOptions->supportsNoncoherent =
-            features.supportsShaderFramebufferFetchNonCoherentEXT.enabled;
-    }
-    else
-    {
-        bool hasFragmentShaderImageLoadStore = false;
-        if (functions->isAtLeastGL(gl::Version(4, 2)) ||
-            functions->hasGLExtension("GL_ARB_shader_image_load_store"))
+        if (features.supportsShaderFramebufferFetchEXT.enabled &&
+            extensions->drawBuffersIndexedAny())
         {
-            // [ANGLE_shader_pixel_local_storage] "New Implementation Dependent State":
-            // MAX_PIXEL_LOCAL_STORAGE_PLANES_ANGLE must be at least 4.
-            //
-            // MAX_FRAGMENT_IMAGE_UNIFORMS is at least 8 on Desktop Core and ARB.
-            hasFragmentShaderImageLoadStore = true;
-        }
-        else if (functions->isAtLeastGLES(gl::Version(3, 1)))
-        {
-            // [ANGLE_shader_pixel_local_storage] "New Implementation Dependent State":
-            // MAX_PIXEL_LOCAL_STORAGE_PLANES_ANGLE must be at least 4.
-            //
-            // ES 3.1, Table 20.44: MAX_FRAGMENT_IMAGE_UNIFORMS can be 0.
-            hasFragmentShaderImageLoadStore =
-                caps->maxShaderImageUniforms[gl::ShaderType::Fragment] >= 4;
-        }
-        if (hasFragmentShaderImageLoadStore &&
-            (features.supportsFragmentShaderInterlockNV.enabled ||
-             features.supportsFragmentShaderOrderingINTEL.enabled ||
-             features.supportsFragmentShaderInterlockARB.enabled))
-        {
-            // If shader image load/store can be coherent, prefer it over
-            // EXT_shader_framebuffer_fetch_non_coherent.
+            // We can support PLS natively, probably in tiled memory.
             extensions->shaderPixelLocalStorageANGLE         = true;
             extensions->shaderPixelLocalStorageCoherentANGLE = true;
-            plsOptions->type = ShPixelLocalStorageType::ImageLoadStore;
-            // Prefer vendor-specific extensions first. The PixelLocalStorageTest.Coherency test
-            // doesn't always pass on Intel when we use the ARB extension.
-            if (features.supportsFragmentShaderInterlockNV.enabled)
-            {
-                plsOptions->fragmentSyncType =
-                    ShFragmentSynchronizationType::FragmentShaderInterlock_NV_GL;
-            }
-            else if (features.supportsFragmentShaderOrderingINTEL.enabled)
-            {
-                plsOptions->fragmentSyncType =
-                    ShFragmentSynchronizationType::FragmentShaderOrdering_INTEL_GL;
-            }
-            else
-            {
-                ASSERT(features.supportsFragmentShaderInterlockARB.enabled);
-                plsOptions->fragmentSyncType =
-                    ShFragmentSynchronizationType::FragmentShaderInterlock_ARB_GL;
-            }
-            // OpenGL ES only allows read/write access to "r32*" images.
-            plsOptions->supportsNativeRGBA8ImageFormats =
-                functions->standard != StandardGL::STANDARD_GL_ES;
+            plsOptions->type             = ShPixelLocalStorageType::FramebufferFetch;
+            plsOptions->fragmentSyncType = ShFragmentSynchronizationType::Automatic;
+            plsOptions->supportsNoncoherent =
+                features.supportsShaderFramebufferFetchNonCoherentEXT.enabled;
         }
-        else if (features.supportsShaderFramebufferFetchNonCoherentEXT.enabled)
+        else
         {
-            ASSERT(plsOptions->fragmentSyncType == ShFragmentSynchronizationType::NotSupported);
-            extensions->shaderPixelLocalStorageANGLE = true;
-            plsOptions->type                         = ShPixelLocalStorageType::FramebufferFetch;
+            bool hasFragmentShaderImageLoadStore = false;
+            if (functions->isAtLeastGL(gl::Version(4, 2)) ||
+                functions->hasGLExtension("GL_ARB_shader_image_load_store"))
+            {
+                // [ANGLE_shader_pixel_local_storage] "New Implementation Dependent State":
+                // MAX_PIXEL_LOCAL_STORAGE_PLANES_ANGLE must be at least 4.
+                //
+                // MAX_FRAGMENT_IMAGE_UNIFORMS is at least 8 on Desktop Core and ARB.
+                hasFragmentShaderImageLoadStore = true;
+            }
+            else if (functions->isAtLeastGLES(gl::Version(3, 1)))
+            {
+                // [ANGLE_shader_pixel_local_storage] "New Implementation Dependent State":
+                // MAX_PIXEL_LOCAL_STORAGE_PLANES_ANGLE must be at least 4.
+                //
+                // ES 3.1, Table 20.44: MAX_FRAGMENT_IMAGE_UNIFORMS can be 0.
+                hasFragmentShaderImageLoadStore =
+                    caps->maxShaderImageUniforms[gl::ShaderType::Fragment] >= 4;
+            }
+            if (hasFragmentShaderImageLoadStore &&
+                (features.supportsFragmentShaderInterlockNV.enabled ||
+                 features.supportsFragmentShaderOrderingINTEL.enabled ||
+                 features.supportsFragmentShaderInterlockARB.enabled))
+            {
+                // If shader image load/store can be coherent, prefer it over
+                // EXT_shader_framebuffer_fetch_non_coherent.
+                extensions->shaderPixelLocalStorageANGLE         = true;
+                extensions->shaderPixelLocalStorageCoherentANGLE = true;
+                plsOptions->type = ShPixelLocalStorageType::ImageLoadStore;
+                // Prefer vendor-specific extensions first. The PixelLocalStorageTest.Coherency test
+                // doesn't always pass on Intel when we use the ARB extension.
+                if (features.supportsFragmentShaderInterlockNV.enabled)
+                {
+                    plsOptions->fragmentSyncType =
+                        ShFragmentSynchronizationType::FragmentShaderInterlock_NV_GL;
+                }
+                else if (features.supportsFragmentShaderOrderingINTEL.enabled)
+                {
+                    plsOptions->fragmentSyncType =
+                        ShFragmentSynchronizationType::FragmentShaderOrdering_INTEL_GL;
+                }
+                else
+                {
+                    ASSERT(features.supportsFragmentShaderInterlockARB.enabled);
+                    plsOptions->fragmentSyncType =
+                        ShFragmentSynchronizationType::FragmentShaderInterlock_ARB_GL;
+                }
+                // OpenGL ES only allows read/write access to "r32*" images.
+                plsOptions->supportsNativeRGBA8ImageFormats =
+                    functions->standard != StandardGL::STANDARD_GL_ES;
+            }
+            else if (features.supportsShaderFramebufferFetchNonCoherentEXT.enabled)
+            {
+                ASSERT(plsOptions->fragmentSyncType == ShFragmentSynchronizationType::NotSupported);
+                extensions->shaderPixelLocalStorageANGLE = true;
+                plsOptions->type = ShPixelLocalStorageType::FramebufferFetch;
+            }
+            else if (hasFragmentShaderImageLoadStore)
+            {
+                ASSERT(plsOptions->fragmentSyncType == ShFragmentSynchronizationType::NotSupported);
+                extensions->shaderPixelLocalStorageANGLE = true;
+                plsOptions->type                         = ShPixelLocalStorageType::ImageLoadStore;
+                // OpenGL ES only allows read/write access to "r32*" images.
+                plsOptions->supportsNativeRGBA8ImageFormats =
+                    functions->standard != StandardGL::STANDARD_GL_ES;
+            }
+            plsOptions->supportsNoncoherent = true;
         }
-        else if (hasFragmentShaderImageLoadStore)
-        {
-            ASSERT(plsOptions->fragmentSyncType == ShFragmentSynchronizationType::NotSupported);
-            extensions->shaderPixelLocalStorageANGLE = true;
-            plsOptions->type                         = ShPixelLocalStorageType::ImageLoadStore;
-            // OpenGL ES only allows read/write access to "r32*" images.
-            plsOptions->supportsNativeRGBA8ImageFormats =
-                functions->standard != StandardGL::STANDARD_GL_ES;
-        }
-        plsOptions->supportsNoncoherent = true;
     }
 
     // EXT_shader_framebuffer_fetch.
@@ -2170,6 +2205,17 @@ void GenerateCaps(const FunctionsGL *functions,
     {
         limitations->maxBufferBytes = 1 << 30;
     }
+
+    if (features.roundUp3dTextureSizeToPOTForLimit.enabled)
+    {
+        limitations->roundUp3DTextureSizeToPOTForLimit = true;
+    }
+
+    if (features.limitMaxTextureImageUnitsTo13.enabled)
+    {
+        caps->maxShaderTextureImageUnits[gl::ShaderType::Fragment] =
+            std::min(caps->maxShaderTextureImageUnits[gl::ShaderType::Fragment], 13);
+    }
 }
 
 bool GetSystemInfoVendorIDAndDeviceID(const FunctionsGL *functions,
@@ -2249,6 +2295,7 @@ void InitializeFeatures(const FunctionsGL *functions, angle::FeaturesGL *feature
     bool hasAMD          = systemInfo.hasAMDGPU();
     bool isMali          = IsARM(vendor);
     bool isHuaweiMaleoon = IsHuaweiMaleoon(functions);
+    bool isPowerVR       = IsPowerVR(vendor);
 
     std::array<int, 3> mesaVersion = {0, 0, 0};
     bool isMesa                    = IsMesa(functions, &mesaVersion);
@@ -2316,8 +2363,7 @@ void InitializeFeatures(const FunctionsGL *functions, angle::FeaturesGL *feature
     // PBO's cmem mapping. Route through readPixelsRowByRow so Mali only ever
     // sees PACK_ROW_LENGTH=0. Also apply to Imagination GPUs which crash on
     // the new test. crbug.com/529867799
-    ANGLE_FEATURE_CONDITION(features, packLargeRowLengthSeparatelyPackBuffer,
-                            isMali || IsPowerVR(vendor));
+    ANGLE_FEATURE_CONDITION(features, packLargeRowLengthSeparatelyPackBuffer, isMali || isPowerVR);
 
     std::array<int, 2> powerVRVersion = {0, 0};
     bool isPowerVRDriver =
@@ -2325,10 +2371,6 @@ void InitializeFeatures(const FunctionsGL *functions, angle::FeaturesGL *feature
                                 GetVersionString(functions), &powerVRVersion);
     ANGLE_FEATURE_CONDITION(features, splitLevel0PboFullSubImage2D,
                             isPowerVRDriver && powerVRVersion < (std::array<int, 2>{26, 2}));
-
-    // TODO(crbug.com/548127218): conditionalize this workaround on PowerVR
-    // driver version.
-    ANGLE_FEATURE_CONDITION(features, uploadOversizedMipLevelsViaUnpackBuffer, isPowerVRDriver);
 
     ANGLE_FEATURE_CONDITION(features, initializeCurrentVertexAttributes, isNvidia);
 
@@ -2384,6 +2426,8 @@ void InitializeFeatures(const FunctionsGL *functions, angle::FeaturesGL *feature
     ANGLE_FEATURE_CONDITION(features, disableMSAASampleCount1, isHuaweiMaleoon);
     ANGLE_FEATURE_CONDITION(features, limitMax3dArrayTextureSizeTo1024,
                             isIntelLinuxLessThanKernelVersion5);
+    ANGLE_FEATURE_CONDITION(features, roundUp3dTextureSizeToPOTForLimit,
+                            isPowerVRDriver && powerVRVersion < (std::array<int, 2>{26, 2}));
 
     ANGLE_FEATURE_CONDITION(features, allowClearForRobustResourceInit, IsApple());
 
@@ -2403,15 +2447,19 @@ void InitializeFeatures(const FunctionsGL *functions, angle::FeaturesGL *feature
     ANGLE_FEATURE_CONDITION(features, resetTexImage2DBaseLevel,
                             IsApple() && isIntel && GetMacOSVersion() >= OSVersion(10, 12, 4));
 
-    ANGLE_FEATURE_CONDITION(features, resetBaseLevelForASTCImage, IsPowerVR(vendor));
-    ANGLE_FEATURE_CONDITION(features, recreateImmutableTextureOnBaseLevelIncrease,
-                            IsPowerVR(vendor));
-    ANGLE_FEATURE_CONDITION(features, resetTexStorage2DBaseLevel, IsPowerVR(vendor));
+    ANGLE_FEATURE_CONDITION(features, virtualizeBaseLevelAndMipchain, isPowerVR);
+
+    // Related to virtualizeBaseLevelAndMipchain workaround
+    ANGLE_FEATURE_CONDITION(features, copyImageSubData3DFailsOnTailMipLevels, isPowerVR);
+
+    // Related to virtualizeBaseLevelAndMipchain workaround
+    ANGLE_FEATURE_CONDITION(features, readback3DDepthStencilPbosDuringUpload, isPowerVR);
+
+    // Related to virtualizeBaseLevelAndMipchain workaround
+    ANGLE_FEATURE_CONDITION(features, useScratchTextureForConvertingCopySubImage, isPowerVR);
+
     ANGLE_FEATURE_CONDITION(features, recreateTextureOnTexImage3dDepthIncrease,
                             isQualcomm && IsAndroid());
-
-    ANGLE_FEATURE_CONDITION(features, useTempForNonZeroBaseLevelGenMipmapUsingCopyImageSubData,
-                            IsPowerVR(vendor));
 
     ANGLE_FEATURE_CONDITION(features, adjustSrcDstRegionForBlitFramebuffer,
                             IsLinux() || (IsAndroid() && (isNvidia || isMali)) ||
@@ -2564,7 +2612,7 @@ void InitializeFeatures(const FunctionsGL *functions, angle::FeaturesGL *feature
     // Several drivers are buggy with context switching. It needs to unbind fbo before context
     // switching to workadround the driver issues.
     ANGLE_FEATURE_CONDITION(features, unbindFBOBeforeSwitchingContext,
-                            IsPowerVR(vendor) || (IsWindows() && isNvidia));
+                            isPowerVR || (IsWindows() && isNvidia));
 
     // http://crbug.com/1181068 and http://crbug.com/783979
     ANGLE_FEATURE_CONDITION(features, flushOnFramebufferChange,
@@ -2629,6 +2677,10 @@ void InitializeFeatures(const FunctionsGL *functions, angle::FeaturesGL *feature
     // https://anglebug.com/42266740
     ANGLE_FEATURE_CONDITION(features, explicitFragmentLocations, isQualcomm);
 
+    // https://crbug.com/576783756
+    ANGLE_FEATURE_CONDITION(features, disablePixelLocalStorage,
+                            IsMaliT8xxOrOlder(functions) || IsMaliG52OrG72OrOlder(functions));
+
     // Desktop GLSL-only fragment synchronization extensions. These are injected internally by the
     // compiler to make pixel local storage coherent.
     // https://anglebug.com/40096838
@@ -2663,6 +2715,13 @@ void InitializeFeatures(const FunctionsGL *functions, angle::FeaturesGL *feature
 
     // http://crbug.com/546252753
     ANGLE_FEATURE_CONDITION(features, finishBeforeBlitFramebufferMultiAttachment, isMali);
+
+    // http://crbug.com/550489336
+    ANGLE_FEATURE_CONDITION(features, doubleClearForRobustInit,
+                            isMali || IsAdreno6xxOrOlder(functions));
+
+    // http://crbug.com/558870371
+    ANGLE_FEATURE_CONDITION(features, deferGlDeleteBuffers, isMali);
 
     // https://crbug.com/40264674
     ANGLE_FEATURE_CONDITION(features, disableClipControl, IsMaliG72OrG76OrG51(functions));
@@ -2722,9 +2781,6 @@ void InitializeFeatures(const FunctionsGL *functions, angle::FeaturesGL *feature
     // mipmap generation avoids the problem.
     ANGLE_FEATURE_CONDITION(features, recreateMipmapLevelsBeforeGenerate, isMesa || isMali);
 
-    // http://crbug.com/498828605
-    ANGLE_FEATURE_CONDITION(features, expandFragmentOutputsToVec4, isAMD && isMesa);
-
     // https://github.com/flutter/flutter/issues/47164
     // https://github.com/flutter/flutter/issues/47804
     // Some devices expose the QCOM tiled memory extension string but don't actually provide the
@@ -2753,40 +2809,72 @@ void InitializeFeatures(const FunctionsGL *functions, angle::FeaturesGL *feature
 
     // IMG GL drivers crash in glClearTexImage on various format/type combinations such as packed
     // types, LUMA and depth stencil.
-    ANGLE_FEATURE_CONDITION(features, disableClearTexImageForRobustInit, IsPowerVR(vendor));
+    ANGLE_FEATURE_CONDITION(features, disableClearTexImageForRobustInit, isPowerVR);
 
     // Disable EXT_clear_texture entirely on IMG as a speculative fix for driver crashes.
-    ANGLE_FEATURE_CONDITION(features, disableClearTexture, IsPowerVR(vendor));
+    ANGLE_FEATURE_CONDITION(features, disableClearTexture, isPowerVR);
 
-    // Forces a flush before generating a mipmap, which avoids a bad state in the IMG driver if
-    // the texture's base level is still bound to an active FBO.
-    ANGLE_FEATURE_CONDITION(features, flushBeforeGenerateMipmap, IsPowerVR(vendor));
+    // Forces a flush before generating a mipmap, which avoids bad states in the IMG driver.
+    ANGLE_FEATURE_CONDITION(features, flushBeforeGenerateMipmap, isPowerVR);
 
     // IMG GL drivers crash while compiling shaders with more than the limit of uniform blocks.
-    ANGLE_FEATURE_CONDITION(features, validateMaxPerStageUniformBlocksAtCompileTime,
-                            IsPowerVR(vendor));
+    ANGLE_FEATURE_CONDITION(features, validateMaxPerStageUniformBlocksAtCompileTime, isPowerVR);
 
-    // Some drivers have compilation issues when shaders declare too many output varyings.
-    // crbug.com/529991907
-    ANGLE_FEATURE_CONDITION(features, limitOutputVaryingsTo256AtCompileTime, IsPowerVR(vendor));
+    // Some drivers have compilation issues when shaders declare too many varyings.
+    // crbug.com/529991907, crbug.com/569367111
+    ANGLE_FEATURE_CONDITION(features, limitVaryingsAtCompileTime, isPowerVR);
+
+    // PowerVR GL drivers use 16-bit integers to index and serialize global variable and struct
+    // member info maps, wrapping at 65536 entries. crbug.com/583945831
+    ANGLE_FEATURE_CONDITION(features, limitShaderVariableFieldsAtCompileTime, isPowerVR);
 
     // crbug.com/529509587 -- IMG GLSL frontend OOB-writes during semantic analysis of a struct
     // constructor whose array-typed member receives a constant array-constructor argument with a
     // precision mismatch.  The workaround avoids all complex expressions, not just constant arrays
     // just in case.
-    ANGLE_FEATURE_CONDITION(features, avoidComplexExpressionsInStructConstructor,
-                            IsPowerVR(vendor));
+    ANGLE_FEATURE_CONDITION(features, avoidComplexExpressionsInStructConstructor, isPowerVR);
 
     // http://crbug.com/499602793
     ANGLE_FEATURE_CONDITION(features, reattachTextureToFboAfterLayerIncrease,
-                            IsPowerVR(vendor) && IsAndroid());
+                            isPowerVR && IsAndroid());
+
+    // http://crbug.com/569156483 -- IMG drivers can sometimes reference previously bound complete
+    // framebuffers, so interpose the placeholder framebuffer on every bind transition to make
+    // sure the previously bound framebuffer is never one that can be deleted.
+    ANGLE_FEATURE_CONDITION(features, ensurePreviousFramebufferNotDeleted,
+                            isPowerVR && IsAndroid());
 
     // crbug.com/553172761
-    ANGLE_FEATURE_CONDITION(features, useTexSubImageForClientDataNpotUploads,
-                            false /* IsPowerVR(vendor) */);
+    ANGLE_FEATURE_CONDITION(features, useTexSubImageForClientDataNpotUploads, isPowerVR);
+
+    ANGLE_FEATURE_CONDITION(features, recreateFboOnAttachmentRespecification, isPowerVR);
+
+    // https://crbug.com/549347571 -- IMG drivers may return incorrect data when reading pixels back
+    // from a framebuffer that has multiple color attachments.
+    ANGLE_FEATURE_CONDITION(features, readPixelsViaSingleAttachmentFramebuffer, isPowerVR);
+
+    // Reject renderbuffer allocations with GL_OUT_OF_MEMORY if they would cause
+    // integer wraparound during size computation inside the driver.
+    // https://crbug.com/546644426
+    ANGLE_FEATURE_CONDITION(features, rejectRenderbufferStorageWrappingDriverSize, isPowerVR);
+
+    // Clamp GL_MAX_TEXTURE_IMAGE_UNITS to 13 so programs exceeding 13 active fragment samplers
+    // fail linking before reaching the IMG driver.
+    // https://crbug.com/577781532
+    ANGLE_FEATURE_CONDITION(features, limitMaxTextureImageUnitsTo13, isPowerVR);
 
     // Mac Intel drivers are unable to allocate buffers larger than ~1gb
     ANGLE_FEATURE_CONDITION(features, limitMaxBufferSizeTo1gb, isApple && isIntel);
+
+    // Force a finish before copying from a framebuffer that has the destination texture attached.
+    // Avoids an IMG driver bug if the source still has pending rendering.
+    // https://crbug.com/552672183
+    ANGLE_FEATURE_CONDITION(features, finishBeforeSameTextureCopy, IsPowerVR(vendor));
+
+    // Force a flush before switching away from a non-default draw framebuffer to avoid stale
+    // cross-framebuffer attachment state in IMG drivers.
+    // https://crbug.com/584036299
+    ANGLE_FEATURE_CONDITION(features, flushBeforeDrawFramebufferChange, isPowerVR);
 
     // Default to state validation disabled. It is extremely costly and should only be enabled
     // explicitly when debugging.
@@ -2798,6 +2886,7 @@ void InitializeFrontendFeatures(const FunctionsGL *functions, angle::FrontendFea
     VendorID vendor = GetVendorID(functions);
     bool isQualcomm = IsQualcomm(vendor);
     bool isMali     = IsARM(vendor);
+    bool isPowerVR  = IsPowerVR(vendor);
 
     std::array<int, 3> mesaVersion = {0, 0, 0};
     bool isMesa                    = IsMesa(functions, &mesaVersion);
@@ -2805,7 +2894,7 @@ void InitializeFrontendFeatures(const FunctionsGL *functions, angle::FrontendFea
     // Program binaries don't contain transform feedback varyings on multiple vendors' GPUs.
     // https://crbug.com/442879525 for the latest example on Imagination / PowerVR.
     ANGLE_FEATURE_CONDITION(features, disableProgramCachingForTransformFeedback,
-                            (!isMesa && isQualcomm) || IsPowerVR(vendor) || isMali);
+                            (!isMesa && isQualcomm) || isPowerVR || isMali);
     // https://crbug.com/480992
     // Disable shader program cache to workaround PowerVR Rogue issues.
     ANGLE_FEATURE_CONDITION(features, disableProgramBinary, IsPowerVrRogue(functions));

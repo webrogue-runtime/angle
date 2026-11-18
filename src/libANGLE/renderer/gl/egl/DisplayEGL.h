@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "common/SimpleMutex.h"
 #include "libANGLE/renderer/gl/DisplayGL.h"
 #include "libANGLE/renderer/gl/egl/egl_utils.h"
 
@@ -23,7 +24,44 @@ class FunctionsEGL;
 class FunctionsEGLDL;
 class RendererEGL;
 
-class DisplayEGL : public DisplayGL
+// The native EGL function table is loaded during DisplayEGL::initialize() and is immutable
+// afterwards, so creating sync objects out of it does not require the display lock.
+class ThreadSafeDisplayEGL : public ThreadSafeDisplayGL
+{
+  public:
+    ThreadSafeDisplayEGL()           = default;
+    ~ThreadSafeDisplayEGL() override = default;
+
+    egl::Error makeCurrent(egl::Surface *drawSurface,
+                           egl::Surface *readSurface,
+                           gl::Context *context) override;
+    egl::Error beforeDestroyContext(const gl::Context *context) override;
+    egl::Error afterDestroyContext() override;
+
+    EGLSyncImpl *createSync() override;
+
+  protected:
+    struct CurrentNativeContext
+    {
+        EGLSurface surface = EGL_NO_SURFACE;
+        EGLContext context = EGL_NO_CONTEXT;
+        // True if the current context is an external context.  In that case, |context| is the
+        // application's native context, which ANGLE never makes current itself, and |surface| is
+        // unset, since ANGLE does not know the application's native surfaces.
+        bool isExternalContext = false;
+        bool needsRestore      = false;
+    };
+    angle::SimpleMutex mCurrentNativeContextsMutex;
+    angle::HashMap<uint64_t, CurrentNativeContext> mCurrentNativeContexts;
+
+    FunctionsEGLDL *mEGL    = nullptr;
+    EGLSurface mMockPbuffer = EGL_NO_SURFACE;
+
+  private:
+    egl::Error makeCurrentSurfaceless(gl::Context *context) override;
+};
+
+class DisplayEGL : public DisplayGL, public ThreadSafeDisplayEGL
 {
   public:
     DisplayEGL(const egl::DisplayState &state);
@@ -33,8 +71,6 @@ class DisplayEGL : public DisplayGL
                            const gl::Context *context,
                            EGLenum target,
                            const egl::AttributeMap &attribs) override;
-
-    EGLSyncImpl *createSync() override;
 
     void setBlobCacheFuncs(EGLSetBlobFuncANDROID set, EGLGetBlobFuncANDROID get) override;
 
@@ -64,9 +100,6 @@ class DisplayEGL : public DisplayGL
 
     egl::ConfigSet generateConfigs() override;
 
-    bool testDeviceLost() override;
-    egl::Error restoreLostDevice(const egl::Display *display) override;
-
     bool isValidNativeWindow(EGLNativeWindowType window) const override;
     egl::Error validateClientBuffer(const egl::Config *configuration,
                                     EGLenum buftype,
@@ -75,11 +108,6 @@ class DisplayEGL : public DisplayGL
 
     egl::Error waitClient(const gl::Context *context) override;
     egl::Error waitNative(const gl::Context *context, EGLint engine) override;
-
-    egl::Error makeCurrent(egl::Display *display,
-                           egl::Surface *drawSurface,
-                           egl::Surface *readSurface,
-                           gl::Context *context) override;
 
     gl::Version getMaxSupportedESVersion() const override;
 
@@ -111,6 +139,8 @@ class DisplayEGL : public DisplayGL
                                     EGLBoolean *externalOnly,
                                     EGLint *numModifiers) override;
 
+    ThreadSafeDisplayImpl *getThreadSafeDisplayImpl() override { return this; }
+
   protected:
     virtual EGLint fixSurfaceType(EGLint surfaceType) const;
 
@@ -127,8 +157,6 @@ class DisplayEGL : public DisplayGL
                               bool makeNewContextCurrent,
                               bool isExternalContext,
                               std::shared_ptr<RendererEGL> *outRenderer);
-
-    egl::Error makeCurrentSurfaceless(gl::Context *context) override;
 
     template <typename T>
     void getConfigAttrib(EGLConfig config, EGLint attribute, T *value) const;
@@ -148,20 +176,9 @@ class DisplayEGL : public DisplayGL
     std::shared_ptr<RendererEGL> mRenderer;
     std::map<EGLAttrib, std::weak_ptr<RendererEGL>> mVirtualizationGroups;
 
-    FunctionsEGLDL *mEGL = nullptr;
-    EGLConfig mConfig    = EGL_NO_CONFIG_KHR;
+    EGLConfig mConfig = EGL_NO_CONFIG_KHR;
     egl::AttributeMap mDisplayAttributes;
     std::vector<EGLint> mConfigAttribList;
-
-    struct CurrentNativeContext
-    {
-        EGLSurface surface = EGL_NO_SURFACE;
-        EGLContext context = EGL_NO_CONTEXT;
-        // True if the current context is an external context. and both surface and context will be
-        // unset when an external context is current.
-        bool isExternalContext = false;
-    };
-    angle::HashMap<uint64_t, CurrentNativeContext> mCurrentNativeContexts;
 
     void generateCaps(egl::Caps *outCaps) const override;
 
@@ -169,12 +186,9 @@ class DisplayEGL : public DisplayGL
 
     bool mHasEXTCreateContextRobustness   = false;
     bool mHasNVRobustnessVideoMemoryPurge = false;
-    bool mIsSamsungXclipse                = false;
 
     bool mSupportsSurfaceless      = false;
     bool mSupportsNoConfigContexts = false;
-
-    EGLSurface mMockPbuffer = EGL_NO_SURFACE;
 
     // Supported DRM formats
     bool mSupportsDmaBufImportModifiers = false;

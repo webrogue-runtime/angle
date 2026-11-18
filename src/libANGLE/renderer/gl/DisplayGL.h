@@ -29,6 +29,25 @@ class ShareGroupGL : public ShareGroupImpl
 
 class RendererGL;
 
+class ThreadSafeDisplayGL : public ThreadSafeDisplayImpl
+{
+  public:
+    ThreadSafeDisplayGL()           = default;
+    ~ThreadSafeDisplayGL() override = default;
+
+    // None of the GL backends can lose the device, so device loss is never reported and the
+    // device can never be restored.
+    bool testDeviceLost() override final;
+    egl::Error restoreLostDevice(const egl::ThreadSafeDisplay *display) override final;
+
+    egl::Error makeCurrent(egl::Surface *drawSurface,
+                           egl::Surface *readSurface,
+                           gl::Context *context) override;
+
+  private:
+    virtual egl::Error makeCurrentSurfaceless(gl::Context *context);
+};
+
 class DisplayGL : public DisplayImpl
 {
   public:
@@ -53,11 +72,6 @@ class DisplayGL : public DisplayImpl
 
     ShareGroupImpl *createShareGroup(const egl::ShareGroupState &state) override;
 
-    egl::Error makeCurrent(egl::Display *display,
-                           egl::Surface *drawSurface,
-                           egl::Surface *readSurface,
-                           gl::Context *context) override;
-
     gl::Version getMaxConformantESVersion() const override;
 
     virtual RendererGL *getRenderer() const = 0;
@@ -68,9 +82,6 @@ class DisplayGL : public DisplayImpl
 
   protected:
     void generateExtensions(egl::DisplayExtensions *outExtensions) const override;
-
-  private:
-    virtual egl::Error makeCurrentSurfaceless(gl::Context *context);
 };
 
 }  // namespace rx

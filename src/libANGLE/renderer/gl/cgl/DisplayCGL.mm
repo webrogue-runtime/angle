@@ -293,13 +293,12 @@ egl::Error DisplayCGL::releaseThread()
     return egl::NoError();
 }
 
-egl::Error DisplayCGL::makeCurrent(egl::Display *display,
-                                   egl::Surface *drawSurface,
+egl::Error DisplayCGL::makeCurrent(egl::Surface *drawSurface,
                                    egl::Surface *readSurface,
                                    gl::Context *context)
 {
     checkDiscreteGPUStatus();
-    return DisplayGL::makeCurrent(display, drawSurface, readSurface, context);
+    return ThreadSafeDisplayGL::makeCurrent(drawSurface, readSurface, context);
 }
 
 SurfaceImpl *DisplayCGL::createWindowSurface(const egl::SurfaceState &state,
@@ -424,18 +423,6 @@ egl::ConfigSet DisplayCGL::generateConfigs()
 
     configs.add(config);
     return configs;
-}
-
-bool DisplayCGL::testDeviceLost()
-{
-    // TODO(cwallez) investigate implementing this
-    return false;
-}
-
-egl::Error DisplayCGL::restoreLostDevice(const egl::Display *display)
-{
-    UNIMPLEMENTED();
-    return egl::Error(EGL_BAD_DISPLAY);
 }
 
 bool DisplayCGL::isValidNativeWindow(EGLNativeWindowType window) const

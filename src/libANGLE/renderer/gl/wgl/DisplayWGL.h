@@ -11,6 +11,7 @@
 
 #include <unordered_map>
 
+#include "common/SimpleMutex.h"
 #include "libANGLE/renderer/gl/DisplayGL.h"
 
 #include <GL/wglext.h>
@@ -21,7 +22,7 @@ namespace rx
 class FunctionsWGL;
 class RendererWGL;
 
-class DisplayWGL : public DisplayGL
+class DisplayWGL : public DisplayGL, public ThreadSafeDisplayGL
 {
   public:
     DisplayWGL(const egl::DisplayState &state);
@@ -52,9 +53,6 @@ class DisplayWGL : public DisplayGL
 
     egl::ConfigSet generateConfigs() override;
 
-    bool testDeviceLost() override;
-    egl::Error restoreLostDevice(const egl::Display *display) override;
-
     bool isValidNativeWindow(EGLNativeWindowType window) const override;
     egl::Error validateClientBuffer(const egl::Config *configuration,
                                     EGLenum buftype,
@@ -64,10 +62,11 @@ class DisplayWGL : public DisplayGL
     egl::Error waitClient(const gl::Context *context) override;
     egl::Error waitNative(const gl::Context *context, EGLint engine) override;
 
-    egl::Error makeCurrent(egl::Display *display,
-                           egl::Surface *drawSurface,
+    egl::Error makeCurrent(egl::Surface *drawSurface,
                            egl::Surface *readSurface,
                            gl::Context *context) override;
+    egl::Error beforeDestroyContext(const gl::Context *context) override;
+    egl::Error afterDestroyContext() override;
 
     egl::Error registerD3DDevice(IUnknown *device, HANDLE *outHandle);
     void releaseD3DDevice(HANDLE handle);
@@ -81,6 +80,8 @@ class DisplayWGL : public DisplayGL
     void populateFeatureList(angle::FeatureList *features) override;
 
     RendererGL *getRenderer() const override;
+
+    ThreadSafeDisplayImpl *getThreadSafeDisplayImpl() override { return this; }
 
   private:
     egl::Error initializeImpl(egl::Display *display);
@@ -102,9 +103,11 @@ class DisplayWGL : public DisplayGL
 
     struct CurrentNativeContext
     {
-        HDC dc     = nullptr;
-        HGLRC glrc = nullptr;
+        HDC dc            = nullptr;
+        HGLRC glrc        = nullptr;
+        bool needsRestore = false;
     };
+    angle::SimpleMutex mCurrentNativeContextsMutex;
     angle::HashMap<uint64_t, CurrentNativeContext> mCurrentNativeContexts;
 
     HMODULE mOpenGLModule;

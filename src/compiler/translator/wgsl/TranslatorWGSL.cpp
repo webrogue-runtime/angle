@@ -2731,7 +2731,14 @@ bool TranslatorWGSL::preTranslateTreeModifications(TIntermBlock *root,
     // block by ReduceInterfaceBlocks into a struct.
     DriverUniform driverUniforms(DriverUniformMode::InterfaceBlock, SH_WGSL_OUTPUT);
     ASSERT(getShaderType() != GL_COMPUTE_SHADER);
-    driverUniforms.addGraphicsDriverUniformsToShader(root, &getSymbolTable());
+    if (compileOptions.useIR)
+    {
+        driverUniforms.findDeclarationAddedByIR(root);
+    }
+    else
+    {
+        driverUniforms.addGraphicsDriverUniformsToShader(root, &getSymbolTable());
+    }
 
     if (getShaderType() == GL_VERTEX_SHADER)
     {
@@ -2853,6 +2860,7 @@ bool TranslatorWGSL::translate(TIntermBlock *root,
                                const ShCompileOptions &compileOptions,
                                PerformanceDiagnostics *perfDiagnostics)
 {
+    ASSERT(!compileOptions.useIR);
     // TODO(https://issues.angleproject.org/issues/42264589#comment3): remove this, as it is
     // deprecated.
     mValidateASTOptions.validateNoRawFunctionCalls = false;

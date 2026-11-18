@@ -309,40 +309,47 @@
             "issue": "https://crbug.com/705865"
         },
         {
-            "name": "reset_base_level_for_ASTC_image",
+            "name": "virtualize_base_level_and_mipchain",
             "category": "Workarounds",
             "description": [
-                "Reset texture base level before calling glCompressedTexImage2D or glCompressedTexSubImage2D for ASTC textures to ",
-                "work around PowerVR driver bug."
+                "Virtualize GL_TEXTURE_BASE_LEVEL and per-level texture storage using immutable ",
+                "companion textures so native GL_TEXTURE_BASE_LEVEL is never modified and ",
+                "oversized mip levels are never allocated on a native mipchain."
             ],
-            "issue": "https://crbug.com/551708184"
+            "issue": "https://crbug.com/550607402"
         },
         {
-            "name": "recreate_immutable_texture_on_base_level_increase",
+            "name": "copy_image_sub_data_3D_fails_on_tail_mip_levels",
             "category": "Workarounds",
             "description": [
-                "Recreate native storage for immutable textures when TEXTURE_BASE_LEVEL is increased to ",
-                "work around PowerVR sparse page map OOB driver bug."
+                "Related to virtualizeBaseLevelAndMipchain workaround. ",
+                "glCopyImageSubDataEXT fails with GL_INVALID_VALUE on 1x1xD tail mip levels of ",
+                "3D textures when depth exceeds width and height; re-upload from a CPU shadow ",
+                "copy or copy slice-by-slice via glCopyTexSubImage3D instead."
             ],
-            "issue": "https://crbug.com/528131119"
+            "issue": "https://crbug.com/550607402"
         },
         {
-            "name": "reset_TexStorage2D_base_level",
+            "name": "readback_3D_depth_stencil_pbos_during_upload",
             "category": "Workarounds",
             "description": [
-                "Reset texture base level before calling glTexStorage2D to ",
-                "work around PowerVR driver bug."
+                "Related to virtualizeBaseLevelAndMipchain workaround. ",
+                "Uploading depth/stencil, format-converted, or subrect PBO data via ",
+                "glTexSubImage3D into an immutable 3D or 2D array texture has a race condition ",
+                "and offset bug on PowerVR; read back the PBO on the CPU before uploading."
             ],
-            "issue": "https://crbug.com/551573368"
+            "issue": "https://crbug.com/550607402"
         },
         {
-            "name": "use_temp_for_non_zero_base_level_GenMipmap_using_CopyImageSubData",
+            "name": "use_scratch_texture_for_converting_copy_sub_image",
             "category": "Workarounds",
             "description": [
-                "Allocate a temporary texture when generating mipmaps on an immutable texture with a ",
-                "non-zero base level to avoid driver bugs."
+                "Related to virtualizeBaseLevelAndMipchain workaround. ",
+                "glCopyTexSubImage2D and glCopyTexSubImage3D fail with GL_INVALID_OPERATION on ",
+                "PowerVR when converting between framebuffer and texture formats; copy into a ",
+                "temporary 2D texture with glCopyTexImage2D and then transfer via glCopyImageSubData."
             ],
-            "issue": "https://crbug.com/534923522"
+            "issue": "https://crbug.com/576651388"
         },
         {
             "name": "recreate_texture_on_tex_image_3d_depth_increase",
@@ -360,6 +367,15 @@
                 "Limit max 3d texture size and max array texture layers to 1024 to avoid system hang"
             ],
             "issue": "http://crbug.com/927470"
+        },
+        {
+            "name": "round_up_3d_texture_size_to_POT_for_limit",
+            "category": "Workarounds",
+            "description": [
+                "Round up 3D texture dimensions to nearest power of two before checking image allocation ",
+                "size limits to prevent mishandling of large 3D textures on older PowerVR drivers."
+            ],
+            "issue": "http://crbug.com/551673541"
         },
         {
             "name": "adjust_src_dst_region_for_BlitFramebuffer",
@@ -931,14 +947,6 @@
             "issue": "http://crbug.com/475877320"
         },
         {
-            "name": "expand_fragment_outputs_to_vec4",
-            "category": "Workarounds",
-            "description": [
-                "Expand fragment shader outputs to 4 components to work around compiler bugs."
-            ],
-            "issue": "http://crbug.com/491732188"
-        },
-        {
             "name": "recreate_mipmap_levels_before_generate",
             "category": "Workarounds",
             "description": [
@@ -977,7 +985,7 @@
             "description": [
                 "Force a flush before calling generateMipmap to work around driver bugs."
             ],
-            "issue": "http://crbug.com/549350408"
+            "issue": "http://crbug.com/549350408 https://crbug.com/549995090"
         },
         {
             "name": "split_level_0_pbo_full_sub_image_2D",
@@ -988,12 +996,22 @@
             "issue": "http://crbug.com/496807874"
         },
         {
-            "name": "limit_output_varyings_to_256_at_compile_time",
+            "name": "limit_varyings_at_compile_time",
             "category": "Workarounds",
             "description": [
                 "Limit the number of declared varying components at compile time to work around a PowerVR driver bug."
             ],
             "issue": "http://crbug.com/529991907"
+        },
+        {
+            "name": "limit_shader_variable_fields_at_compile_time",
+            "category": "Workarounds",
+            "description": [
+                "Limit the total number of declared variables and expanded struct and ",
+                "interface-block fields per shader at compile time to work around a PowerVR ",
+                "driver bug."
+            ],
+            "issue": "https://crbug.com/583945831"
         },
         {
             "name": "avoid_complex_expressions_in_struct_constructor",
@@ -1021,15 +1039,6 @@
             "issue": "http://crbug.com/499602793"
         },
         {
-            "name": "upload_oversized_mip_levels_via_unpack_buffer",
-            "category": "Workarounds",
-            "description": [
-                "Stage oversized nonzero-level texture definitions through a scratch pixel unpack buffer ",
-                "to work around driver bugs."
-            ],
-            "issue": "http://crbug.com/548127218"
-        },
-        {
             "name": "validate_state",
             "category": "Features",
             "description": [
@@ -1053,6 +1062,95 @@
                 "For non-power-of-two textures, upload via TexSubImage2D instead of TexImage2D when uploading client-side data."
             ],
             "issue": "http://crbug.com/553172761"
+        },
+        {
+            "name": "double_clear_for_robust_init",
+            "category": "Workarounds",
+            "description": [
+                "Issue a two-step clear with distinct values during robust resource init to prevent value-collision driver clear-dedup elision on invalidate."
+            ],
+            "issue": "http://crbug.com/550489336"
+        },
+        {
+            "name": "defer_gl_delete_buffers",
+            "category": "Workarounds",
+            "description": [
+                "Defer glDeleteBuffers calls until previous GPU work has completed."
+            ],
+            "issue": "http://crbug.com/558870371"
+        },
+        {
+            "name": "recreate_fbo_on_attachment_respecification",
+            "category": "Workarounds",
+            "description": [
+                "Recreate native FBOs on attachment, draw buffers, or read buffer respecification. ",
+                "Prevents driver hash collisions on PowerVR hardware."
+            ],
+            "issue": "http://crbug.com/551065275"
+        },
+        {
+            "name": "finish_before_same_texture_copy",
+            "category": "Workarounds",
+            "description": [
+                "Force a finish before copying from a framebuffer whose read attachment is the ",
+                "destination texture to work around driver bugs."
+            ],
+            "issue": "https://crbug.com/552672183"
+        },
+        {
+            "name": "disable_pixel_local_storage",
+            "category": "Workarounds",
+            "description": [
+                "Disable ANGLE_shader_pixel_local_storage; kill-switch for known broken GPUs."
+            ],
+            "issue": "http://anglebug.com/40096838"
+        },
+        {
+            "name": "read_pixels_via_single_attachment_framebuffer",
+            "category": "Workarounds",
+            "description": [
+                "Some drivers return incorrect data when reading pixels back from a framebuffer ",
+                "that has multiple color attachments. Read through a temporary framebuffer with ",
+                "only the read attachment bound."
+            ],
+            "issue": "https://crbug.com/549347571"
+        },
+        {
+            "name": "reject_renderbuffer_storage_wrapping_driver_size",
+            "category": "Workarounds",
+            "description": [
+                "Reject renderbuffer allocations with GL_OUT_OF_MEMORY if they would cause ",
+                "integer wraparound during size computation inside the driver."
+            ],
+            "issue": "https://crbug.com/546644426"
+        },
+        {
+            "name": "limit_max_texture_image_units_to_13",
+            "category": "Workarounds",
+            "description": [
+                "Clamp GL_MAX_TEXTURE_IMAGE_UNITS to 13 so programs with more than 13 active ",
+                "fragment shader samplers are rejected during linking."
+            ],
+            "issue": "https://crbug.com/577781532"
+        },
+        {
+            "name": "flush_before_draw_framebuffer_change",
+            "category": "Workarounds",
+            "description": [
+                "Force a flush before changing a non-default draw framebuffer binding to ",
+                "avoid stale cross-framebuffer state in PowerVR drivers."
+            ],
+            "issue": "https://crbug.com/584036299"
+        },
+        {
+            "name": "ensure_previous_framebuffer_not_deleted",
+            "category": "Workarounds",
+            "description": [
+                "Bind the always-complete placeholder framebuffer before every framebuffer bind ",
+                "transition so drivers that reference the previously bound complete framebuffer ",
+                "never reference a deleted one."
+            ],
+            "issue": "http://crbug.com/569156483"
         }
     ]
 }

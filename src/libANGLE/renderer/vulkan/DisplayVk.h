@@ -10,6 +10,9 @@
 #ifndef LIBANGLE_RENDERER_VULKAN_DISPLAYVK_H_
 #define LIBANGLE_RENDERER_VULKAN_DISPLAYVK_H_
 
+#include <thread>
+#include <unordered_map>
+
 #include "common/MemoryBuffer.h"
 #include "libANGLE/renderer/DisplayImpl.h"
 #include "libANGLE/renderer/vulkan/vk_cache_utils.h"
@@ -17,7 +20,45 @@
 
 namespace rx
 {
-class DisplayVk : public DisplayImpl, public vk::ErrorContext, public vk::GlobalOps
+class ThreadSafeDisplayVk : public ThreadSafeDisplayImpl, public vk::ErrorContext
+{
+  public:
+    ThreadSafeDisplayVk(vk::Renderer *renderer)
+        : vk::ErrorContext(renderer), mSupportedColorspaceFormatsMap{}
+    {}
+    ~ThreadSafeDisplayVk() override = default;
+
+    bool testDeviceLost() override;
+    egl::Error restoreLostDevice(const egl::ThreadSafeDisplay *display) override;
+
+    egl::Error makeCurrent(egl::Surface *drawSurface,
+                           egl::Surface *readSurface,
+                           gl::Context *context) override;
+
+    EGLSyncImpl *createSync() override;
+
+    void handleError(VkResult result,
+                     const char *file,
+                     const char *function,
+                     unsigned int line) override;
+
+    bool isConfigFormatSupported(VkFormat format) const;
+    bool isSurfaceFormatColorspacePairSupported(VkSurfaceKHR surface,
+                                                VkFormat format,
+                                                VkColorSpaceKHR colorspace) const;
+
+  protected:
+    bool isColorspaceSupported(VkColorSpaceKHR colorspace) const;
+    void initSupportedSurfaceFormatColorspaces();
+
+  private:
+    // Map of supported colorspace and associated surface format set. This is thread-safe because
+    // it's populated once during initialization under the display lock and is only ever queried
+    // afterwards.
+    angle::HashMap<VkColorSpaceKHR, std::unordered_set<VkFormat>> mSupportedColorspaceFormatsMap;
+};
+
+class DisplayVk : public DisplayImpl, public vk::GlobalOps, public ThreadSafeDisplayVk
 {
   public:
     DisplayVk(const egl::DisplayState &state);
@@ -26,17 +67,11 @@ class DisplayVk : public DisplayImpl, public vk::ErrorContext, public vk::Global
     egl::Error initialize(egl::Display *display) override;
     void terminate() override;
 
-    egl::Error makeCurrent(egl::Display *display,
-                           egl::Surface *drawSurface,
-                           egl::Surface *readSurface,
-                           gl::Context *context) override;
-
-    bool testDeviceLost() override;
-    egl::Error restoreLostDevice(const egl::Display *display) override;
-
     std::string getRendererDescription() override;
     std::string getVendorString() override;
     std::string getVersionString(bool includeFullVersion) override;
+
+    vk::Renderer *getRenderer() const { return mRenderer; }
 
     DeviceImpl *createDevice() override;
 
@@ -70,8 +105,6 @@ class DisplayVk : public DisplayImpl, public vk::ErrorContext, public vk::Global
     StreamProducerImpl *createStreamProducerD3DTexture(egl::Stream::ConsumerType consumerType,
                                                        const egl::AttributeMap &attribs) override;
 
-    EGLSyncImpl *createSync() override;
-
     gl::Version getMaxSupportedESVersion() const override;
     gl::Version getMaxConformantESVersion() const override;
 
@@ -94,21 +127,11 @@ class DisplayVk : public DisplayImpl, public vk::ErrorContext, public vk::Global
 
     angle::ScratchBuffer *getScratchBuffer() { return &mScratchBuffer; }
 
-    void handleError(VkResult result,
-                     const char *file,
-                     const char *function,
-                     unsigned int line) override;
-
     void initializeFrontendFeatures(angle::FrontendFeatures *features) const override;
 
     void populateFeatureList(angle::FeatureList *features) override;
 
     ShareGroupImpl *createShareGroup(const egl::ShareGroupState &state) override;
-
-    bool isConfigFormatSupported(VkFormat format) const;
-    bool isSurfaceFormatColorspacePairSupported(VkSurfaceKHR surface,
-                                                VkFormat format,
-                                                VkColorSpaceKHR colorspace) const;
 
     void lockVulkanQueue() override;
     void unlockVulkanQueue() override;
@@ -118,6 +141,8 @@ class DisplayVk : public DisplayImpl, public vk::ErrorContext, public vk::Global
                                               EGLint *rates,
                                               EGLint rate_size,
                                               EGLint *num_rates) const override;
+
+    ThreadSafeDisplayImpl *getThreadSafeDisplayImpl() override { return this; }
 
   protected:
     void generateExtensions(egl::DisplayExtensions *outExtensions) const override;
@@ -129,9 +154,6 @@ class DisplayVk : public DisplayImpl, public vk::ErrorContext, public vk::Global
 
     virtual angle::Result waitNativeImpl();
 
-    bool isColorspaceSupported(VkColorSpaceKHR colorspace) const;
-    void initSupportedSurfaceFormatColorspaces();
-
     // vk::GlobalOps
     void putBlob(const angle::BlobCacheKey &key, const angle::MemoryBuffer &value) override;
     bool getBlob(const angle::BlobCacheKey &key, angle::BlobCacheValue *valueOut) override;
@@ -142,8 +164,11 @@ class DisplayVk : public DisplayImpl, public vk::ErrorContext, public vk::Global
 
     angle::ScratchBuffer mScratchBuffer;
 
-    // Map of supported colorspace and associated surface format set.
-    angle::HashMap<VkColorSpaceKHR, std::unordered_set<VkFormat>> mSupportedColorspaceFormatsMap;
+    // Scratch storage for getBlob(), one buffer per calling thread to support concurrent getBlob()
+    // calls.  std::unordered_map is used instead of angle::HashMap because references to map values
+    // should remain valid after modification.  The lock thus only protects the map itself.
+    angle::SimpleMutex mBlobScratchBuffersMutex;
+    std::unordered_map<std::thread::id, angle::ScratchBuffer> mBlobScratchBuffers;
 };
 
 }  // namespace rx

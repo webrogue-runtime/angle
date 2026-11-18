@@ -4,12 +4,9 @@
 // found in the LICENSE file.
 //
 
-#ifdef UNSAFE_BUFFERS_BUILD
-#    pragma allow_unsafe_buffers
-#endif
-
 #include <array>
 
+#include "common/span.h"
 #include "test_utils/ANGLETest.h"
 #include "test_utils/gl_raii.h"
 #include "util/EGLWindow.h"
@@ -92,6 +89,9 @@ class TransformFeedbackTest : public TransformFeedbackTestBase
     void midRecordOpDoesNotContributeTest(std::function<void()> op);
 };
 
+class TransformFeedbackBaseInstanceTest : public TransformFeedbackTest
+{};
+
 // Test that using a transform feedback program without transform feedback active works, and that
 // using it with transform feedback afterwards also works.
 TEST_P(TransformFeedbackTest, NoCaptureThenCapture)
@@ -154,16 +154,15 @@ void main()
     EXPECT_GL_NO_ERROR();
 
     // Ensure that triangles were actually captured.
-    void *mappedBuffer =
-        glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, sizeof(float) * 24, GL_MAP_READ_BIT);
-    ASSERT_NE(nullptr, mappedBuffer);
+    auto mappedFloats = MapBufferRange<const float>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                    sizeof(float) * 24, GL_MAP_READ_BIT);
+    ASSERT_FALSE(mappedFloats.empty());
 
     static constexpr std::array<GLfloat, 24> expect = {
         -1.0f, 1.0f, 0.5f, 1.0f, -1.0f, -1.0f, 0.5f, 1.0f, 1.0f, -1.0f, 0.5f, 1.0f,
         -1.0f, 1.0f, 0.5f, 1.0f, 1.0f,  -1.0f, 0.5f, 1.0f, 1.0f, 1.0f,  0.5f, 1.0f,
     };
 
-    float *mappedFloats = static_cast<float *>(mappedBuffer);
     for (uint32_t i = 0; i < 24; ++i)
     {
         EXPECT_EQ(mappedFloats[i], expect[i]);
@@ -387,10 +386,10 @@ void main() {
     for (int i = 0; i < 4; ++i)
     {
         glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER, xfbBuffers[i]);
-        const float *bufferData = reinterpret_cast<float *>(
-            glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, sizeof(GLfloat), GL_MAP_READ_BIT));
-        ASSERT_NE(nullptr, bufferData);
-        EXPECT_EQ(*bufferData, 1.0f + static_cast<float>(i));
+        auto bufferData = MapBufferRange<const float>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                      sizeof(GLfloat), GL_MAP_READ_BIT);
+        ASSERT_FALSE(bufferData.empty());
+        EXPECT_EQ(bufferData[0], 1.0f + static_cast<float>(i));
         glUnmapBuffer(GL_TRANSFORM_FEEDBACK_BUFFER);
     }
 
@@ -425,10 +424,10 @@ void main() {
     for (int i = 0; i < 2; ++i)
     {
         glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER, xfbBuffers[i]);
-        const float *bufferData = reinterpret_cast<float *>(
-            glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, sizeof(GLfloat), GL_MAP_READ_BIT));
-        ASSERT_NE(nullptr, bufferData);
-        EXPECT_EQ(*bufferData, -(1.0f + static_cast<float>(i)));
+        auto bufferData = MapBufferRange<const float>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                      sizeof(GLfloat), GL_MAP_READ_BIT);
+        ASSERT_FALSE(bufferData.empty());
+        EXPECT_EQ(bufferData[0], -(1.0f + static_cast<float>(i)));
         glUnmapBuffer(GL_TRANSFORM_FEEDBACK_BUFFER);
     }
 
@@ -499,10 +498,10 @@ void main() {
     for (int i = 0; i < 4; ++i)
     {
         glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER, xfbBuffers[i]);
-        const float *bufferData = reinterpret_cast<float *>(
-            glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, sizeof(GLfloat), GL_MAP_READ_BIT));
-        ASSERT_NE(nullptr, bufferData);
-        EXPECT_EQ(*bufferData, 1.0f + static_cast<float>(i));
+        auto bufferData = MapBufferRange<const float>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                      sizeof(GLfloat), GL_MAP_READ_BIT);
+        ASSERT_FALSE(bufferData.empty());
+        EXPECT_EQ(bufferData[0], 1.0f + static_cast<float>(i));
         glUnmapBuffer(GL_TRANSFORM_FEEDBACK_BUFFER);
     }
 
@@ -543,10 +542,10 @@ void main() {
     for (int i = 0; i < 2; ++i)
     {
         glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER, xfbBuffers[i]);
-        const float *bufferData = reinterpret_cast<float *>(
-            glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, sizeof(GLfloat), GL_MAP_READ_BIT));
-        ASSERT_NE(nullptr, bufferData);
-        EXPECT_EQ(*bufferData, -(1.0f + static_cast<float>(i)));
+        auto bufferData = MapBufferRange<const float>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                      sizeof(GLfloat), GL_MAP_READ_BIT);
+        ASSERT_FALSE(bufferData.empty());
+        EXPECT_EQ(bufferData[0], -(1.0f + static_cast<float>(i)));
         glUnmapBuffer(GL_TRANSFORM_FEEDBACK_BUFFER);
     }
 
@@ -561,10 +560,10 @@ void main() {
     for (int i = 0; i < 4; ++i)
     {
         glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER, xfbBuffers[i]);
-        const float *bufferData = reinterpret_cast<float *>(
-            glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, sizeof(GLfloat), GL_MAP_READ_BIT));
-        ASSERT_NE(nullptr, bufferData);
-        EXPECT_EQ(*bufferData, 1.0f + static_cast<float>(i));
+        auto bufferData = MapBufferRange<const float>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                      sizeof(GLfloat), GL_MAP_READ_BIT);
+        ASSERT_FALSE(bufferData.empty());
+        EXPECT_EQ(bufferData[0], 1.0f + static_cast<float>(i));
         glUnmapBuffer(GL_TRANSFORM_FEEDBACK_BUFFER);
     }
 
@@ -626,8 +625,9 @@ TEST_P(TransformFeedbackTest, BufferRebinding)
     EXPECT_EQ(loopCount * 2, primitivesWritten);
 
     // Check the buffer data
-    const float *bufferData = static_cast<float *>(glMapBufferRange(
-        GL_TRANSFORM_FEEDBACK_BUFFER, 0, mTransformFeedbackBufferSize, GL_MAP_READ_BIT));
+    auto bufferData = MapBufferRange<const float>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                  mTransformFeedbackBufferSize, GL_MAP_READ_BIT);
+    ASSERT_FALSE(bufferData.empty());
 
     for (size_t vertexIdx = 0; vertexIdx < 6; vertexIdx++)
     {
@@ -719,9 +719,6 @@ TEST_P(TransformFeedbackTest, RecordAndDraw)
 // Test that transform feedback can cover multiple render passes.
 TEST_P(TransformFeedbackTest, SpanMultipleRenderPasses)
 {
-    // TODO(anglebug.com/40096690) This fails after the upgrade to the 26.20.100.7870 driver.
-    ANGLE_SKIP_TEST_IF(IsWindows() && IsIntel() && IsVulkan());
-
     // anglebug.com/42263967
     ANGLE_SKIP_TEST_IF(IsAndroid() && IsOpenGLES());
 
@@ -737,12 +734,12 @@ TEST_P(TransformFeedbackTest, SpanMultipleRenderPasses)
 
     GLint positionLocation = glGetAttribLocation(mProgram, essl1_shaders::PositionAttrib());
 
-    const GLfloat vertices[] = {
-        -0.5f, 0.5f, 0.5f, -0.5f, -0.5f, 0.5f, 0.5f, -0.5f, 0.5f,
-        -0.5f, 0.5f, 0.5f, 0.5f,  -0.5f, 0.5f, 0.5f, 0.5f,  0.5f,
-    };
+    const std::array<std::array<GLfloat, 9>, 2> vertices = {{
+        {-0.5f, 0.5f, 0.5f, -0.5f, -0.5f, 0.5f, 0.5f, -0.5f, 0.5f},
+        {-0.5f, 0.5f, 0.5f, 0.5f, -0.5f, 0.5f, 0.5f, 0.5f, 0.5f},
+    }};
 
-    glVertexAttribPointer(positionLocation, 3, GL_FLOAT, GL_FALSE, 0, vertices);
+    glVertexAttribPointer(positionLocation, 3, GL_FLOAT, GL_FALSE, 0, vertices[0].data());
     glEnableVertexAttribArray(positionLocation);
 
     // Bind the buffer for transform feedback output and start transform feedback
@@ -760,7 +757,7 @@ TEST_P(TransformFeedbackTest, SpanMultipleRenderPasses)
     EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::black);
 
     // Draw the second set of three points
-    glVertexAttribPointer(positionLocation, 3, GL_FLOAT, GL_FALSE, 0, vertices + 9);
+    glVertexAttribPointer(positionLocation, 3, GL_FLOAT, GL_FALSE, 0, vertices[1].data());
     glDrawArrays(GL_POINTS, 0, 3);
 
     glDisableVertexAttribArray(positionLocation);
@@ -811,9 +808,6 @@ TEST_P(TransformFeedbackTest, UseAsUBOThenUpdateThenCapture)
 {
     // http://anglebug.com/42264370
     ANGLE_SKIP_TEST_IF(IsVulkan() && IsQualcomm());
-
-    // TODO(anglebug.com/40096690) This fails after the upgrade to the 26.20.100.7870 driver.
-    ANGLE_SKIP_TEST_IF(IsWindows() && IsIntel() && IsVulkan());
 
     const std::array<uint32_t, 12> kInitialData = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
     const std::array<uint32_t, 12> kUpdateData  = {
@@ -913,12 +907,12 @@ void TransformFeedbackTest::midRecordOpDoesNotContributeTest(std::function<void(
 
     GLint positionLocation = glGetAttribLocation(mProgram, essl1_shaders::PositionAttrib());
 
-    const GLfloat vertices[] = {
-        -0.5f, 0.5f, 0.5f, -0.5f, -0.5f, 0.5f, 0.5f, -0.5f, 0.5f,
-        -0.5f, 0.5f, 0.5f, 0.5f,  -0.5f, 0.5f, 0.5f, 0.5f,  0.5f,
-    };
+    const std::array<std::array<GLfloat, 9>, 2> vertices = {{
+        {-0.5f, 0.5f, 0.5f, -0.5f, -0.5f, 0.5f, 0.5f, -0.5f, 0.5f},
+        {-0.5f, 0.5f, 0.5f, 0.5f, -0.5f, 0.5f, 0.5f, 0.5f, 0.5f},
+    }};
 
-    glVertexAttribPointer(positionLocation, 3, GL_FLOAT, GL_FALSE, 0, vertices);
+    glVertexAttribPointer(positionLocation, 3, GL_FLOAT, GL_FALSE, 0, vertices[0].data());
     glEnableVertexAttribArray(positionLocation);
 
     // Bind the buffer for transform feedback output and start transform feedback
@@ -936,7 +930,7 @@ void TransformFeedbackTest::midRecordOpDoesNotContributeTest(std::function<void(
     op();
 
     // Draw the second set of three points
-    glVertexAttribPointer(positionLocation, 3, GL_FLOAT, GL_FALSE, 0, vertices + 9);
+    glVertexAttribPointer(positionLocation, 3, GL_FLOAT, GL_FALSE, 0, vertices[1].data());
     glDrawArrays(GL_POINTS, 0, 3);
 
     glDisableVertexAttribArray(positionLocation);
@@ -967,10 +961,6 @@ void TransformFeedbackTest::midRecordOpDoesNotContributeTest(std::function<void(
 // Test that draw-based clear between draws does not contribute to transform feedback.
 TEST_P(TransformFeedbackTest, ClearWhileRecordingDoesNotContribute)
 {
-
-    // TODO(anglebug.com/40096690) This fails after the upgrade to the 26.20.100.7870 driver.
-    ANGLE_SKIP_TEST_IF(IsWindows() && IsIntel() && IsVulkan());
-
     // anglebug.com/42263973
     ANGLE_SKIP_TEST_IF(IsAndroid() && IsOpenGLES());
 
@@ -1004,10 +994,6 @@ TEST_P(TransformFeedbackTest, ClearWhileRecordingDoesNotContribute)
 // Test that copy in the middle of rendering doesn't contribute to transform feedback.
 TEST_P(TransformFeedbackTest, CopyWhileRecordingDoesNotContribute)
 {
-
-    // TODO(anglebug.com/40096690) This fails after the upgrade to the 26.20.100.7870 driver.
-    ANGLE_SKIP_TEST_IF(IsWindows() && IsIntel() && IsVulkan());
-
     // anglebug.com/42263973
     ANGLE_SKIP_TEST_IF(IsAndroid() && IsOpenGLES());
 
@@ -1039,9 +1025,6 @@ TEST_P(TransformFeedbackTest, CopyWhileRecordingDoesNotContribute)
 // Test that blit in the middle of rendering doesn't contribute to transform feedback.
 TEST_P(TransformFeedbackTest, BlitWhileRecordingDoesNotContribute)
 {
-    // TODO(anglebug.com/40096690) This fails after the upgrade to the 26.20.100.7870 driver.
-    ANGLE_SKIP_TEST_IF(IsWindows() && IsIntel() && IsVulkan());
-
     // anglebug.com/42263973
     ANGLE_SKIP_TEST_IF(IsAndroid() && IsOpenGLES());
 
@@ -1106,11 +1089,29 @@ TEST_P(TransformFeedbackTest, TooSmallBuffers)
     const size_t verticesToDraw = 6;
     const size_t stride         = sizeof(float) * 4;
     const size_t bytesNeeded    = stride * verticesToDraw;
+    uint8_t tfData[stride * verticesToDraw] = {0};
 
     glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, mTransformFeedbackBuffer);
 
+    if (isAtLeastClientVersion(3, 2))
+    {
+        // ES 3.2 records the five points that fit instead of generating INVALID_OPERATION.
+        glBufferData(GL_TRANSFORM_FEEDBACK_BUFFER, bytesNeeded - 1, &tfData, GL_STATIC_DRAW);
+
+        GLQuery primitivesWrittenQuery;
+        glBeginQuery(GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN, primitivesWrittenQuery);
+        glBeginTransformFeedback(GL_POINTS);
+        glDrawArrays(GL_POINTS, 0, verticesToDraw);
+        EXPECT_GL_NO_ERROR();
+        glEndTransformFeedback();
+        glEndQuery(GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN);
+
+        GLuint primitivesWritten = 0;
+        glGetQueryObjectuiv(primitivesWrittenQuery, GL_QUERY_RESULT_EXT, &primitivesWritten);
+        EXPECT_EQ(verticesToDraw - 1, primitivesWritten);
+    }
+
     // Set up the buffer to be the right size
-    uint8_t tfData[stride * verticesToDraw] = {0};
     glBufferData(GL_TRANSFORM_FEEDBACK_BUFFER, bytesNeeded, &tfData, GL_STATIC_DRAW);
 
     glBeginTransformFeedback(GL_POINTS);
@@ -1124,7 +1125,14 @@ TEST_P(TransformFeedbackTest, TooSmallBuffers)
     glBeginTransformFeedback(GL_POINTS);
     EXPECT_GL_NO_ERROR();
     glDrawArrays(GL_POINTS, 0, verticesToDraw);
-    EXPECT_GL_ERROR(GL_INVALID_OPERATION);
+    if (isAtLeastClientVersion(3, 2))
+    {
+        EXPECT_GL_NO_ERROR();
+    }
+    else
+    {
+        EXPECT_GL_ERROR(GL_INVALID_OPERATION);
+    }
     glEndTransformFeedback();
 
     // Set up the buffer to be the right size but make it smaller after glBeginTransformFeedback
@@ -1133,7 +1141,14 @@ TEST_P(TransformFeedbackTest, TooSmallBuffers)
     glBufferData(GL_TRANSFORM_FEEDBACK_BUFFER, bytesNeeded - 1, &tfData, GL_STATIC_DRAW);
     EXPECT_GL_NO_ERROR();
     glDrawArrays(GL_POINTS, 0, verticesToDraw);
-    EXPECT_GL_ERROR(GL_INVALID_OPERATION);
+    if (isAtLeastClientVersion(3, 2))
+    {
+        EXPECT_GL_NO_ERROR();
+    }
+    else
+    {
+        EXPECT_GL_ERROR(GL_INVALID_OPERATION);
+    }
     glEndTransformFeedback();
 }
 
@@ -1201,25 +1216,20 @@ TEST_P(TransformFeedbackTest, BufferBinding)
 // Test that we can capture varyings only used in the vertex shader.
 TEST_P(TransformFeedbackTest, VertexOnly)
 {
-    // TODO(anglebug.com/40096690) This fails after the upgrade to the 26.20.100.7870 driver.
-    ANGLE_SKIP_TEST_IF(IsWindows() && IsIntel() && IsVulkan());
+    constexpr char kVS[] = R"(#version 300 es
+in vec2 position;
+in float attrib;
+out float varyingAttrib;
+void main() {
+  gl_Position = vec4(position, 0, 1);
+  varyingAttrib = attrib;
+})";
 
-    constexpr char kVS[] =
-        "#version 300 es\n"
-        "in vec2 position;\n"
-        "in float attrib;\n"
-        "out float varyingAttrib;\n"
-        "void main() {\n"
-        "  gl_Position = vec4(position, 0, 1);\n"
-        "  varyingAttrib = attrib;\n"
-        "}";
-
-    constexpr char kFS[] =
-        "#version 300 es\n"
-        "out mediump vec4 color;\n"
-        "void main() {\n"
-        "  color = vec4(0.0, 1.0, 0.0, 1.0);\n"
-        "}";
+    constexpr char kFS[] = R"(#version 300 es
+out mediump vec4 color;
+void main() {
+  color = vec4(0.0, 1.0, 0.0, 1.0);
+})";
 
     std::vector<std::string> tfVaryings;
     tfVaryings.push_back("varyingAttrib");
@@ -1251,11 +1261,10 @@ TEST_P(TransformFeedbackTest, VertexOnly)
 
     glUseProgram(0);
 
-    void *mappedBuffer =
-        glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, sizeof(float) * 6, GL_MAP_READ_BIT);
-    ASSERT_NE(nullptr, mappedBuffer);
+    auto mappedFloats = MapBufferRange<const float>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                    sizeof(float) * 6, GL_MAP_READ_BIT);
+    ASSERT_FALSE(mappedFloats.empty());
 
-    float *mappedFloats = static_cast<float *>(mappedBuffer);
     for (unsigned int cnt = 0; cnt < 6; ++cnt)
     {
         EXPECT_EQ(attribData[cnt], mappedFloats[cnt]);
@@ -1269,9 +1278,6 @@ TEST_P(TransformFeedbackTest, VertexOnly)
 // the vertex shader.
 TEST_P(TransformFeedbackTest, InactiveStructureVarying)
 {
-    // TODO(anglebug.com/40096690) This fails after the upgrade to the 26.20.100.7870 driver.
-    ANGLE_SKIP_TEST_IF(IsWindows() && IsIntel() && IsVulkan());
-
     constexpr char kVS[] =
         R"(#version 300 es
         in vec2 position;
@@ -1324,11 +1330,10 @@ TEST_P(TransformFeedbackTest, InactiveStructureVarying)
 
     glUseProgram(0);
 
-    void *mappedBuffer =
-        glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, sizeof(float) * 6, GL_MAP_READ_BIT);
-    ASSERT_NE(nullptr, mappedBuffer);
+    auto mappedFloats = MapBufferRange<const float>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                    sizeof(float) * 6, GL_MAP_READ_BIT);
+    ASSERT_FALSE(mappedFloats.empty());
 
-    float *mappedFloats = static_cast<float *>(mappedBuffer);
     for (unsigned int cnt = 0; cnt < 6; ++cnt)
     {
         EXPECT_EQ(attribData[cnt], mappedFloats[cnt]);
@@ -1569,8 +1574,9 @@ void main(void)
         }
         EXPECT_EQ(static_cast<GLuint>(totalPrimCount), result);
 
-        const float *bufferData = reinterpret_cast<float *>(glMapBufferRange(
-            GL_TRANSFORM_FEEDBACK_BUFFER, 0, bufferSize * sizeof(GLfloat), GL_MAP_READ_BIT));
+        auto bufferData = MapBufferRange<const float>(
+            GL_TRANSFORM_FEEDBACK_BUFFER, 0, bufferSize * sizeof(GLfloat), GL_MAP_READ_BIT);
+        ASSERT_FALSE(bufferData.empty());
 
         size_t curBufferIndex = 0;
         unsigned int failures = 0;
@@ -1606,30 +1612,25 @@ void main(void)
 // Test that when two vec2s are packed into the same register, we can still capture both of them.
 TEST_P(TransformFeedbackTest, PackingBug)
 {
-    // TODO(anglebug.com/40096690) This fails after the upgrade to the 26.20.100.7870 driver.
-    ANGLE_SKIP_TEST_IF(IsWindows() && IsIntel() && IsVulkan());
-
     // TODO(jmadill): With points and rasterizer discard?
-    constexpr char kVS[] =
-        "#version 300 es\n"
-        "in vec2 inAttrib1;\n"
-        "in vec2 inAttrib2;\n"
-        "out vec2 outAttrib1;\n"
-        "out vec2 outAttrib2;\n"
-        "in vec2 position;\n"
-        "void main() {"
-        "  outAttrib1 = inAttrib1;\n"
-        "  outAttrib2 = inAttrib2;\n"
-        "  gl_Position = vec4(position, 0, 1);\n"
-        "}";
+    constexpr char kVS[] = R"(#version 300 es
+in vec2 inAttrib1;
+in vec2 inAttrib2;
+out vec2 outAttrib1;
+out vec2 outAttrib2;
+in vec2 position;
+void main() {
+  outAttrib1 = inAttrib1;
+  outAttrib2 = inAttrib2;
+  gl_Position = vec4(position, 0, 1);
+})";
 
-    constexpr char kFS[] =
-        "#version 300 es\n"
-        "precision mediump float;\n"
-        "out vec4 color;\n"
-        "void main() {\n"
-        "  color = vec4(0);\n"
-        "}";
+    constexpr char kFS[] = R"(#version 300 es
+precision mediump float;
+out vec4 color;
+void main() {
+  color = vec4(0);
+})";
 
     std::vector<std::string> tfVaryings;
     tfVaryings.push_back("outAttrib1");
@@ -1670,17 +1671,16 @@ TEST_P(TransformFeedbackTest, PackingBug)
     glUseProgram(0);
     ASSERT_GL_NO_ERROR();
 
-    const void *mapPointer =
-        glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, sizeof(Vector2) * 2 * 6, GL_MAP_READ_BIT);
-    ASSERT_NE(nullptr, mapPointer);
+    auto xfbData = MapBufferRange<const Vector2>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                 sizeof(Vector2) * 2 * 6, GL_MAP_READ_BIT);
+    ASSERT_FALSE(xfbData.empty());
 
-    const Vector2 *vecPointer = static_cast<const Vector2 *>(mapPointer);
     for (unsigned int vectorIndex = 0; vectorIndex < 3; ++vectorIndex)
     {
         unsigned int stream1Index = vectorIndex * 2;
         unsigned int stream2Index = vectorIndex * 2 + 1;
-        EXPECT_EQ(attrib1Data[vectorIndex], vecPointer[stream1Index]);
-        EXPECT_EQ(attrib2Data[vectorIndex], vecPointer[stream2Index]);
+        EXPECT_EQ(attrib1Data[vectorIndex], xfbData[stream1Index]);
+        EXPECT_EQ(attrib2Data[vectorIndex], xfbData[stream2Index]);
     }
     glUnmapBuffer(GL_TRANSFORM_FEEDBACK_BUFFER);
 
@@ -1691,41 +1691,39 @@ TEST_P(TransformFeedbackTest, PackingBug)
 // compilation to fail
 TEST_P(TransformFeedbackTest, OptimizedVaryings)
 {
-    constexpr char kVS[] =
-        "#version 300 es\n"
-        "in vec4 a_vertex;\n"
-        "in vec3 a_normal; \n"
-        "\n"
-        "uniform Transform\n"
-        "{\n"
-        "    mat4 u_modelViewMatrix;\n"
-        "    mat4 u_projectionMatrix;\n"
-        "    mat3 u_normalMatrix;\n"
-        "};\n"
-        "\n"
-        "out vec3 normal;\n"
-        "out vec4 ecPosition;\n"
-        "\n"
-        "void main()\n"
-        "{\n"
-        "    normal = normalize(u_normalMatrix * a_normal);\n"
-        "    ecPosition = u_modelViewMatrix * a_vertex;\n"
-        "    gl_Position = u_projectionMatrix * ecPosition;\n"
-        "}\n";
+    constexpr char kVS[] = R"(#version 300 es
+in vec4 a_vertex;
+in vec3 a_normal;
 
-    constexpr char kFS[] =
-        "#version 300 es\n"
-        "precision mediump float;\n"
-        "\n"
-        "in vec3 normal;\n"
-        "in vec4 ecPosition;\n"
-        "\n"
-        "out vec4 fragColor;\n"
-        "\n"
-        "void main()\n"
-        "{\n"
-        "    fragColor = vec4(normal/2.0+vec3(0.5), 1);\n"
-        "}\n";
+uniform Transform
+{
+    mat4 u_modelViewMatrix;
+    mat4 u_projectionMatrix;
+    mat3 u_normalMatrix;
+};
+
+out vec3 normal;
+out vec4 ecPosition;
+
+void main()
+{
+    normal = normalize(u_normalMatrix * a_normal);
+    ecPosition = u_modelViewMatrix * a_vertex;
+    gl_Position = u_projectionMatrix * ecPosition;
+})";
+
+    constexpr char kFS[] = R"(#version 300 es
+precision mediump float;
+
+in vec3 normal;
+in vec4 ecPosition;
+
+out vec4 fragColor;
+
+void main()
+{
+    fragColor = vec4(normal/2.0+vec3(0.5), 1);
+})";
 
     std::vector<std::string> tfVaryings;
     tfVaryings.push_back("normal");
@@ -1738,30 +1736,25 @@ TEST_P(TransformFeedbackTest, OptimizedVaryings)
 // Test an edge case where two varyings are unreferenced in the frag shader.
 TEST_P(TransformFeedbackTest, TwoUnreferencedInFragShader)
 {
-    // TODO(anglebug.com/40096690) This fails after the upgrade to the 26.20.100.7870 driver.
-    ANGLE_SKIP_TEST_IF(IsWindows() && IsIntel() && IsVulkan());
-
     // TODO(jmadill): With points and rasterizer discard?
-    constexpr char kVS[] =
-        "#version 300 es\n"
-        "in vec3 position;\n"
-        "out vec3 outAttrib1;\n"
-        "out vec3 outAttrib2;\n"
-        "void main() {"
-        "  outAttrib1 = position;\n"
-        "  outAttrib2 = position;\n"
-        "  gl_Position = vec4(position, 1);\n"
-        "}";
+    constexpr char kVS[] = R"(#version 300 es
+in vec3 position;
+out vec3 outAttrib1;
+out vec3 outAttrib2;
+void main() {
+  outAttrib1 = position;
+  outAttrib2 = position;
+  gl_Position = vec4(position, 1);
+})";
 
-    constexpr char kFS[] =
-        "#version 300 es\n"
-        "precision mediump float;\n"
-        "out vec4 color;\n"
-        "in vec3 outAttrib1;\n"
-        "in vec3 outAttrib2;\n"
-        "void main() {\n"
-        "  color = vec4(0);\n"
-        "}";
+    constexpr char kFS[] = R"(#version 300 es
+precision mediump float;
+out vec4 color;
+in vec3 outAttrib1;
+in vec3 outAttrib2;
+void main() {
+  color = vec4(0);
+})";
 
     std::vector<std::string> tfVaryings;
     tfVaryings.push_back("outAttrib1");
@@ -1783,19 +1776,18 @@ TEST_P(TransformFeedbackTest, TwoUnreferencedInFragShader)
     glUseProgram(0);
     ASSERT_GL_NO_ERROR();
 
-    const void *mapPointer =
-        glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, sizeof(Vector3) * 2 * 6, GL_MAP_READ_BIT);
-    ASSERT_NE(nullptr, mapPointer);
+    auto xfbData = MapBufferRange<const Vector3>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                 sizeof(Vector3) * 2 * 6, GL_MAP_READ_BIT);
+    ASSERT_FALSE(xfbData.empty());
 
     const auto &quadVertices = GetQuadVertices();
 
-    const Vector3 *vecPointer = static_cast<const Vector3 *>(mapPointer);
     for (unsigned int vectorIndex = 0; vectorIndex < 3; ++vectorIndex)
     {
         unsigned int stream1Index = vectorIndex * 2;
         unsigned int stream2Index = vectorIndex * 2 + 1;
-        EXPECT_EQ(quadVertices[vectorIndex], vecPointer[stream1Index]);
-        EXPECT_EQ(quadVertices[vectorIndex], vecPointer[stream2Index]);
+        EXPECT_EQ(quadVertices[vectorIndex], xfbData[stream1Index]);
+        EXPECT_EQ(quadVertices[vectorIndex], xfbData[stream2Index]);
     }
     glUnmapBuffer(GL_TRANSFORM_FEEDBACK_BUFFER);
 
@@ -1809,25 +1801,20 @@ TEST_P(TransformFeedbackTest, OffsetResetOnBeginTransformFeedback)
     // http://anglebug.com/42263637
     ANGLE_SKIP_TEST_IF(IsNexus5X() && IsOpenGLES());
 
-    // TODO(anglebug.com/40096690) This fails after the upgrade to the 26.20.100.7870 driver.
-    ANGLE_SKIP_TEST_IF(IsWindows() && IsIntel() && IsVulkan());
+    constexpr char kVS[] = R"(#version 300 es
+in vec4 position;
+out vec4 outAttrib;
+void main() {
+  outAttrib = position;
+  gl_Position = vec4(0);
+})";
 
-    constexpr char kVS[] =
-        "#version 300 es\n"
-        "in vec4 position;\n"
-        "out vec4 outAttrib;\n"
-        "void main() {"
-        "  outAttrib = position;\n"
-        "  gl_Position = vec4(0);\n"
-        "}";
-
-    constexpr char kFS[] =
-        "#version 300 es\n"
-        "precision mediump float;\n"
-        "out vec4 color;\n"
-        "void main() {\n"
-        "  color = vec4(0);\n"
-        "}";
+    constexpr char kFS[] = R"(#version 300 es
+precision mediump float;
+out vec4 color;
+void main() {
+  color = vec4(0);
+})";
 
     std::vector<std::string> tfVaryings;
     tfVaryings.push_back("outAttrib");
@@ -1870,13 +1857,12 @@ TEST_P(TransformFeedbackTest, OffsetResetOnBeginTransformFeedback)
 
     glEndTransformFeedback();
 
-    const void *mapPointer =
-        glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, sizeof(Vector4) * 2, GL_MAP_READ_BIT);
-    ASSERT_NE(nullptr, mapPointer);
+    auto xfbData = MapBufferRange<const Vector4>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                 sizeof(Vector4) * 2, GL_MAP_READ_BIT);
+    ASSERT_FALSE(xfbData.empty());
 
-    const Vector4 *vecPointer = static_cast<const Vector4 *>(mapPointer);
-    ASSERT_EQ(drawVertex2, vecPointer[0]);
-    ASSERT_EQ(drawVertex1, vecPointer[1]);
+    ASSERT_EQ(drawVertex2, xfbData[0]);
+    ASSERT_EQ(drawVertex1, xfbData[1]);
 
     glUnmapBuffer(GL_TRANSFORM_FEEDBACK_BUFFER);
 
@@ -2079,25 +2065,23 @@ class TransformFeedbackTestES31 : public TransformFeedbackTestBase
 // Test that program link fails in case that transform feedback names including same array element.
 TEST_P(TransformFeedbackTestES31, SameArrayElementVaryings)
 {
-    constexpr char kVS[] =
-        "#version 310 es\n"
-        "in vec3 position;\n"
-        "out vec3 outAttribs[3];\n"
-        "void main() {"
-        "  outAttribs[0] = position;\n"
-        "  outAttribs[1] = vec3(0, 0, 0);\n"
-        "  outAttribs[2] = position;\n"
-        "  gl_Position = vec4(position, 1);\n"
-        "}";
+    constexpr char kVS[] = R"(#version 310 es
+in vec3 position;
+out vec3 outAttribs[3];
+void main() {
+  outAttribs[0] = position;
+  outAttribs[1] = vec3(0, 0, 0);
+  outAttribs[2] = position;
+  gl_Position = vec4(position, 1);
+})";
 
-    constexpr char kFS[] =
-        "#version 310 es\n"
-        "precision mediump float;\n"
-        "out vec4 color;\n"
-        "in vec3 outAttribs[3];\n"
-        "void main() {\n"
-        "  color = vec4(0);\n"
-        "}";
+    constexpr char kFS[] = R"(#version 310 es
+precision mediump float;
+out vec4 color;
+in vec3 outAttribs[3];
+void main() {
+  color = vec4(0);
+})";
 
     std::vector<std::string> tfVaryings;
     tfVaryings.push_back("outAttribs");
@@ -2110,23 +2094,21 @@ TEST_P(TransformFeedbackTestES31, SameArrayElementVaryings)
 // Test that program link fails in case to capture array element on a non-array varying.
 TEST_P(TransformFeedbackTestES31, ElementCaptureOnNonArrayVarying)
 {
-    constexpr char kVS[] =
-        "#version 310 es\n"
-        "in vec3 position;\n"
-        "out vec3 outAttrib;\n"
-        "void main() {"
-        "  outAttrib = position;\n"
-        "  gl_Position = vec4(position, 1);\n"
-        "}";
+    constexpr char kVS[] = R"(#version 310 es
+in vec3 position;
+out vec3 outAttrib;
+void main() {
+  outAttrib = position;
+  gl_Position = vec4(position, 1);
+})";
 
-    constexpr char kFS[] =
-        "#version 310 es\n"
-        "precision mediump float;\n"
-        "out vec4 color;\n"
-        "in vec3 outAttrib;\n"
-        "void main() {\n"
-        "  color = vec4(0);\n"
-        "}";
+    constexpr char kFS[] = R"(#version 310 es
+precision mediump float;
+out vec4 color;
+in vec3 outAttrib;
+void main() {
+  color = vec4(0);
+})";
 
     std::vector<std::string> tfVaryings;
     tfVaryings.push_back("outAttrib[1]");
@@ -2138,25 +2120,23 @@ TEST_P(TransformFeedbackTestES31, ElementCaptureOnNonArrayVarying)
 // Test that program link fails in case to capure an outbound array element.
 TEST_P(TransformFeedbackTestES31, CaptureOutboundElement)
 {
-    constexpr char kVS[] =
-        "#version 310 es\n"
-        "in vec3 position;\n"
-        "out vec3 outAttribs[3];\n"
-        "void main() {"
-        "  outAttribs[0] = position;\n"
-        "  outAttribs[1] = vec3(0, 0, 0);\n"
-        "  outAttribs[2] = position;\n"
-        "  gl_Position = vec4(position, 1);\n"
-        "}";
+    constexpr char kVS[] = R"(#version 310 es
+in vec3 position;
+out vec3 outAttribs[3];
+void main() {
+  outAttribs[0] = position;
+  outAttribs[1] = vec3(0, 0, 0);
+  outAttribs[2] = position;
+  gl_Position = vec4(position, 1);
+})";
 
-    constexpr char kFS[] =
-        "#version 310 es\n"
-        "precision mediump float;\n"
-        "out vec4 color;\n"
-        "in vec3 outAttribs[3];\n"
-        "void main() {\n"
-        "  color = vec4(0);\n"
-        "}";
+    constexpr char kFS[] = R"(#version 310 es
+precision mediump float;
+out vec4 color;
+in vec3 outAttribs[3];
+void main() {
+  color = vec4(0);
+})";
 
     std::vector<std::string> tfVaryings;
     tfVaryings.push_back("outAttribs[3]");
@@ -2173,25 +2153,23 @@ TEST_P(TransformFeedbackTestES31, DifferentArrayElementVaryings)
     ANGLE_SKIP_TEST_IF(IsVulkan() &&
                        !getEGLWindow()->isFeatureEnabled(Feature::EmulateTransformFeedback));
 
-    constexpr char kVS[] =
-        "#version 310 es\n"
-        "in vec3 position;\n"
-        "out vec3 outAttribs[3];\n"
-        "void main() {"
-        "  outAttribs[0] = position;\n"
-        "  outAttribs[1] = vec3(0, 0, 0);\n"
-        "  outAttribs[2] = position;\n"
-        "  gl_Position = vec4(position, 1);\n"
-        "}";
+    constexpr char kVS[] = R"(#version 310 es
+in vec3 position;
+out vec3 outAttribs[3];
+void main() {
+  outAttribs[0] = position;
+  outAttribs[1] = vec3(0, 0, 0);
+  outAttribs[2] = position;
+  gl_Position = vec4(position, 1);
+})";
 
-    constexpr char kFS[] =
-        "#version 310 es\n"
-        "precision mediump float;\n"
-        "out vec4 color;\n"
-        "in vec3 outAttribs[3];\n"
-        "void main() {\n"
-        "  color = vec4(0);\n"
-        "}";
+    constexpr char kFS[] = R"(#version 310 es
+precision mediump float;
+out vec4 color;
+in vec3 outAttribs[3];
+void main() {
+  color = vec4(0);
+})";
 
     std::vector<std::string> tfVaryings;
     tfVaryings.push_back("outAttribs[0]");
@@ -2213,19 +2191,18 @@ TEST_P(TransformFeedbackTestES31, DifferentArrayElementVaryings)
     glUseProgram(0);
     ASSERT_GL_NO_ERROR();
 
-    const GLvoid *mapPointer =
-        glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, sizeof(Vector3) * 2 * 6, GL_MAP_READ_BIT);
-    ASSERT_NE(nullptr, mapPointer);
+    auto xfbData = MapBufferRange<const Vector3>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                 sizeof(Vector3) * 2 * 6, GL_MAP_READ_BIT);
+    ASSERT_FALSE(xfbData.empty());
 
     const auto &quadVertices = GetQuadVertices();
 
-    const Vector3 *vecPointer = static_cast<const Vector3 *>(mapPointer);
     for (unsigned int vectorIndex = 0; vectorIndex < 3; ++vectorIndex)
     {
         unsigned int stream1Index = vectorIndex * 2;
         unsigned int stream2Index = vectorIndex * 2 + 1;
-        EXPECT_EQ(quadVertices[vectorIndex], vecPointer[stream1Index]);
-        EXPECT_EQ(quadVertices[vectorIndex], vecPointer[stream2Index]);
+        EXPECT_EQ(quadVertices[vectorIndex], xfbData[stream1Index]);
+        EXPECT_EQ(quadVertices[vectorIndex], xfbData[stream2Index]);
     }
     glUnmapBuffer(GL_TRANSFORM_FEEDBACK_BUFFER);
 
@@ -2240,25 +2217,23 @@ TEST_P(TransformFeedbackTestES31, DifferentArrayElementVaryingsNonZeroIndex)
     ANGLE_SKIP_TEST_IF(IsVulkan() &&
                        !getEGLWindow()->isFeatureEnabled(Feature::EmulateTransformFeedback));
 
-    constexpr char kVS[] =
-        "#version 310 es\n"
-        "in vec3 position;\n"
-        "out vec3 outAttribs[3];\n"
-        "void main() {"
-        "  outAttribs[0] = vec3(0, 0, 0);\n"
-        "  outAttribs[1] = position;\n"
-        "  outAttribs[2] = position;\n"
-        "  gl_Position = vec4(position, 1);\n"
-        "}";
+    constexpr char kVS[] = R"(#version 310 es
+in vec3 position;
+out vec3 outAttribs[3];
+void main() {
+  outAttribs[0] = vec3(0, 0, 0);
+  outAttribs[1] = position;
+  outAttribs[2] = position;
+  gl_Position = vec4(position, 1);
+})";
 
-    constexpr char kFS[] =
-        "#version 310 es\n"
-        "precision mediump float;\n"
-        "out vec4 color;\n"
-        "in vec3 outAttribs[3];\n"
-        "void main() {\n"
-        "  color = vec4(0);\n"
-        "}";
+    constexpr char kFS[] = R"(#version 310 es
+precision mediump float;
+out vec4 color;
+in vec3 outAttribs[3];
+void main() {
+  color = vec4(0);
+})";
 
     std::vector<std::string> tfVaryings;
     tfVaryings.push_back("outAttribs[1]");
@@ -2280,19 +2255,18 @@ TEST_P(TransformFeedbackTestES31, DifferentArrayElementVaryingsNonZeroIndex)
     glUseProgram(0);
     ASSERT_GL_NO_ERROR();
 
-    const GLvoid *mapPointer =
-        glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, sizeof(Vector3) * 2 * 6, GL_MAP_READ_BIT);
-    ASSERT_NE(nullptr, mapPointer);
+    auto xfbData = MapBufferRange<const Vector3>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                 sizeof(Vector3) * 2 * 6, GL_MAP_READ_BIT);
+    ASSERT_FALSE(xfbData.empty());
 
     const auto &quadVertices = GetQuadVertices();
 
-    const Vector3 *vecPointer = static_cast<const Vector3 *>(mapPointer);
     for (unsigned int vectorIndex = 0; vectorIndex < 3; ++vectorIndex)
     {
         unsigned int stream1Index = vectorIndex * 2;
         unsigned int stream2Index = vectorIndex * 2 + 1;
-        EXPECT_EQ(quadVertices[vectorIndex], vecPointer[stream1Index]);
-        EXPECT_EQ(quadVertices[vectorIndex], vecPointer[stream2Index]);
+        EXPECT_EQ(quadVertices[vectorIndex], xfbData[stream1Index]);
+        EXPECT_EQ(quadVertices[vectorIndex], xfbData[stream2Index]);
     }
     glUnmapBuffer(GL_TRANSFORM_FEEDBACK_BUFFER);
 
@@ -2355,19 +2329,18 @@ void main() {
     glUseProgram(0);
     ASSERT_GL_NO_ERROR();
 
-    const GLvoid *mapPointer =
-        glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, sizeof(Vector3) * 2 * 6, GL_MAP_READ_BIT);
-    ASSERT_NE(nullptr, mapPointer);
+    auto xfbData = MapBufferRange<const Vector3>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                 sizeof(Vector3) * 2 * 6, GL_MAP_READ_BIT);
+    ASSERT_FALSE(xfbData.empty());
 
     const auto &quadVertices = GetQuadVertices();
 
-    const Vector3 *vecPointer = static_cast<const Vector3 *>(mapPointer);
     for (unsigned int vectorIndex = 0; vectorIndex < 3; ++vectorIndex)
     {
         unsigned int stream1Index = vectorIndex * 2;
         unsigned int stream2Index = vectorIndex * 2 + 1;
-        EXPECT_EQ(quadVertices[vectorIndex], vecPointer[stream1Index]);
-        EXPECT_EQ(quadVertices[vectorIndex], vecPointer[stream2Index]);
+        EXPECT_EQ(quadVertices[vectorIndex], xfbData[stream1Index]);
+        EXPECT_EQ(quadVertices[vectorIndex], xfbData[stream2Index]);
     }
     glUnmapBuffer(GL_TRANSFORM_FEEDBACK_BUFFER);
 
@@ -2482,11 +2455,10 @@ TEST_P(TransformFeedbackTestES31, CaptureArray)
     glUseProgram(0);
     ASSERT_GL_NO_ERROR();
 
-    void *mappedBuffer =
-        glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, sizeof(float) * 3 * 6, GL_MAP_READ_BIT);
-    ASSERT_NE(nullptr, mappedBuffer);
+    auto mappedFloats = MapBufferRange<const float>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                    sizeof(float) * 3 * 6, GL_MAP_READ_BIT);
+    ASSERT_FALSE(mappedFloats.empty());
 
-    float *mappedFloats = static_cast<float *>(mappedBuffer);
     for (int i = 0; i < 6; i++)
     {
         EXPECT_NEAR(data1[i], mappedFloats[i * 3], 0.001f);
@@ -2526,26 +2498,21 @@ TEST_P(TransformFeedbackTest, NonExistentTransformFeedbackVaryingWithGLPrefix)
 // GLSL ES.
 TEST_P(TransformFeedbackTest, VaryingReservedOpenGLName)
 {
-    // TODO(anglebug.com/40096690) This fails after the upgrade to the 26.20.100.7870 driver.
-    ANGLE_SKIP_TEST_IF(IsWindows() && IsIntel() && IsVulkan());
+    constexpr char kVS[] = R"(#version 300 es
+in vec3 position;
+out vec3 buffer;
+void main() {
+  buffer = position;
+  gl_Position = vec4(position, 1);
+})";
 
-    constexpr char kVS[] =
-        "#version 300 es\n"
-        "in vec3 position;\n"
-        "out vec3 buffer;\n"
-        "void main() {\n"
-        "  buffer = position;\n"
-        "  gl_Position = vec4(position, 1);\n"
-        "}";
-
-    constexpr char kFS[] =
-        "#version 300 es\n"
-        "precision highp float;\n"
-        "out vec4 color;\n"
-        "in vec3 buffer;\n"
-        "void main() {\n"
-        "  color = vec4(0);\n"
-        "}";
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+out vec4 color;
+in vec3 buffer;
+void main() {
+  color = vec4(0);
+})";
 
     std::vector<std::string> tfVaryings;
     tfVaryings.push_back("buffer");
@@ -2566,16 +2533,15 @@ TEST_P(TransformFeedbackTest, VaryingReservedOpenGLName)
     glUseProgram(0);
     ASSERT_GL_NO_ERROR();
 
-    const GLvoid *mapPointer =
-        glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, sizeof(Vector3) * 6, GL_MAP_READ_BIT);
-    ASSERT_NE(nullptr, mapPointer);
+    auto xfbData = MapBufferRange<const Vector3>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                 sizeof(Vector3) * 6, GL_MAP_READ_BIT);
+    ASSERT_FALSE(xfbData.empty());
 
     const auto &quadVertices = GetQuadVertices();
 
-    const Vector3 *vecPointer = static_cast<const Vector3 *>(mapPointer);
     for (unsigned int vectorIndex = 0; vectorIndex < 3; ++vectorIndex)
     {
-        EXPECT_EQ(quadVertices[vectorIndex], vecPointer[vectorIndex]);
+        EXPECT_EQ(quadVertices[vectorIndex], xfbData[vectorIndex]);
     }
     glUnmapBuffer(GL_TRANSFORM_FEEDBACK_BUFFER);
 
@@ -2685,11 +2651,10 @@ TEST_P(TransformFeedbackTest, EndWithDifferentProgram)
 
     // Make sure that transform feedback did not happen. We always paused transform feedback before
     // rendering, but a buggy driver will fail to pause.
-    const void *mapPointer =
-        glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, sizeof(Vector4) * 4, GL_MAP_READ_BIT);
-    ASSERT_NE(nullptr, mapPointer);
-    const Vector4 *vecPointer = static_cast<const Vector4 *>(mapPointer);
-    ASSERT_EQ(vecPointer[0], Vector4(0, 0, 0, 0));
+    auto xfbData = MapBufferRange<const Vector4>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                 sizeof(Vector4) * 4, GL_MAP_READ_BIT);
+    ASSERT_FALSE(xfbData.empty());
+    ASSERT_EQ(xfbData[0], Vector4(0, 0, 0, 0));
     glUnmapBuffer(GL_TRANSFORM_FEEDBACK_BUFFER);
     ASSERT_GL_NO_ERROR();
 }
@@ -2757,11 +2722,10 @@ TEST_P(TransformFeedbackTest, EndWithDifferentProgramContextSwitch)
 
     // Make sure that transform feedback did not happen. We always paused transform feedback before
     // rendering, but a buggy driver will fail to pause.
-    const void *mapPointer =
-        glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, sizeof(Vector4) * 4, GL_MAP_READ_BIT);
-    ASSERT_NE(nullptr, mapPointer);
-    const Vector4 *vecPointer = static_cast<const Vector4 *>(mapPointer);
-    ASSERT_EQ(vecPointer[0], Vector4(0, 0, 0, 0));
+    auto xfbData = MapBufferRange<const Vector4>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                 sizeof(Vector4) * 4, GL_MAP_READ_BIT);
+    ASSERT_FALSE(xfbData.empty());
+    ASSERT_EQ(xfbData[0], Vector4(0, 0, 0, 0));
     glUnmapBuffer(GL_TRANSFORM_FEEDBACK_BUFFER);
     eglDestroyContext(display, context2);
     ASSERT_GL_NO_ERROR();
@@ -2836,30 +2800,26 @@ void TransformFeedbackTest::setupOverrunTest(const std::vector<GLfloat> &vertice
     glDrawArrays(GL_POINTS, 0, 6);
 }
 
-void VerifyVertexFloats(const GLfloat *mapPtrFloat,
+void VerifyVertexFloats(Span<const GLfloat> xfbFloats,
                         const std::vector<GLfloat> &vertices,
-                        size_t copies,
-                        size_t numFloats)
+                        size_t copies)
 {
     for (size_t floatIndex = 0; floatIndex < vertices.size() * copies; ++floatIndex)
     {
         size_t vertIndex = floatIndex % vertices.size();
-        ASSERT_EQ(mapPtrFloat[floatIndex], vertices[vertIndex]) << "at float index " << floatIndex;
+        ASSERT_EQ(xfbFloats[floatIndex], vertices[vertIndex]) << "at float index " << floatIndex;
     }
 
     // The rest should be zero.
-    for (size_t floatIndex = vertices.size() * copies; floatIndex < numFloats; ++floatIndex)
+    for (size_t floatIndex = vertices.size() * copies; floatIndex < xfbFloats.size(); ++floatIndex)
     {
-        ASSERT_EQ(mapPtrFloat[floatIndex], 0) << "at float index " << floatIndex;
+        ASSERT_EQ(xfbFloats[floatIndex], 0) << "at float index " << floatIndex;
     }
 }
 
 // Tests that stopping XFB works as expected.
 TEST_P(TransformFeedbackTest, Overrun)
 {
-    // TODO(anglebug.com/40096690) This fails after the upgrade to the 26.20.100.7870 driver.
-    ANGLE_SKIP_TEST_IF(IsWindows() && IsIntel() && IsVulkan());
-
     const std::vector<GLfloat> vertices = {
         -1.0f, 1.0f, 0.5f, 1.0f, -1.0f, -1.0f, 0.5f, 1.0f, 1.0f, -1.0f, 0.5f, 1.0f,
         -1.0f, 1.0f, 0.5f, 1.0f, 1.0f,  -1.0f, 0.5f, 1.0f, 1.0f, 1.0f,  0.5f, 1.0f,
@@ -2875,20 +2835,16 @@ TEST_P(TransformFeedbackTest, Overrun)
     ASSERT_GL_NO_ERROR();
 
     // Verify only the first data was output.
-    const void *mapPtr         = glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
-                                                  mTransformFeedbackBufferSize, GL_MAP_READ_BIT);
-    const GLfloat *mapPtrFloat = reinterpret_cast<const float *>(mapPtr);
+    auto xfbFloats = MapBufferRange<const GLfloat>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                   mTransformFeedbackBufferSize, GL_MAP_READ_BIT);
+    ASSERT_FALSE(xfbFloats.empty());
 
-    size_t numFloats = mTransformFeedbackBufferSize / sizeof(GLfloat);
-    VerifyVertexFloats(mapPtrFloat, vertices, 1, numFloats);
+    VerifyVertexFloats(xfbFloats, vertices, 1);
 }
 
 // Similar to the overrun test but with Pause instead of End.
 TEST_P(TransformFeedbackTest, OverrunWithPause)
 {
-    // TODO(anglebug.com/40096690) This fails after the upgrade to the 26.20.100.7870 driver.
-    ANGLE_SKIP_TEST_IF(IsWindows() && IsIntel() && IsVulkan());
-
     const std::vector<GLfloat> vertices = {
         -1.0f, 1.0f, 0.5f, 1.0f, -1.0f, -1.0f, 0.5f, 1.0f, 1.0f, -1.0f, 0.5f, 1.0f,
         -1.0f, 1.0f, 0.5f, 1.0f, 1.0f,  -1.0f, 0.5f, 1.0f, 1.0f, 1.0f,  0.5f, 1.0f,
@@ -2906,25 +2862,18 @@ TEST_P(TransformFeedbackTest, OverrunWithPause)
     ASSERT_GL_NO_ERROR();
 
     // Verify only the first data was output.
-    const void *mapPtr         = glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
-                                                  mTransformFeedbackBufferSize, GL_MAP_READ_BIT);
-    const GLfloat *mapPtrFloat = reinterpret_cast<const float *>(mapPtr);
+    auto xfbFloats = MapBufferRange<const GLfloat>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                   mTransformFeedbackBufferSize, GL_MAP_READ_BIT);
+    ASSERT_FALSE(xfbFloats.empty());
 
-    size_t numFloats = mTransformFeedbackBufferSize / sizeof(GLfloat);
-    VerifyVertexFloats(mapPtrFloat, vertices, 1, numFloats);
+    VerifyVertexFloats(xfbFloats, vertices, 1);
 }
 
 // Similar to the overrun test but with Pause instead of End.
 TEST_P(TransformFeedbackTest, OverrunWithPauseAndResume)
 {
-    // TODO(anglebug.com/40096690) This fails after the upgrade to the 26.20.100.7870 driver.
-    ANGLE_SKIP_TEST_IF(IsWindows() && IsIntel() && IsVulkan());
-
     // Fails on Adreno Pixel 2 GL drivers. Not a supported configuration.
     ANGLE_SKIP_TEST_IF(IsOpenGL() && IsAdreno() && IsAndroid());
-
-    // Fails on Windows Intel GL drivers. http://anglebug.com/42263296
-    ANGLE_SKIP_TEST_IF(IsOpenGL() && IsIntel() && IsWindows());
 
     const std::vector<GLfloat> vertices = {
         -1.0f, 1.0f, 0.5f, 1.0f, -1.0f, -1.0f, 0.5f, 1.0f, 1.0f, -1.0f, 0.5f, 1.0f,
@@ -2947,25 +2896,18 @@ TEST_P(TransformFeedbackTest, OverrunWithPauseAndResume)
     ASSERT_GL_NO_ERROR();
 
     // Verify only the first and third data was output.
-    const void *mapPtr         = glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
-                                                  mTransformFeedbackBufferSize, GL_MAP_READ_BIT);
-    const GLfloat *mapPtrFloat = reinterpret_cast<const float *>(mapPtr);
+    auto xfbFloats = MapBufferRange<const GLfloat>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                   mTransformFeedbackBufferSize, GL_MAP_READ_BIT);
+    ASSERT_FALSE(xfbFloats.empty());
 
-    size_t numFloats = mTransformFeedbackBufferSize / sizeof(GLfloat);
-    VerifyVertexFloats(mapPtrFloat, vertices, 2, numFloats);
+    VerifyVertexFloats(xfbFloats, vertices, 2);
 }
 
 // Similar to the overrun Pause/Resume test but with more than one Pause and Resume.
 TEST_P(TransformFeedbackTest, OverrunWithMultiplePauseAndResume)
 {
-    // TODO(anglebug.com/40096690) This fails after the upgrade to the 26.20.100.7870 driver.
-    ANGLE_SKIP_TEST_IF(IsWindows() && IsIntel() && IsVulkan());
-
     // Fails on Adreno Pixel 2 GL drivers. Not a supported configuration.
     ANGLE_SKIP_TEST_IF(IsOpenGL() && IsAdreno() && IsAndroid());
-
-    // Fails on Windows Intel GL drivers. http://anglebug.com/42263296
-    ANGLE_SKIP_TEST_IF(IsOpenGL() && IsIntel() && IsWindows());
 
     const std::vector<GLfloat> vertices = {
         -1.0f, 1.0f, 0.5f, 1.0f, -1.0f, -1.0f, 0.5f, 1.0f, 1.0f, -1.0f, 0.5f, 1.0f,
@@ -2990,21 +2932,16 @@ TEST_P(TransformFeedbackTest, OverrunWithMultiplePauseAndResume)
     ASSERT_GL_NO_ERROR();
 
     // Verify only the first and third data was output.
-    const void *mapPtr         = glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
-                                                  mTransformFeedbackBufferSize, GL_MAP_READ_BIT);
-    const GLfloat *mapPtrFloat = reinterpret_cast<const float *>(mapPtr);
+    auto xfbFloats = MapBufferRange<const GLfloat>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                   mTransformFeedbackBufferSize, GL_MAP_READ_BIT);
+    ASSERT_FALSE(xfbFloats.empty());
 
-    size_t numFloats = mTransformFeedbackBufferSize / sizeof(GLfloat);
-    VerifyVertexFloats(mapPtrFloat, vertices, 3, numFloats);
+    VerifyVertexFloats(xfbFloats, vertices, 3);
 }
 
 // Tests begin/draw/end/*bindBuffer*/begin/draw/end.
 TEST_P(TransformFeedbackTest, EndThenBindNewBufferAndRestart)
 {
-
-    // TODO(anglebug.com/40096690) This fails after the upgrade to the 26.20.100.7870 driver.
-    ANGLE_SKIP_TEST_IF(IsWindows() && IsIntel() && IsVulkan());
-
     // Set the program's transform feedback varyings (just gl_Position)
     std::vector<std::string> tfVaryings;
     tfVaryings.push_back("gl_Position");
@@ -3057,22 +2994,18 @@ TEST_P(TransformFeedbackTest, EndThenBindNewBufferAndRestart)
 
     // Read back buffer datas.
     glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER, mTransformFeedbackBuffer);
-    void *posMap1 = glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, posBytes, GL_MAP_READ_BIT);
-    ASSERT_NE(posMap1, nullptr);
+    auto posMap1 =
+        MapBufferRange<const GLfloat>(GL_TRANSFORM_FEEDBACK_BUFFER, 0, posBytes, GL_MAP_READ_BIT);
+    ASSERT_FALSE(posMap1.empty());
 
-    std::vector<GLfloat> actualData1(posData1.size());
-    memcpy(actualData1.data(), posMap1, posBytes);
-
-    EXPECT_EQ(posData1, actualData1);
+    EXPECT_EQ(Span(posData1), posMap1);
 
     glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER, secondBuffer);
-    void *posMap2 = glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, posBytes, GL_MAP_READ_BIT);
-    ASSERT_NE(posMap2, nullptr);
+    auto posMap2 =
+        MapBufferRange<const GLfloat>(GL_TRANSFORM_FEEDBACK_BUFFER, 0, posBytes, GL_MAP_READ_BIT);
+    ASSERT_FALSE(posMap2.empty());
 
-    std::vector<GLfloat> actualData2(posData2.size());
-    memcpy(actualData2.data(), posMap2, posBytes);
-
-    EXPECT_EQ(posData2, actualData2);
+    EXPECT_EQ(Span(posData2), posMap2);
 }
 
 // Draw without transform feedback, then with it.  In this test, there are no uniforms.  Regression
@@ -3118,14 +3051,12 @@ void main() {
 
     // Initialize buffers.
     glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer);
-    glBufferData(GL_ARRAY_BUFFER, kAttribInitData.size() * sizeof(kAttribInitData[0]),
-                 kAttribInitData.data(), GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(kAttribInitData), kAttribInitData.data(), GL_STATIC_DRAW);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBuffer);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, kIndexInitData.size() * sizeof(kIndexInitData[0]),
-                 kIndexInitData.data(), GL_STATIC_DRAW);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(kIndexInitData), kIndexInitData.data(),
+                 GL_STATIC_DRAW);
     glBindBuffer(GL_ARRAY_BUFFER, xfbBuffer);
-    glBufferData(GL_ARRAY_BUFFER, kXfbInitData.size() * sizeof(kXfbInitData[0]),
-                 kXfbInitData.data(), GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(kXfbInitData), kXfbInitData.data(), GL_STATIC_DRAW);
 
     // This tests that having a transform feedback buffer bound in an unbound VAO
     // does not affect anything.
@@ -3156,11 +3087,10 @@ void main() {
     glEndTransformFeedback();
 
     // Verify transform feedback buffer.
-    void *mappedBuffer = glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
-                                          kXfbInitData.size() * sizeof(float), GL_MAP_READ_BIT);
-    ASSERT_NE(nullptr, mappedBuffer);
+    auto xfbOutput = MapBufferRange<const float>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                 sizeof(kXfbInitData), GL_MAP_READ_BIT);
+    ASSERT_FALSE(xfbOutput.empty());
 
-    float *xfbOutput = static_cast<float *>(mappedBuffer);
     for (size_t index = 0; index < kXfbInitData.size(); ++index)
     {
         EXPECT_EQ(xfbOutput[index], kAttribInitData[index] * 2);
@@ -3384,9 +3314,10 @@ void main()
         glDrawArrays(GL_POINTS, 0, 1);
         glEndTransformFeedback();
 
-        const float *bufferData = static_cast<float *>(glMapBufferRange(
-            GL_TRANSFORM_FEEDBACK_BUFFER, 0, kBufferSize * sizeof(float), GL_MAP_READ_BIT));
+        auto bufferData = MapBufferRange<const float>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                      kBufferSize * sizeof(float), GL_MAP_READ_BIT);
         EXPECT_GL_NO_ERROR();
+        ASSERT_FALSE(bufferData.empty());
 
         for (uint32_t index = 0; index < kBufferSize; ++index)
         {
@@ -3412,14 +3343,6 @@ class TransformFeedbackTestES32 : public TransformFeedbackTest
 // queries works.
 TEST_P(TransformFeedbackTestES32, PrimitivesWrittenAndGenerated)
 {
-    // TODO(anglebug.com/40096690) This fails after the upgrade to the 26.20.100.7870 driver.
-    ANGLE_SKIP_TEST_IF(IsWindows() && IsIntel() && IsVulkan());
-
-    // No VK_EXT_transform_feedback support on the following configurations.
-    // http://anglebug.com/42263974
-    ANGLE_SKIP_TEST_IF(IsVulkan() && IsAMD() && IsWindows());
-    ANGLE_SKIP_TEST_IF(IsVulkan() && IsNVIDIA() && IsWindows7());
-
     // http://anglebug.com/42264074
     ANGLE_SKIP_TEST_IF(IsVulkan() && IsLinux());
 
@@ -4097,8 +4020,9 @@ void main()
     glDrawArrays(GL_POINTS, 0, 1);
     glEndTransformFeedback();
 
-    const float *bufferData = static_cast<float *>(glMapBufferRange(
-        GL_TRANSFORM_FEEDBACK_BUFFER, 0, totalSize * sizeof(float), GL_MAP_READ_BIT));
+    auto bufferData = MapBufferRange<const float>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                  totalSize * sizeof(float), GL_MAP_READ_BIT);
+    ASSERT_FALSE(bufferData.empty());
 
     size_t currentOffset = 0;
     for (size_t index = 0; index < kCapturedVaryingsCount; ++index)
@@ -4198,9 +4122,9 @@ void main()
     {
         glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER, xfbBuffers[index]);
 
-        const float *bufferData = static_cast<float *>(
-            glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, kCaptureSizes[index] * sizeof(float),
-                             GL_MAP_READ_BIT));
+        auto bufferData = MapBufferRange<const float>(
+            GL_TRANSFORM_FEEDBACK_BUFFER, 0, kCaptureSizes[index] * sizeof(float), GL_MAP_READ_BIT);
+        ASSERT_FALSE(bufferData.empty());
 
         for (size_t component = 0; component < kCaptureSizes[index]; ++component)
         {
@@ -4343,11 +4267,10 @@ void main()
 
     EXPECT_EQ(primitivesWritten, 6u);
 
-    void *mappedBuffer = glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
-                                          sizeof(float) * 4 * 3 * 2, GL_MAP_READ_BIT);
-    ASSERT_NE(nullptr, mappedBuffer);
+    auto mappedFloats = MapBufferRange<const float>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                    sizeof(float) * 4 * 3 * 2, GL_MAP_READ_BIT);
+    ASSERT_FALSE(mappedFloats.empty());
 
-    float *mappedFloats = static_cast<float *>(mappedBuffer);
     for (unsigned int cnt = 0; cnt < 6; ++cnt)
     {
         EXPECT_NEAR(mappedFloats[4 * cnt + 0], 0.25f, 0.01f) << cnt;
@@ -4389,9 +4312,10 @@ void main (void)
     glBindTransformFeedback(GL_TRANSFORM_FEEDBACK, tf);
     glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER, xfbBuf);
 
-    constexpr size_t maxResults = 10;
-    std::vector<float> clearData(10, 100.0);
-    glBufferData(GL_TRANSFORM_FEEDBACK_BUFFER, maxResults * 4, clearData.data(), GL_DYNAMIC_READ);
+    constexpr std::array clearData = {100.0f, 100.0f, 100.0f, 100.0f, 100.0f,
+                                      100.0f, 100.0f, 100.0f, 100.0f, 100.0f};
+    glBufferData(GL_TRANSFORM_FEEDBACK_BUFFER, sizeof(clearData), clearData.data(),
+                 GL_DYNAMIC_READ);
     glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, xfbBuf);
 
     GLBuffer srcBuffer;
@@ -4418,9 +4342,9 @@ void main (void)
     EXPECT_GL_NO_ERROR();
     EXPECT_EQ(primitivesWritten, 3u);
 
-    void *resultBuffer =
-        glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, maxResults * 4, GL_MAP_READ_BIT);
-    const float *actual        = reinterpret_cast<const float *>(resultBuffer);
+    auto actual = MapBufferRange<const float>(GL_TRANSFORM_FEEDBACK_BUFFER, 0, sizeof(clearData),
+                                              GL_MAP_READ_BIT);
+    ASSERT_FALSE(actual.empty());
     static constexpr std::array<float, 10> expected = {
         22,  24, 26, 28, 30, 32,  // from first draw, 2 triangles
         36,  38, 40,              // from second draw, 1 triangle
@@ -4475,24 +4399,22 @@ TEST_P(TransformFeedbackTest, DeletePausedTransformFeedbackBuffer)
 }
 
 // Test that using a transform feedback program with a base instance draw call works.
-TEST_P(TransformFeedbackTest, BaseInstance)
+TEST_P(TransformFeedbackBaseInstanceTest, BaseInstance)
 {
     ANGLE_SKIP_TEST_IF(!EnsureGLExtensionEnabled("GL_ANGLE_base_vertex_base_instance"));
 
-    constexpr char kVS[] =
-        "#version 300 es\n"
-        "in float in_value;\n"
-        "out float out_value;\n"
-        "void main() {\n"
-        "  out_value = in_value * 2.0;\n"
-        "}";
+    constexpr char kVS[] = R"(#version 300 es
+in float in_value;
+out float out_value;
+void main() {
+  out_value = in_value * 2.0;
+})";
 
-    constexpr char kFS[] =
-        "#version 300 es\n"
-        "out mediump vec4 color;\n"
-        "void main() {\n"
-        "  color = vec4(0.0, 1.0, 0.0, 1.0);\n"
-        "}";
+    constexpr char kFS[] = R"(#version 300 es
+out mediump vec4 color;
+void main() {
+  color = vec4(0.0, 1.0, 0.0, 1.0);
+})";
 
     std::vector<std::string> tfVaryings;
     tfVaryings.push_back("out_value");
@@ -4524,11 +4446,10 @@ TEST_P(TransformFeedbackTest, BaseInstance)
 
     glUseProgram(0);
 
-    void *mappedBuffer =
-        glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, sizeof(float) * 10, GL_MAP_READ_BIT);
-    ASSERT_NE(nullptr, mappedBuffer);
+    auto mappedFloats = MapBufferRange<const float>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                    sizeof(float) * 10, GL_MAP_READ_BIT);
+    ASSERT_FALSE(mappedFloats.empty());
 
-    float *mappedFloats = static_cast<float *>(mappedBuffer);
     for (unsigned int cnt = 0; cnt < 10; ++cnt)
     {
         EXPECT_EQ(attribData[cnt] * 2, mappedFloats[cnt]);
@@ -4713,7 +4634,14 @@ TEST_P(TransformFeedbackTest, RenderOnceChangeXfbBufferRenderAgain)
 
     glBufferData(GL_TRANSFORM_FEEDBACK_BUFFER, 40, nullptr, GL_DYNAMIC_READ);
     drawQuad(drawColor, essl3_shaders::PositionAttrib(), 0.5f);
-    EXPECT_GL_ERROR(GL_INVALID_OPERATION);
+    if (isAtLeastClientVersion(3, 2))
+    {
+        EXPECT_GL_NO_ERROR();
+    }
+    else
+    {
+        EXPECT_GL_ERROR(GL_INVALID_OPERATION);
+    }
 
     glEndTransformFeedback();
     EXPECT_GL_NO_ERROR();
@@ -4795,8 +4723,9 @@ TEST_P(TransformFeedbackTestES31, ModeMismatchButSameClass)
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     glEndTransformFeedback();
 
-    const GLfloat *mapped = (const GLfloat *)glMapBufferRange(
-        GL_TRANSFORM_FEEDBACK_BUFFER, 0, 6 * 4 * sizeof(float), GL_MAP_READ_BIT);
+    auto mapped = MapBufferRange<const GLfloat>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                6 * 4 * sizeof(float), GL_MAP_READ_BIT);
+    ASSERT_FALSE(mapped.empty());
 
     // First triangle
     EXPECT_EQ(mapped[0], -1.0);
@@ -4882,8 +4811,9 @@ TEST_P(TransformFeedbackTestES31, ModeMismatchClassMismatch)
     glDrawArraysIndirect(GL_TRIANGLE_STRIP, nullptr);
     glEndTransformFeedback();
 
-    const GLfloat *mapped = (const GLfloat *)glMapBufferRange(
-        GL_TRANSFORM_FEEDBACK_BUFFER, 0, 6 * 4 * sizeof(float), GL_MAP_READ_BIT);
+    auto mapped = MapBufferRange<const GLfloat>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                6 * 4 * sizeof(float), GL_MAP_READ_BIT);
+    ASSERT_FALSE(mapped.empty());
 
     // First triangle
     EXPECT_EQ(mapped[0], -1.0);
@@ -5446,11 +5376,9 @@ TEST_P(TransformFeedbackTest, InstancedOverflowIncompletePrimitive)
     ASSERT_GL_NO_ERROR();
 
     // Map buffer and check results.
-    void *mappedBuffer =
-        glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, kBufferSize, GL_MAP_READ_BIT);
-    ASSERT_NE(nullptr, mappedBuffer);
-
-    float *mappedFloats = static_cast<float *>(mappedBuffer);
+    auto mappedFloats =
+        MapBufferRange<const float>(GL_TRANSFORM_FEEDBACK_BUFFER, 0, kBufferSize, GL_MAP_READ_BIT);
+    ASSERT_FALSE(mappedFloats.empty());
 
     // Instance 0 should fill the first 9 floats with values 0 to 8.
     for (unsigned int i = 0; i < 9; ++i)
@@ -5471,6 +5399,478 @@ TEST_P(TransformFeedbackTest, InstancedOverflowIncompletePrimitive)
     glGetQueryObjectuiv(primitivesWrittenQuery, GL_QUERY_RESULT_EXT, &primitivesWritten);
     // 3 triangles from instance 0 + 3 triangles from instance 1 = 6 triangles.
     EXPECT_EQ(6u, primitivesWritten);
+}
+
+// Test that an instanced attribute with a non-zero divisor produces the expected value across
+// all vertices of an instance, even after an intervening draw where the attribute was disabled.
+TEST_P(TransformFeedbackTest, InstancedAttributeAfterDisabledAttribDraw)
+{
+    constexpr char kVS[] = R"(#version 300 es
+layout(location=0) in vec4 value;
+out vec4 captured;
+void main() {
+  captured = value;
+  gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+  gl_PointSize = 1.0;
+})";
+
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+out vec4 color;
+void main() {
+  color = vec4(0.0);
+})";
+
+    std::vector<std::string> tfVaryings = {"captured"};
+    ANGLE_GL_PROGRAM_TRANSFORM_FEEDBACK(program, kVS, kFS, tfVaryings, GL_INTERLEAVED_ATTRIBS);
+    glUseProgram(program);
+
+    constexpr std::array<float, 4> kMarker = {11.25f, 22.5f, 33.75f, 44.125f};
+    GLBuffer source;
+    glBindBuffer(GL_ARRAY_BUFFER, source);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(kMarker), kMarker.data(), GL_DYNAMIC_DRAW);
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 16, nullptr);
+    glVertexAttribDivisor(0, 0xffffffffu);
+
+    // Initial draw with attribute 0 disabled.
+    glDisableVertexAttribArray(0);
+    glVertexAttrib4fv(0, kMarker.data());
+    glDrawArraysInstanced(GL_POINTS, 0, 1, 1);
+    glFinish();
+
+    // Re-enable attribute 0 and capture vertices via transform feedback in an instanced draw.
+    glEnableVertexAttribArray(0);
+    constexpr GLsizei kCount = 64;
+    GLBuffer destination;
+    glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER, destination);
+    glBufferData(GL_TRANSFORM_FEEDBACK_BUFFER, kCount * sizeof(kMarker), nullptr, GL_DYNAMIC_READ);
+    glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, destination);
+
+    glEnable(GL_RASTERIZER_DISCARD);
+    glBeginTransformFeedback(GL_POINTS);
+    glDrawArraysInstanced(GL_POINTS, 0, kCount, 1);
+    glEndTransformFeedback();
+    glDisable(GL_RASTERIZER_DISCARD);
+    glFinish();
+    ASSERT_GL_NO_ERROR();
+
+    auto captured = MapBufferRange<const float>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                kCount * sizeof(kMarker), GL_MAP_READ_BIT);
+    ASSERT_FALSE(captured.empty());
+    for (GLsizei vertex = 0; vertex < kCount; ++vertex)
+    {
+        EXPECT_EQ(kMarker[0], captured[vertex * 4 + 0]) << "vertex " << vertex;
+        EXPECT_EQ(kMarker[1], captured[vertex * 4 + 1]) << "vertex " << vertex;
+        EXPECT_EQ(kMarker[2], captured[vertex * 4 + 2]) << "vertex " << vertex;
+        EXPECT_EQ(kMarker[3], captured[vertex * 4 + 3]) << "vertex " << vertex;
+    }
+    glUnmapBuffer(GL_TRANSFORM_FEEDBACK_BUFFER);
+}
+
+// Test that linking an unrelated program while transform feedback is active and unpaused keeps
+// program state synchronized when pausing transform feedback, switching programs, resuming, or
+// starting a subsequent transform feedback pass.
+//
+// Note: the shaders in the LinkOtherProgramWhileActive* tests are intentionally distinct from the
+// ones used elsewhere.  If an identical program was linked before (e.g. by another test on the
+// same display), the link may be served from the program cache.  That goes through
+// ProgramGL::load() instead of ProgramGL::postLinkJobImpl(), and would not exercise the bug.
+TEST_P(TransformFeedbackTest, LinkOtherProgramWhileActiveThenPauseAndDraw)
+{
+    constexpr char kXfbVS[] = R"(#version 300 es
+out float v_tf;
+void main()
+{
+    vec2 pos = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    gl_Position = vec4(pos * 2.0 - 1.0, 0.0, 1.0);
+    v_tf = float(gl_VertexID + 1);
+})";
+
+    constexpr char kRedFS[] = R"(#version 300 es
+precision mediump float;
+out vec4 color;
+void main()
+{
+    color = vec4(1.0, 0.0, 0.0, 1.0);
+})";
+
+    constexpr char kPlainVS[] = R"(#version 300 es
+void main()
+{
+    vec2 pos = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    gl_Position = vec4(pos * 2.0 - 1.0, 0.0, 1.0);
+})";
+
+    constexpr char kGreenFS[] = R"(#version 300 es
+precision mediump float;
+out vec4 color;
+void main()
+{
+    const float kGreenValue = 1.0;
+    color = vec4(0.0, kGreenValue, 0.0, 1.0);
+})";
+
+    std::vector<std::string> tfVaryings = {"v_tf"};
+    ANGLE_GL_PROGRAM_TRANSFORM_FEEDBACK(xfbProgram, kXfbVS, kRedFS, tfVaryings,
+                                        GL_INTERLEAVED_ATTRIBS);
+
+    glBindTransformFeedback(GL_TRANSFORM_FEEDBACK, mTransformFeedback);
+    glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, mTransformFeedbackBuffer);
+
+    glUseProgram(xfbProgram);
+    glBeginTransformFeedback(GL_TRIANGLES);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    // Link an unrelated program while transform feedback is active and unpaused.
+    ANGLE_GL_PROGRAM(otherProgram, kPlainVS, kGreenFS);
+
+    glPauseTransformFeedback();
+    ASSERT_GL_NO_ERROR();
+
+    glUseProgram(otherProgram);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    ASSERT_GL_NO_ERROR();
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+
+    // Resume transform feedback on the original program and capture a second primitive.
+    glUseProgram(xfbProgram);
+    glResumeTransformFeedback();
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glEndTransformFeedback();
+    ASSERT_GL_NO_ERROR();
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::red);
+
+    {
+        auto captured = MapBufferRange<const float>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                    6 * sizeof(float), GL_MAP_READ_BIT);
+        ASSERT_FALSE(captured.empty());
+        for (size_t i = 0; i < captured.size(); ++i)
+        {
+            EXPECT_EQ(static_cast<float>((i % 3) + 1), captured[i]) << "index " << i;
+        }
+        glUnmapBuffer(GL_TRANSFORM_FEEDBACK_BUFFER);
+    }
+
+    // Start a second transform feedback session on the same object after drawing with otherProgram.
+    glUseProgram(otherProgram);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    const std::array<float, 3> kZeroData = {0.0f, 0.0f, 0.0f};
+    glBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0, sizeof(kZeroData), kZeroData.data());
+    glUseProgram(xfbProgram);
+    glBeginTransformFeedback(GL_TRIANGLES);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glEndTransformFeedback();
+    ASSERT_GL_NO_ERROR();
+
+    {
+        auto captured = MapBufferRange<const float>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                    3 * sizeof(float), GL_MAP_READ_BIT);
+        ASSERT_FALSE(captured.empty());
+        for (size_t i = 0; i < captured.size(); ++i)
+        {
+            EXPECT_EQ(static_cast<float>(i + 1), captured[i]) << "index " << i;
+        }
+        glUnmapBuffer(GL_TRANSFORM_FEEDBACK_BUFFER);
+    }
+}
+
+// Test that linking unrelated programs while transform feedback is active and unpaused preserves
+// transform feedback capture on subsequent draws and clean termination without explicit pause.
+TEST_P(TransformFeedbackTest, LinkOtherProgramWhileActiveAndContinueCapture)
+{
+    constexpr char kXfbVS[] = R"(#version 300 es
+out float v_tf;
+void main()
+{
+    vec2 pos = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    gl_Position = vec4(pos * 2.0 - 1.0, 0.0, 1.0);
+    v_tf = float(gl_VertexID + 10);
+})";
+
+    constexpr char kRedFS[] = R"(#version 300 es
+precision mediump float;
+out vec4 color;
+void main()
+{
+    color = vec4(1.0, 0.0, 0.0, 1.0);
+})";
+
+    constexpr char kPlainVS[] = R"(#version 300 es
+void main()
+{
+    vec2 pos = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    gl_Position = vec4(pos * 2.0 - 1.0, 0.0, 1.0);
+})";
+
+    constexpr char kBlueFS[] = R"(#version 300 es
+precision mediump float;
+out vec4 color;
+void main()
+{
+    const float kBlueValue = 1.0;
+    color = vec4(0.0, 0.0, kBlueValue, 1.0);
+})";
+
+    constexpr char kYellowFS[] = R"(#version 300 es
+precision mediump float;
+out vec4 color;
+void main()
+{
+    const float kYellowValue = 1.0;
+    color = vec4(kYellowValue, kYellowValue, 0.0, 1.0);
+})";
+
+    std::vector<std::string> tfVaryings = {"v_tf"};
+    ANGLE_GL_PROGRAM_TRANSFORM_FEEDBACK(xfbProgram, kXfbVS, kRedFS, tfVaryings,
+                                        GL_INTERLEAVED_ATTRIBS);
+
+    glBindTransformFeedback(GL_TRANSFORM_FEEDBACK, mTransformFeedback);
+    glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, mTransformFeedbackBuffer);
+
+    glUseProgram(xfbProgram);
+    glBeginTransformFeedback(GL_TRIANGLES);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    // Link an unrelated program and continue drawing with active transform feedback on xfbProgram.
+    ANGLE_GL_PROGRAM(blueProgram, kPlainVS, kBlueFS);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    // Link and delete a temporary program before ending transform feedback.
+    {
+        ANGLE_GL_PROGRAM(tempProgram, kPlainVS, kYellowFS);
+    }
+    glEndTransformFeedback();
+    ASSERT_GL_NO_ERROR();
+
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    ASSERT_GL_NO_ERROR();
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::red);
+
+    // Create a new program (which may recycle the deleted native ID and hit the program cache) and
+    // verify its draw executes with synchronized program state.
+    ANGLE_GL_PROGRAM(cachedBlueProgram, kPlainVS, kBlueFS);
+    glUseProgram(cachedBlueProgram);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    ASSERT_GL_NO_ERROR();
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::blue);
+
+    auto captured = MapBufferRange<const float>(GL_TRANSFORM_FEEDBACK_BUFFER, 0, 6 * sizeof(float),
+                                                GL_MAP_READ_BIT);
+    ASSERT_FALSE(captured.empty());
+    for (size_t i = 0; i < captured.size(); ++i)
+    {
+        EXPECT_EQ(static_cast<float>((i % 3) + 10), captured[i]) << "index " << i;
+    }
+    glUnmapBuffer(GL_TRANSFORM_FEEDBACK_BUFFER);
+}
+
+// Test that creating a program on one context and linking it on a shared context in another
+// virtualization group while transform feedback is active keeps both contexts' program state
+// synchronized, including after the linking context is destroyed.
+TEST_P(TransformFeedbackTest, LinkSharedProgramAcrossContextsWhileActive)
+{
+    EGLWindow *window  = getEGLWindow();
+    EGLDisplay display = window->getDisplay();
+    EGLSurface surface = window->getSurface();
+
+    EGLint extraAttributes1[] = {EGL_CONTEXT_VIRTUALIZATION_GROUP_ANGLE, 1, EGL_NONE};
+    EGLint extraAttributes2[] = {EGL_CONTEXT_VIRTUALIZATION_GROUP_ANGLE, 2, EGL_NONE};
+    if (!IsEGLDisplayExtensionEnabled(display, "EGL_ANGLE_context_virtualization"))
+    {
+        extraAttributes1[0] = EGL_NONE;
+        extraAttributes2[0] = EGL_NONE;
+    }
+
+    EGLContext baseContext = eglGetCurrentContext();
+    EGLContext context1    = EGL_NO_CONTEXT;
+    EGLContext context2    = EGL_NO_CONTEXT;
+
+    struct ScopedContextCleanup
+    {
+        EGLDisplay display;
+        EGLSurface surface;
+        EGLContext baseContext;
+        EGLContext *context1;
+        EGLContext *context2;
+        ~ScopedContextCleanup()
+        {
+            eglMakeCurrent(display, surface, surface, baseContext);
+            if (*context2 != EGL_NO_CONTEXT)
+            {
+                eglDestroyContext(display, *context2);
+            }
+            if (*context1 != EGL_NO_CONTEXT)
+            {
+                eglDestroyContext(display, *context1);
+            }
+        }
+    } cleanup{display, surface, baseContext, &context1, &context2};
+
+    context1 = window->createContext(EGL_NO_CONTEXT, extraAttributes1);
+    ASSERT_NE(context1, EGL_NO_CONTEXT);
+    context2 = window->createContext(context1, extraAttributes2);
+    ASSERT_NE(context2, EGL_NO_CONTEXT);
+
+    constexpr char kXfbVS[] = R"(#version 300 es
+out float v_tf;
+void main()
+{
+    vec2 pos = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    gl_Position = vec4(pos * 2.0 - 1.0, 0.0, 1.0);
+    v_tf = float(gl_VertexID + 1);
+})";
+
+    constexpr char kPlainVS[] = R"(#version 300 es
+void main()
+{
+    vec2 pos = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    gl_Position = vec4(pos * 2.0 - 1.0, 0.0, 1.0);
+})";
+
+    constexpr char kRedFS[] = R"(#version 300 es
+precision mediump float;
+out vec4 color;
+void main()
+{
+    color = vec4(1.0, 0.0, 0.0, 1.0);
+})";
+
+    constexpr char kSharedUniformFS[] = R"(#version 300 es
+precision mediump float;
+uniform vec4 u_colorOffset;
+out vec4 color;
+void main()
+{
+    color = vec4(0.0, 1.0, 0.0, 1.0) + u_colorOffset;
+})";
+
+    ASSERT_EGL_TRUE(eglMakeCurrent(display, surface, surface, context1));
+    {
+        ANGLE_GL_PROGRAM(redProgram, kPlainVS, kRedFS);
+        glUseProgram(redProgram);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        ASSERT_GL_NO_ERROR();
+        EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::red);
+
+        // Create and attach shaders for sharedProgram on context1 without linking yet.
+        GLShader sharedVS(GL_VERTEX_SHADER);
+        GLShader sharedFS(GL_FRAGMENT_SHADER);
+        const char *vsSrc = kPlainVS;
+        const char *fsSrc = kSharedUniformFS;
+        glShaderSource(sharedVS, 1, &vsSrc, nullptr);
+        glCompileShader(sharedVS);
+        glShaderSource(sharedFS, 1, &fsSrc, nullptr);
+        glCompileShader(sharedFS);
+
+        GLProgram sharedProgram;
+        glAttachShader(sharedProgram, sharedVS);
+        glAttachShader(sharedProgram, sharedFS);
+
+        // Switch to context2, start transform feedback, and link sharedProgram while active.
+        ASSERT_EGL_TRUE(eglMakeCurrent(display, surface, surface, context2));
+        {
+            std::vector<std::string> tfVaryings = {"v_tf"};
+            ANGLE_GL_PROGRAM_TRANSFORM_FEEDBACK(xfbProgram, kXfbVS, kRedFS, tfVaryings,
+                                                GL_INTERLEAVED_ATTRIBS);
+            GLTransformFeedback tf;
+            GLBuffer tfBuffer;
+            glBindTransformFeedback(GL_TRANSFORM_FEEDBACK, tf);
+            glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER, tfBuffer);
+            glBufferData(GL_TRANSFORM_FEEDBACK_BUFFER, 1024, nullptr, GL_DYNAMIC_COPY);
+            glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, tfBuffer);
+
+            glUseProgram(xfbProgram);
+            glBeginTransformFeedback(GL_TRIANGLES);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+
+            glLinkProgram(sharedProgram);
+            GLint linkStatus = 0;
+            glGetProgramiv(sharedProgram, GL_LINK_STATUS, &linkStatus);
+            ASSERT_EQ(GL_TRUE, linkStatus);
+
+            glPauseTransformFeedback();
+            ASSERT_GL_NO_ERROR();
+
+            // Draw with sharedProgram using its zero-initialized uniform value (green).
+            glUseProgram(sharedProgram);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            ASSERT_GL_NO_ERROR();
+            EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+
+            glUseProgram(xfbProgram);
+            glResumeTransformFeedback();
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            glEndTransformFeedback();
+            ASSERT_GL_NO_ERROR();
+
+            {
+                auto captured = MapBufferRange<const float>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                            6 * sizeof(float), GL_MAP_READ_BIT);
+                ASSERT_FALSE(captured.empty());
+                for (size_t i = 0; i < captured.size(); ++i)
+                {
+                    EXPECT_EQ(static_cast<float>((i % 3) + 1), captured[i]) << "index " << i;
+                }
+                glUnmapBuffer(GL_TRANSFORM_FEEDBACK_BUFFER);
+            }
+        }
+
+        // Switch back to context1, destroy context2, and verify binding sharedProgram and updating
+        // its uniform on context1 still works properly.
+        ASSERT_EGL_TRUE(eglMakeCurrent(display, surface, surface, context1));
+        ASSERT_EGL_TRUE(eglDestroyContext(display, context2));
+        context2 = EGL_NO_CONTEXT;
+
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glUseProgram(sharedProgram);
+        GLint offsetLoc = glGetUniformLocation(sharedProgram, "u_colorOffset");
+        ASSERT_NE(-1, offsetLoc);
+        glUniform4f(offsetLoc, 0.0f, -1.0f, 1.0f, 0.0f);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        ASSERT_GL_NO_ERROR();
+        EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::blue);
+        glUseProgram(0);
+    }
+}
+
+// Test that capturing fields of a struct varying with more float fields than 4 * the maximum
+// supported varying vectors fails to link.
+TEST_P(TransformFeedbackTest, StructVaryingExceedsMaxVaryingVectors)
+{
+    GLint maxVaryingVectors = 0;
+    glGetIntegerv(GL_MAX_VARYING_VECTORS, &maxVaryingVectors);
+    ASSERT_GL_NO_ERROR();
+    ASSERT_GT(maxVaryingVectors, 0);
+
+    const GLint fieldCount = 4 * maxVaryingVectors + 2;
+
+    std::ostringstream vs;
+    vs << "#version 300 es\nstruct S {\n";
+    for (GLint i = 0; i < fieldCount; ++i)
+    {
+        vs << "    float m" << i << ";\n";
+    }
+    vs << "};\nout S v;\nvoid main() {\n";
+    for (GLint i = 0; i < fieldCount; ++i)
+    {
+        vs << "    v.m" << i << " = " << i << ".0;\n";
+    }
+    vs << "    gl_Position = vec4(0.0);\n}";
+
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+out vec4 c;
+void main() {
+    c = vec4(1.0);
+})";
+
+    std::vector<std::string> tfVaryings = {"v.m0", "v.m1"};
+    mProgram = CompileProgramWithTransformFeedback(vs.str().c_str(), kFS, tfVaryings,
+                                                   GL_INTERLEAVED_ATTRIBS);
+    EXPECT_EQ(0u, mProgram);
 }
 
 class HardenedTransformFeedbackTest : public TransformFeedbackTest
@@ -5514,6 +5914,19 @@ ANGLE_INSTANTIATE_TEST_ES3_AND_ES31_AND_ES32_AND(
     ES3_VULKAN()
         .disable(Feature::SupportsTransformFeedbackExtension)
         .disable(Feature::SupportsSPIRV14));
+
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(TransformFeedbackBaseInstanceTest);
+ANGLE_INSTANTIATE_TEST_ES3_AND_ES31_AND_ES32_AND(
+    TransformFeedbackBaseInstanceTest,
+    ES3_OPENGL().enable(Feature::AlwaysEnableEmulatedMultidrawExtensions),
+    ES3_OPENGLES().enable(Feature::AlwaysEnableEmulatedMultidrawExtensions),
+    ES3_VULKAN()
+        .disable(Feature::SupportsTransformFeedbackExtension)
+        .enable(Feature::AlwaysEnableEmulatedMultidrawExtensions),
+    ES3_VULKAN()
+        .disable(Feature::SupportsTransformFeedbackExtension)
+        .disable(Feature::SupportsSPIRV14)
+        .enable(Feature::AlwaysEnableEmulatedMultidrawExtensions));
 
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(TransformFeedbackLifetimeTest);
 ANGLE_INSTANTIATE_TEST_ES3_AND(TransformFeedbackLifetimeTest,

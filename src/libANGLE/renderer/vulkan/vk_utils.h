@@ -54,6 +54,7 @@
 
 namespace egl
 {
+class ThreadSafeDisplay;
 class Display;
 class Image;
 class ShareGroup;
@@ -74,6 +75,7 @@ ANGLE_GL_OBJECTS_X(ANGLE_PRE_DECLARE_OBJECT)
 
 namespace rx
 {
+class ThreadSafeDisplayVk;
 class DisplayVk;
 class ImageVk;
 class ProgramExecutableVk;
@@ -347,6 +349,7 @@ class [[nodiscard]] ScopedQueueSerialIndex final : angle::NonCopyable
 };
 
 class RefCountedEventsGarbageRecycler;
+
 // Abstracts error handling. Implemented by ContextVk for GL, DisplayVk for EGL, worker threads,
 // CLContextVk etc.
 class ErrorContext : angle::NonCopyable
@@ -434,6 +437,12 @@ struct ImplTypeHelper<gl::OBJ>         \
 // clang-format on
 
 ANGLE_GL_OBJECTS_X(ANGLE_IMPL_TYPE_HELPER_GL)
+
+template <>
+struct ImplTypeHelper<egl::ThreadSafeDisplay>
+{
+    using ImplType = ThreadSafeDisplayVk;
+};
 
 template <>
 struct ImplTypeHelper<egl::Display>
@@ -729,7 +738,10 @@ template <typename T>
 class [[nodiscard]] RendererScoped final : angle::NonCopyable
 {
   public:
-    RendererScoped(Renderer *renderer) : mRenderer(renderer) {}
+    template <typename... Args>
+    RendererScoped(Renderer *renderer, Args... args)
+        : mRenderer(renderer), mVar(std::forward<Args>(args)...)
+    {}
     ~RendererScoped() { mVar.release(mRenderer); }
 
     const T &get() const { return mVar; }
@@ -1459,14 +1471,19 @@ void InitExtendedDynamicStateEXTFunctions(VkDevice device);
 // VK_EXT_extended_dynamic_state2
 void InitExtendedDynamicState2EXTFunctions(VkDevice device);
 
+// VK_EXT_extended_dynamic_state3
+void InitExtendedDynamicState3EXTFunctions(VkDevice device);
+void InitExtendedDynamicState3EXTWithDepthClipControlEXTFunctions(VkDevice device);
+void InitExtendedDynamicState3EXTWithBlendOperationAdvancedEXTFunctions(VkDevice device);
+void InitExtendedDynamicState3EXTWithProvokingVertexEXTFunctions(VkDevice device);
+void InitExtendedDynamicState3EXTWithTransformFeedbackEXTFunctions(VkDevice device);
+void InitExtendedDynamicState3EXTWithLineRasterizationEXTFunctions(VkDevice device);
+
 // VK_EXT_vertex_input_dynamic_state
 void InitVertexInputDynamicStateEXTFunctions(VkDevice device);
 
 // VK_KHR_dynamic_rendering
 void InitDynamicRenderingFunctions(VkDevice device);
-
-// VK_KHR_dynamic_rendering_local_read
-void InitDynamicRenderingLocalReadFunctions(VkDevice device);
 
 // VK_KHR_fragment_shading_rate
 void InitFragmentShadingRateKHRInstanceFunction(VkInstance instance);
@@ -1498,6 +1515,9 @@ void InitExternalMemoryHostFunctions(VkDevice device);
 
 // VK_KHR_buffer_device_address
 void InitBufferDeviceAddressFunctions(VkDevice device);
+
+// VK_KHR_pipeline_binary
+void InitPipelineBinaryKHRFunctions(VkDevice device);
 
 #endif  // !defined(ANGLE_SHARED_LIBVULKAN)
 
@@ -1537,6 +1557,8 @@ VkComponentSwizzle GetSwizzle(const GLenum swizzle);
 VkCompareOp GetCompareOp(const GLenum compareFunc);
 VkStencilOp GetStencilOp(const GLenum compareOp);
 VkLogicOp GetLogicOp(const GLenum logicOp);
+VkBlendOp GetBlendOp(const gl::BlendEquationType blendOp);
+VkBlendFactor GetBlendFactor(const gl::BlendFactorType blendFactor);
 
 constexpr gl::ShaderMap<VkShaderStageFlagBits> kShaderStageMap = {
     {gl::ShaderType::Vertex, VK_SHADER_STAGE_VERTEX_BIT},

@@ -35,8 +35,7 @@ rx::Context11 *HackANGLE(EGLDisplay dpy, EGLContext ctx)
 {
     egl::Display *display   = static_cast<egl::Display *>(dpy);
     gl::ContextID contextID = {static_cast<GLuint>(reinterpret_cast<uintptr_t>(ctx))};
-    gl::Context *context    = display->getContext(contextID);
-    return rx::GetImplAs<rx::Context11>(context);
+    return rx::GetImplAs<rx::Context11>(display->getContextRef(contextID).get());
 }
 
 // This test enumerates all GL formats - for each, it queries the D3D support for
@@ -180,9 +179,11 @@ TEST_P(D3D11FormatTablesTest, TestFormatMakeValidSize)
         {
             int reqWidth  = 32;
             int reqHeight = 32;
+            int reqDepth  = 32;
             int level     = 0;
 
-            rx::d3d11::MakeValidSize(image, formatInfo.texFormat, &reqWidth, &reqHeight, &level);
+            rx::d3d11::MakeValidSize(image, formatInfo.texFormat, gl::TextureType::_3D, reqWidth,
+                                     reqHeight, reqDepth, level);
         }
     }
 }

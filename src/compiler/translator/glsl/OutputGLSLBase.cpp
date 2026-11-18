@@ -517,7 +517,7 @@ void TOutputGLSLBase::writeFunctionParameters(const TFunction *func)
 
         if (param->symbolType() != SymbolType::Empty)
         {
-            out << " " << hashName(param);
+            out << " " << hashVariableName(param);
         }
         if (type.isArray())
         {
@@ -613,7 +613,7 @@ void TOutputGLSLBase::writeConstructorTriplet(Visit visit, const TType &type)
 void TOutputGLSLBase::visitSymbol(TIntermSymbol *node)
 {
     TInfoSinkBase &out = objSink();
-    out << hashName(&node->variable());
+    out << hashVariableName(&node->variable());
 
     if (mDeclaringVariable && node->getType().isArray())
         out << ArrayString(node->getType());
@@ -922,10 +922,8 @@ bool TOutputGLSLBase::visitBlock(Visit visit, TIntermBlock *node)
         out << "{\n";
     }
 
-    for (TIntermSequence::const_iterator iter = node->getSequence()->begin();
-         iter != node->getSequence()->end(); ++iter)
+    for (TIntermNode *curNode : *node->getSequence())
     {
-        TIntermNode *curNode = *iter;
         ASSERT(curNode != nullptr);
 
         out << getIndentPrefix(curNode->getAsCaseNode() ? -1 : 0);
@@ -963,7 +961,7 @@ bool TOutputGLSLBase::visitGlobalQualifierDeclaration(Visit visit,
     TInfoSinkBase &out = objSink();
     ASSERT(visit == PreVisit);
     const TIntermSymbol *symbol = node->getSymbol();
-    out << (node->isPrecise() ? "precise " : "invariant ") << hashName(&symbol->variable());
+    out << (node->isPrecise() ? "precise " : "invariant ") << hashVariableName(&symbol->variable());
     return false;
 }
 
@@ -1191,6 +1189,19 @@ ImmutableString TOutputGLSLBase::hashName(const TSymbol *symbol)
     return HashName(symbol, kUserVariableNamePrefix, mHashFunction, &mNameMap);
 }
 
+ImmutableString TOutputGLSLBase::hashVariableName(const TVariable *variable)
+{
+    // If this is a private variable and we're not interested in retaining debug info, use a temp
+    // name.
+    if (!mCompileOptions.outputDebugInfo && variable->symbolType() == SymbolType::UserDefined &&
+        IsPrivate(variable->getType().getQualifier()))
+    {
+        return variable->getTempName();
+    }
+
+    return hashName(variable);
+}
+
 ImmutableString TOutputGLSLBase::hashBlockName(const TSymbol *symbol)
 {
     return HashName(symbol, kUserBlockNamePrefix, mHashFunction, &mNameMap);
@@ -1233,10 +1244,9 @@ void TOutputGLSLBase::declareStruct(const TStructure *structure)
     }
     out << "{\n";
     const TFieldList &fields = structure->fields();
-    for (size_t i = 0; i < fields.size(); ++i)
+    for (const TField *field : fields)
     {
         out << getIndentPrefix(1);
-        const TField *field    = fields[i];
         const TType &fieldType = *field->type();
         if (writeVariablePrecision(fieldType.getPrecision()))
         {

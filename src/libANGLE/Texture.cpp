@@ -13,6 +13,7 @@
 #include "common/utilities.h"
 #include "libANGLE/Config.h"
 #include "libANGLE/Context.h"
+#include "libANGLE/Display.h"
 #include "libANGLE/ErrorStrings.h"
 #include "libANGLE/Image.h"
 #include "libANGLE/State.h"
@@ -209,6 +210,23 @@ GLuint TextureState::getMipmapMaxLevel() const
     }
 
     return std::min<GLuint>(getEffectiveBaseLevel() + expectedMipLevels, getEffectiveMaxLevel());
+}
+
+GLuint TextureState::getMaxPossibleMipmapLevelsFromLevelZero() const
+{
+    TextureTarget target   = TextureTypeToTarget(mType, 0);
+    const size_t descIndex = GetImageDescIndex(target, 0);
+    const Extents &extents = mImageDescs[descIndex].size;
+
+    if (mType == TextureType::_3D)
+    {
+        const int maxDim = std::max({extents.width, extents.height, extents.depth});
+        return static_cast<GLuint>(log2(maxDim));
+    }
+    else
+    {
+        return static_cast<GLuint>(log2(std::max(extents.width, extents.height)));
+    }
 }
 
 bool TextureState::setBaseLevel(GLuint baseLevel)
@@ -623,23 +641,25 @@ TextureTarget TextureState::getBaseImageTarget() const
                                          : NonCubeTextureTypeToTarget(mType);
 }
 
-GLuint TextureState::getEnabledLevelCount() const
+GLuint TextureState::getCompatibleLevelCount(GLuint baseLevel,
+                                             GLuint maxLevel,
+                                             bool *anyIncompatibleLevelOut) const
 {
     GLuint levelCount      = 0;
-    const GLuint baseLevel = getEffectiveBaseLevel();
-    GLuint maxLevel        = getMipmapMaxLevel();
     ASSERT(maxLevel >= baseLevel);
 
     // For cube textures, expect other faces to match the first face.
     TextureTarget target         = TextureTypeToTarget(mType, 0);
     const Format &expectedFormat = mImageDescs[GetImageDescIndex(target, baseLevel)].format;
 
+    *anyIncompatibleLevelOut = false;
+
     // The mip chain will have either one or more sequential levels, or max levels,
     // but not a sparse one.
     Optional<Extents> expectedSize;
     for (size_t enabledLevel = baseLevel; enabledLevel <= maxLevel; ++enabledLevel, ++levelCount)
     {
-        size_t descIndex          = GetImageDescIndex(target, enabledLevel);
+        const size_t descIndex    = GetImageDescIndex(target, enabledLevel);
         const Extents &levelSize  = mImageDescs[descIndex].size;
         const Format &levelFormat = mImageDescs[descIndex].format;
 
@@ -653,22 +673,21 @@ GLuint TextureState::getEnabledLevelCount() const
         // _additional_ levels are compatible with base.
         if (enabledLevel != baseLevel && mType == gl::TextureType::CubeMap)
         {
-            bool otherFacesValid                    = true;
             angle::EnumIterator<TextureTarget> face = kCubeMapTextureTargetMin;
             for (++face; face != kAfterCubeMapTextureTargetMax; ++face)
             {
-                size_t otherFaceDescIndex          = GetImageDescIndex(*face, enabledLevel);
+                const size_t otherFaceDescIndex    = GetImageDescIndex(*face, enabledLevel);
                 const Extents &otherFaceLevelSize  = mImageDescs[otherFaceDescIndex].size;
                 const Format &otherFaceLevelFormat = mImageDescs[otherFaceDescIndex].format;
 
                 if (otherFaceLevelSize != levelSize ||
                     !Format::SameSized(otherFaceLevelFormat, levelFormat))
                 {
-                    otherFacesValid = false;
+                    *anyIncompatibleLevelOut = true;
                     break;
                 }
             }
-            if (!otherFacesValid)
+            if (*anyIncompatibleLevelOut)
             {
                 break;
             }
@@ -687,6 +706,7 @@ GLuint TextureState::getEnabledLevelCount() const
 
             if (newSize != levelSize)
             {
+                *anyIncompatibleLevelOut = true;
                 break;
             }
         }
@@ -696,12 +716,69 @@ GLuint TextureState::getEnabledLevelCount() const
         // changed compared to the previous image.
         if (!Format::SameSized(expectedFormat, levelFormat))
         {
+            *anyIncompatibleLevelOut = true;
             break;
         }
         expectedSize = levelSize;
     }
 
     return levelCount;
+}
+
+GLuint TextureState::getEnabledLevelCount() const
+{
+    const GLuint baseLevel    = getEffectiveBaseLevel();
+    const GLuint maxLevel     = getMipmapMaxLevel();
+    bool anyIncompatibleLevel = false;
+    return getCompatibleLevelCount(baseLevel, maxLevel, &anyIncompatibleLevel);
+}
+
+bool TextureState::anyLevelsDefinedAtOrAbove(GLuint level, GLuint maxLevel) const
+{
+    TextureTarget target = TextureTypeToTarget(mType, 0);
+    for (; level <= maxLevel; ++level)
+    {
+        const size_t descIndex = GetImageDescIndex(target, level);
+        if (!mImageDescs[descIndex].size.empty())
+        {
+            return true;
+        }
+
+        if (mType == gl::TextureType::CubeMap)
+        {
+            angle::EnumIterator<TextureTarget> face = kCubeMapTextureTargetMin;
+            for (++face; face != kAfterCubeMapTextureTargetMax; ++face)
+            {
+                const size_t otherFaceDescIndex = GetImageDescIndex(*face, level);
+                if (!mImageDescs[otherFaceDescIndex].size.empty())
+                {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+bool TextureState::isCompatibleWithLevelZero(GLint level,
+                                             GLsizei width,
+                                             GLsizei height,
+                                             GLsizei depth,
+                                             const InternalFormat &format) const
+{
+    const TextureTarget target    = TextureTypeToTarget(mType, 0);
+    const size_t descIndex        = GetImageDescIndex(target, 0);
+    const Extents &levelZeroSize  = mImageDescs[descIndex].size;
+    const Format &levelZeroFormat = mImageDescs[descIndex].format;
+
+    const GLsizei expectedWidth  = std::max(1, levelZeroSize.width >> level);
+    const GLsizei expectedHeight = std::max(1, levelZeroSize.height >> level);
+    const GLsizei expectedDepth =
+        IsArrayTextureType(mType) ? levelZeroSize.depth : std::max(1, levelZeroSize.depth >> level);
+
+    return width == expectedWidth && height == expectedHeight && depth == expectedDepth &&
+           format.sizedInternalFormat == levelZeroFormat.info->sizedInternalFormat;
 }
 
 ImageDesc::ImageDesc()
@@ -833,9 +910,9 @@ void TextureState::clearImageDesc(TextureTarget target, size_t level)
 
 void TextureState::clearImageDescs()
 {
-    for (size_t descIndex = 0; descIndex < mImageDescs.size(); descIndex++)
+    for (ImageDesc &imageDesc : mImageDescs)
     {
-        mImageDescs[descIndex] = ImageDesc();
+        imageDesc = ImageDesc();
     }
 }
 
@@ -878,6 +955,8 @@ void Texture::onDestroy(const Context *context)
 
     if (mBoundSurface)
     {
+        // Do not lock mBoundSurface->mMutex here since ContextMutex is already held, which would
+        // invert the Surface::mMutex -> ContextMutex lock order.
         ANGLE_SWALLOW_ERR(mBoundSurface->releaseTexImage(context, EGL_BACK_BUFFER));
         mBoundSurface = nullptr;
     }
@@ -1573,7 +1652,7 @@ angle::Result Texture::copyImage(Context *context,
     ImageIndex index = ImageIndex::MakeFromTarget(target, level, 1);
 
     const InternalFormat &internalFormatInfo =
-        GetInternalFormatInfo(internalFormat, GL_UNSIGNED_BYTE);
+        mTexture->getCopyImageInternalFormat(context, internalFormat, source);
 
     // Most if not all renderers clip these copies to the size of the source framebuffer, leaving
     // other pixels untouched. For safety in robust resource initialization, assume that that
@@ -1608,16 +1687,28 @@ angle::Result Texture::copyImage(Context *context,
 
     InitState initState = DetermineInitState(context, nullptr, nullptr);
 
-    // If we need to initialize the destination texture we split the call into a create call,
-    // an initializeContents call, and then a copySubImage call. This ensures the destination
-    // texture exists before we try to clear it.
+    // If we need to initialize the destination texture we split the call into a create call
+    // (setImage), an initializeContents call (ensureSubImageInitialized), and then a copySubImage
+    // call. This ensures the destination texture exists before we try to clear it.
+    // Only take this `if` branch when `forceCopySubImage` is true (which already checks whether the
+    // copy is out-of-bounds and safe to split). Checking `doesSubImageNeedInit` in the `if`
+    // condition would inspect the destination level's old ImageDesc before it is redefined to
+    // `size`, causing same-texture copies to enter the `if` branch and call `setImage` before
+    // `copySubImage`, which destroys the source texture before it is read.
     Extents size(sourceArea.width, sourceArea.height, 1);
-    if (forceCopySubImage || doesSubImageNeedInit(context, index, destBox))
+    if (forceCopySubImage)
     {
         ANGLE_TRY(mTexture->setImage(context, index, internalFormat, size,
                                      internalFormatInfo.format, internalFormatInfo.type,
                                      PixelUnpackState(), nullptr, nullptr));
         mState.setImageDesc(target, level, ImageDesc(size, Format(internalFormatInfo), initState));
+
+        // Because the above setImage may have modified the texture (which could be the source
+        // texture itself), need to sync the read framebuffer if needed.  By calling
+        // prepareForCopyImage(), the back-to-back setImage and copyTexImage calls behave as if the
+        // application did glTexImage2D followed by glCopyTexSubImage2D.
+        ANGLE_TRY(context->prepareForCopyImage());
+
         ANGLE_TRY(ensureSubImageInitialized(context, index, destBox));
         ANGLE_TRY(mTexture->copySubImage(context, index, Offset(), sourceArea, source));
     }
@@ -2600,18 +2691,24 @@ angle::Result Texture::ensureInitialized(const Context *context, EnsureInitializ
         return angle::Result::Continue;
     }
 
+    const bool initializeBaseOnly = levels == EnsureInitializedLevels::BaseOnly;
+    const GLint baseLevel         = mState.getEffectiveBaseLevel();
+    // Start initializing from baseLevel if specifically requested or if the texture is mutable.  If
+    // the texture is immutable, initialize all the levels because framebuffers outside [BASE, MAX]
+    // range are complete for immutable textures.
+    const GLint initFirstLevel = (initializeBaseOnly || !getImmutableFormat()) ? baseLevel : 0;
+
     bool anyDirty = false;
-    bool allInitialized = (levels == EnsureInitializedLevels::AllEnabledLevels &&
-                           mState.getEffectiveBaseLevel() == 0);
+    bool allInitialized =
+        levels == EnsureInitializedLevels::AllEnabledLevels && initFirstLevel == 0;
 
     ImageIndexIterator it = ImageIndexIterator::MakeGeneric(
-        mState.mType, static_cast<GLint>(mState.getEffectiveBaseLevel()),
-        IMPLEMENTATION_MAX_TEXTURE_LEVELS + 1, ImageIndex::kEntireLevel, ImageIndex::kEntireLevel);
+        mState.mType, initFirstLevel, IMPLEMENTATION_MAX_TEXTURE_LEVELS + 1,
+        ImageIndex::kEntireLevel, ImageIndex::kEntireLevel);
     while (it.hasNext())
     {
         const ImageIndex index = it.next();
-        if (levels == EnsureInitializedLevels::BaseOnly &&
-            index.getLevelIndex() != static_cast<GLint>(mState.getEffectiveBaseLevel()))
+        if (initializeBaseOnly && index.getLevelIndex() != baseLevel)
         {
             break;
         }

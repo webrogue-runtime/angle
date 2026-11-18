@@ -339,16 +339,6 @@
             "issue": "http://anglebug.com/40644905"
         },
         {
-            "name": "generate_shareable_shaders",
-            "category": "Features",
-            "description": [
-                "Attempts to generate shaders that are shareable. More specifically, shaders",
-                " end up with conditionals that are decided at run time via input parameters vs",
-                " compile time. This results in bigger shaders."
-            ],
-            "issue": "http://crbug.com/1423136"
-        },
-        {
             "name": "disable_metal_on_nvidia",
             "category": "Features",
             "description": [
@@ -396,23 +386,6 @@
             "issue": "http://anglebug.com/42261786"
         },
         {
-            "name": "inject_asm_statement_into_loop_bodies",
-            "category": "Features",
-            "description": [
-                "Inject asm(\"\") statements into loop bodies to force all loops to be treated as ",
-                "having side effects and not optimized out."
-            ],
-            "issue": "http://crbug.com/1513738"
-        },
-        {
-            "name": "ensure_loop_forward_progress",
-            "category": "Features",
-            "description": [
-                "Inject statements into loop bodies when needed to ensure infinite loops are optimized out."
-            ],
-            "issue": "http://crbug.com/1513738"
-        },
-        {
             "name": "allocate_non_zero_textures",
             "category": "Features",
             "description": [
@@ -426,6 +399,21 @@
                 "Limit maximum visibility query offset to 65528 bytes."
             ],
             "issue": "http://anglebug.com/537661068"
+        },
+        {
+            "name": "purgeable_buffer_pool",
+            "category": "Features",
+            "description": [
+                "The renderer supports purgeable BufferPool memory in the Metal backend"
+            ]
+        },
+        {
+            "name": "use_temp_copy_for_depth_stencil_blit",
+            "category": "Workarounds",
+            "description": [
+                "Some GPUs have bugs when sampling depth/stencil views of cube map or array texture views during blit. Work around by using a full size temp copy."
+            ],
+            "issue": "http://crbug.com/577571797"
         }
     ]
 }

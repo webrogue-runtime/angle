@@ -113,6 +113,7 @@ enum Token
     kConfigUBSan,
     // Translator
     kConfigIR,
+    kConfigAST,
     // expectation
     kExpectationPass,
     kExpectationFail,
@@ -236,6 +237,7 @@ constexpr std::array<TokenInfo, kNumberOfTokens> kTokenData = {{
     {"tsan", GPUTestConfig::kConditionTSan},
     {"ubsan", GPUTestConfig::kConditionUBSan},
     {"ir", GPUTestConfig::kConditionIR},
+    {"ast", GPUTestConfig::kConditionAST},
     {"pass", GPUTestConfig::kConditionNone, GPUTestExpectationsParser::kGpuTestPass},
     {"fail", GPUTestConfig::kConditionNone, GPUTestExpectationsParser::kGpuTestFail},
     {"flaky", GPUTestConfig::kConditionNone, GPUTestExpectationsParser::kGpuTestFlaky},
@@ -372,9 +374,11 @@ bool GPUTestExpectationsParser::loadTestExpectationsImpl(const GPUTestConfig *co
                                                          InputStream &dataStream)
 {
     mEntries.clear();
+    mExactEntriesIndex.clear();
+    mWildcardEntriesIndex.clear();
     mErrorMessages.clear();
 
-    bool rt                        = true;
+    bool rt = true;
 
     size_t lineNumber = 1;
     std::string line;
@@ -390,6 +394,20 @@ bool GPUTestExpectationsParser::loadTestExpectationsImpl(const GPUTestConfig *co
     {
         mEntries.clear();
         rt = false;
+    }
+    else
+    {
+        for (size_t i = 0; i < mEntries.size(); ++i)
+        {
+            if (mEntries[i].testName.find('*') != std::string::npos)
+            {
+                mWildcardEntriesIndex.push_back(i);
+            }
+            else
+            {
+                mExactEntriesIndex[mEntries[i].testName].push_back(i);
+            }
+        }
     }
 
     return rt;
@@ -412,6 +430,8 @@ bool GPUTestExpectationsParser::loadTestExpectationsFromFileImpl(const GPUTestCo
                                                                  const std::string &path)
 {
     mEntries.clear();
+    mExactEntriesIndex.clear();
+    mWildcardEntriesIndex.clear();
     mErrorMessages.clear();
 
     std::ifstream fileStream(path);
@@ -444,8 +464,26 @@ int32_t GPUTestExpectationsParser::getTestExpectationImpl(const GPUTestConfig *c
     const GPUTestConfig::ConditionArray &configConditions =
         config ? config->getConditions() : kDefaultConditions;
 
-    for (GPUTestExpectationEntry &entry : mEntries)
+    // 1. Check exact match index first. If found and conditions match, exact match wins.
+    auto exactIt = mExactEntriesIndex.find(testName);
+    if (exactIt != mExactEntriesIndex.end())
     {
+        for (size_t entryIndex : exactIt->second)
+        {
+            GPUTestExpectationEntry &entry = mEntries[entryIndex];
+            if ((configConditions & entry.conditions) == entry.conditions)
+            {
+                entry.used = true;
+                return entry.testExpectation;
+            }
+        }
+    }
+
+    // 2. If no matching exact expectation found, check wildcard entries.
+    for (size_t wildcardIndex : mWildcardEntriesIndex)
+    {
+        GPUTestExpectationEntry &entry = mEntries[wildcardIndex];
+
         // Entry condition bits must be a subset of the config condition bits.
         if ((configConditions & entry.conditions) != entry.conditions)
         {
@@ -485,10 +523,11 @@ std::vector<std::string> GPUTestExpectationsParser::getUnusedExpectationsMessage
     std::vector<std::string> messages;
     std::vector<GPUTestExpectationsParser::GPUTestExpectationEntry> unusedExpectations =
         getUnusedExpectations();
-    for (size_t i = 0; i < unusedExpectations.size(); ++i)
+    for (const GPUTestExpectationsParser::GPUTestExpectationEntry &unusedExpectation :
+         unusedExpectations)
     {
         std::string message =
-            "Line " + ToString(unusedExpectations[i].lineNumber) + ": expectation was unused.";
+            "Line " + ToString(unusedExpectation.lineNumber) + ": expectation was unused.";
         messages.push_back(message);
     }
     return messages;
@@ -580,6 +619,7 @@ bool GPUTestExpectationsParser::parseLine(const GPUTestConfig *config,
             case kConfigTSan:
             case kConfigUBSan:
             case kConfigIR:
+            case kConfigAST:
                 // MODIFIERS, check each condition and add accordingly.
                 if (stage != kLineParserConfigs && stage != kLineParserBugID)
                 {
@@ -745,11 +785,11 @@ std::vector<GPUTestExpectationsParser::GPUTestExpectationEntry>
 GPUTestExpectationsParser::getUnusedExpectations() const
 {
     std::vector<GPUTestExpectationsParser::GPUTestExpectationEntry> unusedExpectations;
-    for (size_t i = 0; i < mEntries.size(); ++i)
+    for (const GPUTestExpectationsParser::GPUTestExpectationEntry &entry : mEntries)
     {
-        if (!mEntries[i].used)
+        if (!entry.used)
         {
-            unusedExpectations.push_back(mEntries[i]);
+            unusedExpectations.push_back(entry);
         }
     }
     return unusedExpectations;

@@ -165,6 +165,9 @@ struct Limitations
     // bytes-per-pixel. 1.25Gb is chosen as a conservative limit to allow for backends to expand
     // textures formats up to 3x and still stay within 32-bit sizes.
     size_t maxTextureBytes = 1280 * 1024 * 1024;
+
+    // Workaround for PowerVR Rogue drivers that round up 3D texture dimensions to POT internally.
+    bool roundUp3DTextureSizeToPOTForLimit = false;
 };
 
 struct TypePrecision
@@ -717,6 +720,9 @@ struct DisplayExtensions
 
     // EGL_ANGLE_memory_usage_report
     bool memoryUsageReportANGLE = false;
+
+    // EGL_ANGLE_query_renderer_strings
+    bool queryRendererStringsANGLE = false;
 
     // EGL_EXT_surface_compression
     bool surfaceCompressionEXT = false;

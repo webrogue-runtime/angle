@@ -38,10 +38,9 @@ bool CompareBlockInfo(const sh::BlockMemberInfo &a, const sh::BlockMemberInfo &b
 size_t GetAlignmentOfUniformGroup(sh::BlockLayoutMap *blockLayoutMap)
 {
     size_t align = 1;
-    for (auto layoutIter = blockLayoutMap->begin(); layoutIter != blockLayoutMap->end();
-         ++layoutIter)
+    for (const auto &layoutEntry : *blockLayoutMap)
     {
-        align = std::max(mtl::GetMetalAlignmentForGLType(layoutIter->second.type), align);
+        align = std::max(mtl::GetMetalAlignmentForGLType(layoutEntry.second.type), align);
     }
     return align;
 }
@@ -473,7 +472,7 @@ void ProgramExecutableMtl::saveInterfaceBlockInfo(gl::BinaryOutputStream *stream
     // First, save the number of Ib's to process
     stream->writeInt<unsigned int>((unsigned int)mUniformBlockConversions.size());
     // Next, iterate through all of the conversions.
-    for (auto conversion : mUniformBlockConversions)
+    for (const auto &conversion : mUniformBlockConversions)
     {
         // Write the name of the conversion
         stream->writeString(conversion.first);
@@ -744,9 +743,8 @@ angle::Result ProgramExecutableMtl::initDefaultUniformBlocks(
     const auto &uniforms         = mExecutable->getUniforms();
     const auto &uniformNames     = mExecutable->getUniformNames();
     const auto &uniformLocations = mExecutable->getUniformLocations();
-    for (size_t locSlot = 0; locSlot < uniformLocations.size(); ++locSlot)
+    for (const gl::VariableLocation &location : uniformLocations)
     {
-        const gl::VariableLocation &location = uniformLocations[locSlot];
         gl::ShaderMap<sh::BlockMemberInfo> layoutInfo;
 
         if (location.used() && !location.ignored)
@@ -812,10 +810,9 @@ void ProgramExecutableMtl::initUniformBlocksRemapper(const gl::SharedCompiledSha
 {
     std::unordered_map<std::string, UBOConversionInfo> conversionMap;
     const std::vector<sh::InterfaceBlock> ibs = shader->uniformBlocks;
-    for (size_t i = 0; i < ibs.size(); ++i)
+    for (const sh::InterfaceBlock &ib : ibs)
     {
 
-        const sh::InterfaceBlock &ib = ibs[i];
         if (mUniformBlockConversions.find(ib.name) == mUniformBlockConversions.end())
         {
             mtl::BlockLayoutEncoderMTL metalEncoder;
@@ -1044,18 +1041,6 @@ angle::Result ProgramExecutableMtl::getSpecializedShader(
         UNREACHABLE();
         return angle::Result::Stop;
     }
-    [funcConstants
-        setConstantValue:&(context->getDisplay()->getFeatures().allowSamplerCompareGradient.enabled)
-                    type:MTLDataTypeBool
-                withName:@"ANGLEUseSampleCompareGradient"];
-    [funcConstants
-        setConstantValue:&(context->getDisplay()->getFeatures().emulateAlphaToCoverage.enabled)
-                    type:MTLDataTypeBool
-                withName:@"ANGLEEmulateAlphaToCoverage"];
-    [funcConstants
-        setConstantValue:&(context->getDisplay()->getFeatures().writeHelperSampleMask.enabled)
-                    type:MTLDataTypeBool
-                withName:@"ANGLEWriteHelperSampleMask"];
     ANGLE_TRY(CreateMslShader(context, translatedMslInfo->metalLibrary, SHADER_ENTRY_NAME,
                               funcConstants.get(), &shaderVariant->metalShader));
 

@@ -83,7 +83,7 @@ DXGISwapChainWindowSurfaceWGL::~DXGISwapChainWindowSurfaceWGL()
 
 }
 
-egl::Error DXGISwapChainWindowSurfaceWGL::initialize(const egl::Display *display)
+egl::Error DXGISwapChainWindowSurfaceWGL::initialize(const egl::ThreadSafeDisplay *display)
 {
     if (mOrientation != EGL_SURFACE_ORIENTATION_INVERT_Y_ANGLE)
     {
@@ -254,7 +254,8 @@ egl::Error DXGISwapChainWindowSurfaceWGL::releaseTexImage(const gl::Context *con
     return egl::NoError();
 }
 
-void DXGISwapChainWindowSurfaceWGL::setSwapInterval(const egl::Display *display, EGLint interval)
+void DXGISwapChainWindowSurfaceWGL::setSwapInterval(const egl::ThreadSafeDisplay *display,
+                                                    EGLint interval)
 {
     mSwapInterval = interval;
 }
@@ -279,8 +280,8 @@ HDC DXGISwapChainWindowSurfaceWGL::getDC() const
     return mWGLDevice;
 }
 
-egl::Error DXGISwapChainWindowSurfaceWGL::attachToFramebuffer(const gl::Context *context,
-                                                              gl::Framebuffer *framebuffer)
+void DXGISwapChainWindowSurfaceWGL::attachToFramebuffer(const gl::Context *context,
+                                                        gl::Framebuffer *framebuffer)
 {
     FramebufferGL *framebufferGL = GetImplAs<FramebufferGL>(framebuffer);
     ASSERT(framebufferGL->getFramebufferID() == 0);
@@ -312,16 +313,13 @@ egl::Error DXGISwapChainWindowSurfaceWGL::attachToFramebuffer(const gl::Context 
         mFramebufferID = framebufferID;
     }
     framebufferGL->setFramebufferID(mFramebufferID);
-    return egl::NoError();
 }
 
-egl::Error DXGISwapChainWindowSurfaceWGL::detachFromFramebuffer(const gl::Context *context,
-                                                                gl::Framebuffer *framebuffer)
+void DXGISwapChainWindowSurfaceWGL::detachFromFramebuffer(gl::Framebuffer *framebuffer)
 {
     FramebufferGL *framebufferGL = GetImplAs<FramebufferGL>(framebuffer);
     ASSERT(framebufferGL->getFramebufferID() == mFramebufferID);
     framebufferGL->setFramebufferID(0);
-    return egl::NoError();
 }
 
 egl::Error DXGISwapChainWindowSurfaceWGL::setObjectsLocked(bool locked)

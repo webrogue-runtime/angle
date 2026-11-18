@@ -155,10 +155,10 @@ class Pipeline final : public WrappedObject<Pipeline, VkPipeline>
 
     VkResult initGraphics(VkDevice device,
                           const VkGraphicsPipelineCreateInfo &createInfo,
-                          const PipelineCache &pipelineCacheVk);
+                          const PipelineCache *pipelineCacheVk);
     VkResult initCompute(VkDevice device,
                          const VkComputePipelineCreateInfo &createInfo,
-                         const PipelineCache &pipelineCacheVk);
+                         const PipelineCache *pipelineCacheVk);
 };
 
 namespace priv
@@ -365,12 +365,28 @@ class CommandBuffer : public WrappedObject<CommandBuffer, VkCommandBuffer>
                        uint32_t size,
                        const void *data);
 
-    void setBlendConstants(const float blendConstants[4]);
+    void setAlphaToCoverageEnable(VkBool32 alphaToCoverageEnable);
+    void setAlphaToOneEnable(VkBool32 alphaToOneEnable);
+    void setBlendConstants(const gl::ColorF &blendConstants);
+    void setColorBlendAdvanced(uint32_t firstAttachment,
+                               uint32_t attachmentCount,
+                               const VkColorBlendAdvancedEXT *colorBlendAdvanced);
+    void setColorBlendEnable(uint32_t firstAttachment,
+                             uint32_t attachmentCount,
+                             const VkBool32 *colorBlendEnables);
+    void setColorBlendEquation(uint32_t firstAttachment,
+                               uint32_t attachmentCount,
+                               const VkColorBlendEquationEXT *colorBlendEquations);
+    void setColorWriteMask(uint32_t firstAttachment,
+                           uint32_t attachmentCount,
+                           const VkColorComponentFlags *colorWriteMasks);
     void setCullMode(VkCullModeFlags cullMode);
     void setDepthBias(float depthBiasConstantFactor,
                       float depthBiasClamp,
                       float depthBiasSlopeFactor);
     void setDepthBiasEnable(VkBool32 depthBiasEnable);
+    void setDepthClampEnable(VkBool32 depthClampEnable);
+    void setDepthClipNegativeOneToOne(VkBool32 negativeOneToOne);
     void setDepthCompareOp(VkCompareOp depthCompareOp);
     void setDepthTestEnable(VkBool32 depthTestEnable);
     void setDepthWriteEnable(VkBool32 depthWriteEnable);
@@ -378,13 +394,20 @@ class CommandBuffer : public WrappedObject<CommandBuffer, VkCommandBuffer>
     void setFragmentShadingRate(const VkExtent2D *fragmentSize,
                                 VkFragmentShadingRateCombinerOpKHR ops[2]);
     void setFrontFace(VkFrontFace frontFace);
+    void setLineRasterizationMode(VkLineRasterizationMode lineRasterizationMode);
+    void setLineStippleEnable(VkBool32 stippledLineEnable);
     void setLineWidth(float lineWidth);
     void setLogicOp(VkLogicOp logicOp);
+    void setLogicOpEnable(VkBool32 logicOpEnable);
+    void setPatchControlPoints(uint32_t patchControlPoints);
+    void setPolygonMode(VkPolygonMode polygonMode);
     void setPrimitiveRestartEnable(VkBool32 primitiveRestartEnable);
     void setPrimitiveTopology(VkPrimitiveTopology primitiveTopology);
+    void setProvokingVertexMode(VkProvokingVertexModeEXT provokingVertexMode);
     void setRasterizerDiscardEnable(VkBool32 rasterizerDiscardEnable);
-    void setRenderingAttachmentLocations(const VkRenderingAttachmentLocationInfoKHR *info);
-    void setRenderingInputAttachmentIndicates(const VkRenderingInputAttachmentIndexInfoKHR *info);
+    void setRasterizationSamples(VkSampleCountFlagBits rasterizationSamples);
+    void setRasterizationStream(uint32_t rasterizationStream);
+    void setSampleMask(VkSampleCountFlagBits samples, const VkSampleMask *sampleMask);
     void setScissor(uint32_t firstScissor, uint32_t scissorCount, const VkRect2D *scissors);
     void setStencilCompareMask(uint32_t compareFrontMask, uint32_t compareBackMask);
     void setStencilOp(VkStencilFaceFlags faceMask,
@@ -395,6 +418,7 @@ class CommandBuffer : public WrappedObject<CommandBuffer, VkCommandBuffer>
     void setStencilReference(uint32_t frontReference, uint32_t backReference);
     void setStencilTestEnable(VkBool32 stencilTestEnable);
     void setStencilWriteMask(uint32_t writeFrontMask, uint32_t writeBackMask);
+    void setTessellationDomainOrigin(VkTessellationDomainOrigin domainOrigin);
     void setVertexInput(uint32_t vertexBindingDescriptionCount,
                         const VkVertexInputBindingDescription2EXT *vertexBindingDescriptions,
                         uint32_t vertexAttributeDescriptionCount,
@@ -581,6 +605,17 @@ class Allocation final : public WrappedObject<Allocation, VmaAllocation>
     friend class ImageMemorySuballocator;
 };
 
+class Pool final : public WrappedObject<Pool, VmaPool>
+{
+  public:
+    Pool() = default;
+    void destroy(const Allocator &allocator);
+    VkResult init(const Allocator &allocator,
+                  uint32_t memoryTypeIndex,
+                  size_t maxBlockCount,
+                  VkDeviceSize blockSize);
+};
+
 class RenderPass final : public WrappedObject<RenderPass, VkRenderPass>
 {
   public:
@@ -749,7 +784,7 @@ class VirtualBlock final : public WrappedObject<VirtualBlock, VmaVirtualBlock>
                       VmaVirtualAllocation *allocationOut,
                       VkDeviceSize *offsetOut);
     void free(VmaVirtualAllocation allocation, VkDeviceSize offset);
-    void calculateStats(vma::StatInfo *pStatInfo) const;
+    void calculateStats(vma::StatInfo *statInfo) const;
 };
 
 // CommandPool implementation.
@@ -850,15 +885,15 @@ ANGLE_INLINE void CommandBuffer::memoryBarrier(VkPipelineStageFlags srcStageMask
 ANGLE_INLINE void CommandBuffer::memoryBarrier2(const VkMemoryBarrier2 &memoryBarrier2)
 {
     ASSERT(valid());
-    VkDependencyInfo pDependencyInfo         = {};
-    pDependencyInfo.sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-    pDependencyInfo.memoryBarrierCount       = 1;
-    pDependencyInfo.pMemoryBarriers          = &memoryBarrier2;
-    pDependencyInfo.bufferMemoryBarrierCount = 0;
-    pDependencyInfo.pBufferMemoryBarriers    = nullptr;
-    pDependencyInfo.imageMemoryBarrierCount  = 0;
-    pDependencyInfo.pImageMemoryBarriers     = nullptr;
-    VK_CALL(vkCmdPipelineBarrier2KHR, mHandle, &pDependencyInfo);
+    VkDependencyInfo dependencyInfo         = {};
+    dependencyInfo.sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dependencyInfo.memoryBarrierCount       = 1;
+    dependencyInfo.pMemoryBarriers          = &memoryBarrier2;
+    dependencyInfo.bufferMemoryBarrierCount = 0;
+    dependencyInfo.pBufferMemoryBarriers    = nullptr;
+    dependencyInfo.imageMemoryBarrierCount  = 0;
+    dependencyInfo.pImageMemoryBarriers     = nullptr;
+    VK_CALL(vkCmdPipelineBarrier2KHR, mHandle, &dependencyInfo);
 }
 
 ANGLE_INLINE void CommandBuffer::pipelineBarrier(VkPipelineStageFlags srcStageMask,
@@ -913,15 +948,15 @@ ANGLE_INLINE void CommandBuffer::imageBarrier2(const VkImageMemoryBarrier2 &imag
 {
     ASSERT(valid());
 
-    VkDependencyInfo pDependencyInfo         = {};
-    pDependencyInfo.sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-    pDependencyInfo.memoryBarrierCount       = 0;
-    pDependencyInfo.pMemoryBarriers          = nullptr;
-    pDependencyInfo.bufferMemoryBarrierCount = 0;
-    pDependencyInfo.pBufferMemoryBarriers    = nullptr;
-    pDependencyInfo.imageMemoryBarrierCount  = 1;
-    pDependencyInfo.pImageMemoryBarriers     = &imageMemoryBarrier2;
-    VK_CALL(vkCmdPipelineBarrier2KHR, mHandle, &pDependencyInfo);
+    VkDependencyInfo dependencyInfo         = {};
+    dependencyInfo.sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dependencyInfo.memoryBarrierCount       = 0;
+    dependencyInfo.pMemoryBarriers          = nullptr;
+    dependencyInfo.bufferMemoryBarrierCount = 0;
+    dependencyInfo.pBufferMemoryBarriers    = nullptr;
+    dependencyInfo.imageMemoryBarrierCount  = 1;
+    dependencyInfo.pImageMemoryBarriers     = &imageMemoryBarrier2;
+    VK_CALL(vkCmdPipelineBarrier2KHR, mHandle, &dependencyInfo);
 }
 
 ANGLE_INLINE void CommandBuffer::imageWaitEvent(const VkEvent &event,
@@ -1126,10 +1161,64 @@ ANGLE_INLINE void CommandBuffer::pushConstants(const PipelineLayout &layout,
     VK_CALL(vkCmdPushConstants, mHandle, layout.getHandle(), flag, offset, size, data);
 }
 
-ANGLE_INLINE void CommandBuffer::setBlendConstants(const float blendConstants[4])
+ANGLE_INLINE void CommandBuffer::setAlphaToCoverageEnable(VkBool32 alphaToCoverageEnable)
 {
     ASSERT(valid());
-    VK_SECONDARY_CMD_CALL(vkCmdSetBlendConstants(mHandle, blendConstants));
+    VK_SECONDARY_CMD_CALL(vkCmdSetAlphaToCoverageEnableEXT(mHandle, alphaToCoverageEnable));
+}
+
+ANGLE_INLINE void CommandBuffer::setAlphaToOneEnable(VkBool32 alphaToOneEnable)
+{
+    ASSERT(valid());
+    VK_SECONDARY_CMD_CALL(vkCmdSetAlphaToOneEnableEXT(mHandle, alphaToOneEnable));
+}
+
+ANGLE_INLINE void CommandBuffer::setBlendConstants(const gl::ColorF &blendConstants)
+{
+    ASSERT(valid());
+    VK_SECONDARY_CMD_CALL(vkCmdSetBlendConstants(mHandle, blendConstants.data()));
+}
+
+ANGLE_INLINE void CommandBuffer::setColorBlendAdvanced(
+    uint32_t firstAttachment,
+    uint32_t attachmentCount,
+    const VkColorBlendAdvancedEXT *colorBlendAdvanced)
+{
+    ASSERT(valid());
+    ASSERT(attachmentCount == 1);
+    VK_SECONDARY_CMD_CALL(vkCmdSetColorBlendAdvancedEXT(mHandle, firstAttachment, attachmentCount,
+                                                        colorBlendAdvanced));
+}
+
+ANGLE_INLINE void CommandBuffer::setColorBlendEnable(uint32_t firstAttachment,
+                                                     uint32_t attachmentCount,
+                                                     const VkBool32 *colorBlendEnables)
+{
+    ASSERT(valid());
+    ASSERT(attachmentCount == 1);
+    VK_SECONDARY_CMD_CALL(
+        vkCmdSetColorBlendEnableEXT(mHandle, firstAttachment, attachmentCount, colorBlendEnables));
+}
+
+ANGLE_INLINE void CommandBuffer::setColorBlendEquation(
+    uint32_t firstAttachment,
+    uint32_t attachmentCount,
+    const VkColorBlendEquationEXT *colorBlendEquations)
+{
+    ASSERT(valid());
+    ASSERT(attachmentCount == 1);
+    VK_SECONDARY_CMD_CALL(vkCmdSetColorBlendEquationEXT(mHandle, firstAttachment, attachmentCount,
+                                                        colorBlendEquations));
+}
+
+ANGLE_INLINE void CommandBuffer::setColorWriteMask(uint32_t firstAttachment,
+                                                   uint32_t attachmentCount,
+                                                   const VkColorComponentFlags *colorWriteMasks)
+{
+    ASSERT(valid());
+    ASSERT(attachmentCount == 1);
+    VK_SECONDARY_CMD_CALL(
+        vkCmdSetColorWriteMaskEXT(mHandle, firstAttachment, attachmentCount, colorWriteMasks));
 }
 
 ANGLE_INLINE void CommandBuffer::setCullMode(VkCullModeFlags cullMode)
@@ -1151,6 +1240,18 @@ ANGLE_INLINE void CommandBuffer::setDepthBiasEnable(VkBool32 depthBiasEnable)
 {
     ASSERT(valid());
     VK_SECONDARY_CMD_CALL(vkCmdSetDepthBiasEnableEXT(mHandle, depthBiasEnable));
+}
+
+ANGLE_INLINE void CommandBuffer::setDepthClampEnable(VkBool32 depthClampEnable)
+{
+    ASSERT(valid());
+    VK_SECONDARY_CMD_CALL(vkCmdSetDepthClampEnableEXT(mHandle, depthClampEnable));
+}
+
+ANGLE_INLINE void CommandBuffer::setDepthClipNegativeOneToOne(VkBool32 negativeOneToOne)
+{
+    ASSERT(valid());
+    VK_SECONDARY_CMD_CALL(vkCmdSetDepthClipNegativeOneToOneEXT(mHandle, negativeOneToOne));
 }
 
 ANGLE_INLINE void CommandBuffer::setDepthCompareOp(VkCompareOp depthCompareOp)
@@ -1190,6 +1291,20 @@ ANGLE_INLINE void CommandBuffer::setFrontFace(VkFrontFace frontFace)
     VK_SECONDARY_CMD_CALL(vkCmdSetFrontFaceEXT(mHandle, frontFace));
 }
 
+ANGLE_INLINE void CommandBuffer::setLineRasterizationMode(
+    VkLineRasterizationMode lineRasterizationMode)
+{
+    ASSERT(valid());
+    VK_SECONDARY_CMD_CALL(vkCmdSetLineRasterizationModeEXT(mHandle, lineRasterizationMode));
+}
+
+ANGLE_INLINE void CommandBuffer::setLineStippleEnable(VkBool32 stippledLineEnable)
+{
+    ASSERT(valid());
+    ASSERT(stippledLineEnable == VK_FALSE);
+    VK_SECONDARY_CMD_CALL(vkCmdSetLineStippleEnableEXT(mHandle, VK_FALSE));
+}
+
 ANGLE_INLINE void CommandBuffer::setLineWidth(float lineWidth)
 {
     ASSERT(valid());
@@ -1200,6 +1315,24 @@ ANGLE_INLINE void CommandBuffer::setLogicOp(VkLogicOp logicOp)
 {
     ASSERT(valid());
     VK_SECONDARY_CMD_CALL(vkCmdSetLogicOpEXT(mHandle, logicOp));
+}
+
+ANGLE_INLINE void CommandBuffer::setLogicOpEnable(VkBool32 logicOpEnable)
+{
+    ASSERT(valid());
+    VK_SECONDARY_CMD_CALL(vkCmdSetLogicOpEnableEXT(mHandle, logicOpEnable));
+}
+
+ANGLE_INLINE void CommandBuffer::setPatchControlPoints(uint32_t patchControlPoints)
+{
+    ASSERT(valid());
+    VK_SECONDARY_CMD_CALL(vkCmdSetPatchControlPointsEXT(mHandle, patchControlPoints));
+}
+
+ANGLE_INLINE void CommandBuffer::setPolygonMode(VkPolygonMode polygonMode)
+{
+    ASSERT(valid());
+    VK_SECONDARY_CMD_CALL(vkCmdSetPolygonModeEXT(mHandle, polygonMode));
 }
 
 ANGLE_INLINE void CommandBuffer::setPrimitiveRestartEnable(VkBool32 primitiveRestartEnable)
@@ -1214,24 +1347,38 @@ ANGLE_INLINE void CommandBuffer::setPrimitiveTopology(VkPrimitiveTopology primit
     VK_SECONDARY_CMD_CALL(vkCmdSetPrimitiveTopologyEXT(mHandle, primitiveTopology));
 }
 
+ANGLE_INLINE void CommandBuffer::setProvokingVertexMode(
+    VkProvokingVertexModeEXT provokingVertexMode)
+{
+    ASSERT(valid());
+    ASSERT(provokingVertexMode == VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT);
+    VK_SECONDARY_CMD_CALL(vkCmdSetProvokingVertexModeEXT(mHandle, provokingVertexMode));
+}
+
 ANGLE_INLINE void CommandBuffer::setRasterizerDiscardEnable(VkBool32 rasterizerDiscardEnable)
 {
     ASSERT(valid());
     VK_SECONDARY_CMD_CALL(vkCmdSetRasterizerDiscardEnableEXT(mHandle, rasterizerDiscardEnable));
 }
 
-ANGLE_INLINE void CommandBuffer::setRenderingAttachmentLocations(
-    const VkRenderingAttachmentLocationInfoKHR *info)
+ANGLE_INLINE void CommandBuffer::setRasterizationSamples(VkSampleCountFlagBits rasterizationSamples)
 {
     ASSERT(valid());
-    VK_CALL(vkCmdSetRenderingAttachmentLocationsKHR, mHandle, info);
+    VK_SECONDARY_CMD_CALL(vkCmdSetRasterizationSamplesEXT(mHandle, rasterizationSamples));
 }
 
-ANGLE_INLINE void CommandBuffer::setRenderingInputAttachmentIndicates(
-    const VkRenderingInputAttachmentIndexInfoKHR *info)
+ANGLE_INLINE void CommandBuffer::setRasterizationStream(uint32_t rasterizationStream)
 {
     ASSERT(valid());
-    VK_CALL(vkCmdSetRenderingInputAttachmentIndicesKHR, mHandle, info);
+    ASSERT(rasterizationStream == 0);
+    VK_SECONDARY_CMD_CALL(vkCmdSetRasterizationStreamEXT(mHandle, rasterizationStream));
+}
+
+ANGLE_INLINE void CommandBuffer::setSampleMask(VkSampleCountFlagBits samples,
+                                               const VkSampleMask *sampleMask)
+{
+    ASSERT(valid());
+    VK_SECONDARY_CMD_CALL(vkCmdSetSampleMaskEXT(mHandle, samples, sampleMask));
 }
 
 ANGLE_INLINE void CommandBuffer::setScissor(uint32_t firstScissor,
@@ -1284,6 +1431,14 @@ ANGLE_INLINE void CommandBuffer::setStencilWriteMask(uint32_t writeFrontMask,
     VK_SECONDARY_CMD_CALL(
         (vkCmdSetStencilWriteMask(mHandle, VK_STENCIL_FACE_FRONT_BIT, writeFrontMask),
          vkCmdSetStencilWriteMask(mHandle, VK_STENCIL_FACE_BACK_BIT, writeBackMask)));
+}
+
+ANGLE_INLINE void CommandBuffer::setTessellationDomainOrigin(
+    VkTessellationDomainOrigin domainOrigin)
+{
+    ASSERT(valid());
+    ASSERT(domainOrigin == VK_TESSELLATION_DOMAIN_ORIGIN_LOWER_LEFT);
+    VK_SECONDARY_CMD_CALL(vkCmdSetTessellationDomainOriginEXT(mHandle, domainOrigin));
 }
 
 ANGLE_INLINE void CommandBuffer::setVertexInput(
@@ -1869,6 +2024,26 @@ ANGLE_INLINE void Allocation::invalidate(const Allocator &allocator,
     vma::InvalidateAllocation(allocator.getHandle(), mHandle, offset, size);
 }
 
+// Pool implementation.
+ANGLE_INLINE void Pool::destroy(const Allocator &allocator)
+{
+    if (valid())
+    {
+        vma::DestroyPool(allocator.getHandle(), mHandle);
+        mHandle = VK_NULL_HANDLE;
+    }
+}
+
+ANGLE_INLINE VkResult Pool::init(const Allocator &allocator,
+                                 uint32_t memoryTypeIndex,
+                                 size_t maxBlockCount,
+                                 VkDeviceSize blockSize)
+{
+    ASSERT(!valid());
+    return vma::CreatePool(allocator.getHandle(), memoryTypeIndex, maxBlockCount, blockSize,
+                           &mHandle);
+}
+
 // RenderPass implementation.
 ANGLE_INLINE void RenderPass::destroy(VkDevice device)
 {
@@ -2026,20 +2201,24 @@ ANGLE_INLINE void Pipeline::destroy(VkDevice device)
 
 ANGLE_INLINE VkResult Pipeline::initGraphics(VkDevice device,
                                              const VkGraphicsPipelineCreateInfo &createInfo,
-                                             const PipelineCache &pipelineCacheVk)
+                                             const PipelineCache *pipelineCacheVk)
 {
     ASSERT(!valid());
-    return VK_CALL(vkCreateGraphicsPipelines, device, pipelineCacheVk.getHandle(), 1, &createInfo,
-                   nullptr, &mHandle);
+    VkPipelineCache cacheHandle =
+        pipelineCacheVk != nullptr ? pipelineCacheVk->getHandle() : VK_NULL_HANDLE;
+    return VK_CALL(vkCreateGraphicsPipelines, device, cacheHandle, 1, &createInfo, nullptr,
+                   &mHandle);
 }
 
 ANGLE_INLINE VkResult Pipeline::initCompute(VkDevice device,
                                             const VkComputePipelineCreateInfo &createInfo,
-                                            const PipelineCache &pipelineCacheVk)
+                                            const PipelineCache *pipelineCacheVk)
 {
     ASSERT(!valid());
-    return VK_CALL(vkCreateComputePipelines, device, pipelineCacheVk.getHandle(), 1, &createInfo,
-                   nullptr, &mHandle);
+    VkPipelineCache cacheHandle =
+        pipelineCacheVk != nullptr ? pipelineCacheVk->getHandle() : VK_NULL_HANDLE;
+    return VK_CALL(vkCreateComputePipelines, device, cacheHandle, 1, &createInfo, nullptr,
+                   &mHandle);
 }
 
 // DescriptorSetLayout implementation.
@@ -2235,6 +2414,8 @@ ANGLE_INLINE VkResult QueryPool::getResults(VkDevice device,
                                             VkQueryResultFlags flags) const
 {
     ASSERT(valid());
+    // The vkGetQueryPoolResults() does not have corresponding VulkanApiFunction enumeration since
+    // it belongs to multiple groups and can't be used in GetPerfCounterGroup().
     return VK_CALL_WITH_GROUP((flags & VK_QUERY_RESULT_WAIT_BIT)
                                   ? angle::VulkanApiPerfCounterGroup::Wait
                                   : angle::VulkanApiPerfCounterGroup::Other,
@@ -2272,9 +2453,9 @@ ANGLE_INLINE void VirtualBlock::free(VmaVirtualAllocation allocation, VkDeviceSi
     vma::VirtualFree(mHandle, allocation, offset);
 }
 
-ANGLE_INLINE void VirtualBlock::calculateStats(vma::StatInfo *pStatInfo) const
+ANGLE_INLINE void VirtualBlock::calculateStats(vma::StatInfo *statInfo) const
 {
-    vma::CalculateVirtualBlockStats(mHandle, pStatInfo);
+    vma::CalculateVirtualBlockStats(mHandle, statInfo);
 }
 }  // namespace vk
 }  // namespace rx

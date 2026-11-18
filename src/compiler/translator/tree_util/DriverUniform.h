@@ -58,8 +58,9 @@ class DriverUniform
     {}
     virtual ~DriverUniform() = default;
 
-    bool addComputeDriverUniformsToShader(TIntermBlock *root, TSymbolTable *symbolTable);
-    bool addGraphicsDriverUniformsToShader(TIntermBlock *root, TSymbolTable *symbolTable);
+    void addComputeDriverUniformsToShader(TIntermBlock *root, TSymbolTable *symbolTable);
+    void addGraphicsDriverUniformsToShader(TIntermBlock *root, TSymbolTable *symbolTable);
+    void findDeclarationAddedByIR(TIntermBlock *root);
 
     TIntermTyped *getAcbBufferOffsets() const;
     TIntermTyped *getDepthRange() const;
@@ -73,6 +74,7 @@ class DriverUniform
     TIntermTyped *getAdvancedBlendEquation() const;
     TIntermTyped *getNumSamples() const;
     TIntermTyped *getClipDistancesEnabled() const;
+    TIntermTyped *getLastPreRasterizationStage() const;
     TIntermTyped *getTransformDepth() const;
     TIntermTyped *getAlphaToCoverage() const;
     TIntermTyped *getLayeredFramebuffer() const;
@@ -91,7 +93,7 @@ class DriverUniform
 
     const DriverUniformMode mMode;
     const TVariable *mDriverUniforms;
-    TType *mEmulatedDepthRangeType;
+    const TType *mEmulatedDepthRangeType;
     const ShShaderOutput mOutputType;
 };
 

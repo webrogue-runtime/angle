@@ -33,7 +33,6 @@
 #include "compiler/translator/tree_ops/spirv/EmulateFragColorData.h"
 #include "compiler/translator/tree_ops/spirv/EmulateFramebufferFetch.h"
 #include "compiler/translator/tree_ops/spirv/EmulateYUVBuiltIns.h"
-#include "compiler/translator/tree_ops/spirv/FlagSamplersWithTexelFetch.h"
 #include "compiler/translator/tree_ops/spirv/ReswizzleYUVOps.h"
 #include "compiler/translator/tree_ops/spirv/RewriteInterpolateAtOffset.h"
 #include "compiler/translator/tree_ops/spirv/RewriteR32fImages.h"
@@ -100,17 +99,21 @@ constexpr ImmutableString kDefaultUniformsBlockName = ImmutableString("defaultUn
     TIntermBinary *inverseXY   = new TIntermBinary(EOpMul, removePivot, flipXY);
     TIntermBinary *plusPivot   = new TIntermBinary(EOpAdd, inverseXY, pivot->deepCopy());
 
-    // Create the corrected variable and copy the value of the original builtin.
-    TIntermBinary *assignment =
-        new TIntermBinary(EOpAssign, flippedBuiltinRef, builtinRef->deepCopy());
+    // Assign to the replaced variable, with .xy rotated and .zy (if any) retaining the original
+    // builtin value.
+    const uint8_t nominalSize = builtin->getType().getNominalSize();
+    ASSERT(nominalSize == 2 || nominalSize == 4);
 
-    // Create an assignment to the replaced variable's .xy.
-    TIntermSwizzle *correctedXY = new TIntermSwizzle(flippedBuiltinRef->deepCopy(), {0, 1});
-    TIntermBinary *assignToXY   = new TIntermBinary(EOpAssign, correctedXY, plusPivot);
+    TIntermTyped *flippedValue = plusPivot;
+    if (nominalSize == 4)
+    {
+        flippedValue = TIntermAggregate::CreateConstructor(
+            builtin->getType(), {plusPivot, new TIntermSwizzle(builtinRef->deepCopy(), {2, 3})});
+    }
 
     // Add this assigment at the beginning of the main function
-    insertSequence->insert(insertSequence->begin(), assignToXY);
-    insertSequence->insert(insertSequence->begin(), assignment);
+    insertSequence->insert(insertSequence->begin(),
+                           new TIntermBinary(EOpAssign, flippedBuiltinRef, flippedValue));
 
     return compiler->validateAST(root);
 }
@@ -206,7 +209,8 @@ TIntermSequence *GetMainSequence(TIntermBlock *root)
     //     ivec4 ANGLEGetXfbOffsets(ivec4 strides)
     //     {
     //         int xfbIndex = gl_VertexIndex
-    //                      + gl_InstanceIndex * ANGLEUniforms.xfbVerticesPerInstance;
+    //                      + (gl_InstanceIndex - ANGLEUniforms.baseInstance)
+    //                        * ANGLEUniforms.xfbVerticesPerInstance;
     //         return ANGLEUniforms.xfbBufferOffsets + xfbIndex * strides;
     //     }
 
@@ -221,16 +225,17 @@ TIntermSequence *GetMainSequence(TIntermBlock *root)
                                           SymbolType::AngleInternal);
     TIntermSymbol *stridesSymbol = new TIntermSymbol(stridesVar);
 
-    // Create references to gl_VertexIndex, gl_InstanceIndex, ANGLEUniforms.xfbVerticesPerInstance
-    // and ANGLEUniforms.xfbBufferOffsets.
+    // Create references to gl_VertexIndex, gl_InstanceIndex, ANGLEUniforms.baseInstance,
+    // ANGLEUniforms.xfbVerticesPerInstance and ANGLEUniforms.xfbBufferOffsets.
     TIntermSymbol *vertexIndex           = new TIntermSymbol(BuiltInVariable::gl_VertexIndex());
     TIntermSymbol *instanceIndex         = new TIntermSymbol(BuiltInVariable::gl_InstanceIndex());
+    TIntermTyped *baseInstance           = driverUniforms->getBaseInstance();
     TIntermTyped *xfbVerticesPerInstance = driverUniforms->getXfbVerticesPerInstance();
     TIntermTyped *xfbBufferOffsets       = driverUniforms->getXfbBufferOffsets();
 
-    // gl_InstanceIndex * ANGLEUniforms.xfbVerticesPerInstance
-    TIntermBinary *xfbInstanceIndex =
-        new TIntermBinary(EOpMul, instanceIndex, xfbVerticesPerInstance);
+    // (gl_InstanceIndex - ANGLEUniforms.baseInstance) * ANGLEUniforms.xfbVerticesPerInstance
+    TIntermBinary *instanceID       = new TIntermBinary(EOpSub, instanceIndex, baseInstance);
+    TIntermBinary *xfbInstanceIndex = new TIntermBinary(EOpMul, instanceID, xfbVerticesPerInstance);
 
     // gl_VertexIndex + |xfbInstanceIndex|
     TIntermBinary *xfbIndex = new TIntermBinary(EOpAdd, vertexIndex, xfbInstanceIndex);
@@ -675,18 +680,18 @@ bool TranslatorSPIRV::translateImpl(TIntermBlock *root,
         }
     }
 
-    // If there are any function calls that take array-of-array of opaque uniform parameters, or
-    // other opaque uniforms that need special handling in Vulkan, such as atomic counters,
-    // monomorphize the functions by removing said parameters and replacing them in the function
-    // body with the call arguments.
-    //
-    // This has a few benefits:
-    //
-    // - It dramatically simplifies future transformations w.r.t to samplers in structs, array of
-    //   arrays of opaque types, atomic counters etc.
-    // - Avoids the need for shader*ArrayDynamicIndexing Vulkan features.
     if (!compileOptions.useIR)
     {
+        // If there are any function calls that take array-of-array of opaque uniform parameters, or
+        // other opaque uniforms that need special handling in Vulkan, such as atomic counters,
+        // monomorphize the functions by removing said parameters and replacing them in the function
+        // body with the call arguments.
+        //
+        // This has a few benefits:
+        //
+        // - It dramatically simplifies future transformations w.r.t to samplers in structs, array
+        //   of arrays of opaque types, atomic counters etc.
+        // - Avoids the need for shader*ArrayDynamicIndexing Vulkan features.
         UnsupportedFunctionArgsBitSet args{UnsupportedFunctionArgs::StructContainingSamplers,
                                            UnsupportedFunctionArgs::ArrayOfArrayOfSamplerOrImage,
                                            UnsupportedFunctionArgs::AtomicCounter,
@@ -711,11 +716,21 @@ bool TranslatorSPIRV::translateImpl(TIntermBlock *root,
         {
             return false;
         }
-    }
 
-    if (!FlagSamplersForTexelFetch(this, root, &getSymbolTable(), &mUniforms))
+        if (getShaderType() == GL_COMPUTE_SHADER)
+        {
+            driverUniforms->addComputeDriverUniformsToShader(root, &getSymbolTable());
+        }
+        else
+        {
+            driverUniforms->addGraphicsDriverUniformsToShader(root, &getSymbolTable());
+        }
+    }
+    else
     {
-        return false;
+        // The driver uniforms have been added in IR.  Discover it for the AST transformations that
+        // have not been ported yet.
+        driverUniforms->findDeclarationAddedByIR(root);
     }
 
     gl::ShaderType packedShaderType = gl::FromGLenum<gl::ShaderType>(getShaderType());
@@ -734,25 +749,18 @@ bool TranslatorSPIRV::translateImpl(TIntermBlock *root,
                       vk::spirv::kIdDefaultUniformsBlock);
     }
 
-    if (getShaderType() == GL_COMPUTE_SHADER)
-    {
-        driverUniforms->addComputeDriverUniformsToShader(root, &getSymbolTable());
-    }
-    else
-    {
-        driverUniforms->addGraphicsDriverUniformsToShader(root, &getSymbolTable());
-    }
-
     assignSpirvId(
         driverUniforms->getDriverUniformsVariable()->getType().getInterfaceBlock()->uniqueId(),
         vk::spirv::kIdDriverUniformsBlock);
 
-    if (getShaderType() == GL_VERTEX_SHADER)
+    if (!compileOptions.useIR)
     {
-        if (!ShaderBuiltinsWorkaround(this, root, driverUniforms, &getSymbolTable(),
-                                      compileOptions))
+        if (getShaderType() == GL_VERTEX_SHADER)
         {
-            return false;
+            if (!ShaderBuiltinsWorkaround(this, root, driverUniforms, &getSymbolTable()))
+            {
+                return false;
+            }
         }
     }
 
@@ -801,32 +809,86 @@ bool TranslatorSPIRV::translateImpl(TIntermBlock *root,
         bool useCullDistance = false;
         for (const ShaderVariable &outputVarying : mOutputVaryings)
         {
-            if (outputVarying.name == "gl_ClipDistance")
+            if (outputVarying.getStructName() == "gl_PerVertex")
             {
-                useClipDistance = true;
+                for (const ShaderVariable &field : outputVarying.fields)
+                {
+                    if (field.name == "gl_ClipDistance")
+                    {
+                        useClipDistance = true;
+                    }
+                    else if (field.name == "gl_CullDistance")
+                    {
+                        useCullDistance = true;
+                    }
+                }
             }
-            else if (outputVarying.name == "gl_CullDistance")
+            else
             {
-                useCullDistance = true;
+                if (outputVarying.name == "gl_ClipDistance")
+                {
+                    useClipDistance = true;
+                }
+                else if (outputVarying.name == "gl_CullDistance")
+                {
+                    useCullDistance = true;
+                }
             }
         }
         for (const ShaderVariable &inputVarying : mInputVaryings)
         {
-            if (inputVarying.name == "gl_ClipDistance")
+            if (inputVarying.getStructName() == "gl_PerVertex")
             {
-                useClipDistance = true;
+                for (const ShaderVariable &field : inputVarying.fields)
+                {
+                    if (field.name == "gl_ClipDistance")
+                    {
+                        useClipDistance = true;
+                    }
+                    else if (field.name == "gl_CullDistance")
+                    {
+                        useCullDistance = true;
+                    }
+                }
             }
-            else if (inputVarying.name == "gl_CullDistance")
+            else
             {
-                useCullDistance = true;
+                if (inputVarying.name == "gl_ClipDistance")
+                {
+                    useClipDistance = true;
+                }
+                else if (inputVarying.name == "gl_CullDistance")
+                {
+                    useCullDistance = true;
+                }
             }
         }
 
-        if (useClipDistance &&
-            !ReplaceClipDistanceAssignments(this, root, &getSymbolTable(), getShaderType(),
-                                            driverUniforms->getClipDistancesEnabled()))
+        if (useClipDistance)
         {
-            return false;
+            // Only the gl_ClipDistance output of the last pre-rasterization stage is clipped
+            // against; the values written by the earlier stages are only observable by the
+            // following stages (through gl_in). Therefore, vertex and tessellation evaluation
+            // shaders zero out the disabled clip distances only if they are the last stage, as
+            // indicated by the driver uniforms. Geometry shaders are always the last stage.
+            TIntermTyped *isLastPreRasterizationStage = nullptr;
+            if (getShaderType() == GL_VERTEX_SHADER || getShaderType() == GL_TESS_EVALUATION_SHADER)
+            {
+                const vk::LastPreRasterizationStage thisStage =
+                    getShaderType() == GL_VERTEX_SHADER
+                        ? vk::LastPreRasterizationStage::Vertex
+                        : vk::LastPreRasterizationStage::TessellationEvaluation;
+                isLastPreRasterizationStage =
+                    new TIntermBinary(EOpEqual, driverUniforms->getLastPreRasterizationStage(),
+                                      CreateUIntNode(static_cast<uint32_t>(thisStage)));
+            }
+
+            if (!ReplaceClipDistanceAssignments(this, root, &getSymbolTable(), getShaderType(),
+                                                driverUniforms->getClipDistancesEnabled(),
+                                                isLastPreRasterizationStage))
+            {
+                return false;
+            }
         }
         if (useCullDistance &&
             !ReplaceCullDistanceAssignments(this, root, &getSymbolTable(), getShaderType()))

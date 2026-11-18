@@ -9,7 +9,7 @@
 
 #include <array>
 
-#include "common/unsafe_buffers.h"
+#include "common/span.h"
 #include "test_utils/ANGLETest.h"
 #include "test_utils/gl_raii.h"
 
@@ -1582,14 +1582,13 @@ TEST_P(ProgramPipelineXFBTest31, VaryingIOBlockSeparableProgramWithXFB)
     ASSERT_GL_NO_ERROR();
     EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::red);
 
-    void *mappedBuffer =
-        glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, sizeof(float) * 8, GL_MAP_READ_BIT);
-    ASSERT_NE(nullptr, mappedBuffer);
+    auto mappedFloats = MapBufferRange<const float>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                    sizeof(float) * 8, GL_MAP_READ_BIT);
+    ASSERT_FALSE(mappedFloats.empty());
 
-    float *mappedFloats = static_cast<float *>(mappedBuffer);
-    for (unsigned int cnt = 0; cnt < 8; ++cnt)
+    for (unsigned int cnt = 0; cnt < mappedFloats.size(); ++cnt)
     {
-        ANGLE_UNSAFE_TODO(EXPECT_EQ(4 + cnt, mappedFloats[cnt]));
+        EXPECT_EQ(4 + cnt, mappedFloats[cnt]);
     }
     glUnmapBuffer(GL_TRANSFORM_FEEDBACK_BUFFER);
 
@@ -1662,18 +1661,12 @@ void main()
 
     // Second XFB buffer
     glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 1, transformFeedbackBuffer[1]);
-    void *mappedBuffer = glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
-                                          transformFeedbackBufferSize, GL_MAP_READ_BIT);
-    ASSERT_NE(nullptr, mappedBuffer);
+    auto mappedFloats = MapBufferRange<const float>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                    transformFeedbackBufferSize, GL_MAP_READ_BIT);
+    ASSERT_FALSE(mappedFloats.empty());
 
-    float *mappedFloats = static_cast<float *>(mappedBuffer);
     // Expect vec4(1, 2, 3, 4)
-    EXPECT_EQ(1, mappedFloats[0]);
-    ANGLE_UNSAFE_TODO({
-        EXPECT_EQ(2, mappedFloats[1]);
-        EXPECT_EQ(3, mappedFloats[2]);
-        EXPECT_EQ(4, mappedFloats[3]);
-    })
+    EXPECT_EQ(Span(std::array{1.0f, 2.0f, 3.0f, 4.0f}), mappedFloats);
 
     glUnmapBuffer(GL_TRANSFORM_FEEDBACK_BUFFER);
     glDeleteBuffers(2, transformFeedbackBuffer);
@@ -2912,17 +2905,13 @@ void main()
     GLBuffer ubo;
     glBindBuffer(GL_UNIFORM_BUFFER, ubo);
     glBufferData(GL_UNIFORM_BUFFER, 2048, 0, GL_DYNAMIC_DRAW);
-    uint8_t *mappedBuffer =
-        static_cast<uint8_t *>(glMapBufferRange(GL_UNIFORM_BUFFER, 0, 2048, GL_MAP_WRITE_BIT));
-    ASSERT_NE(nullptr, mappedBuffer);
+    auto mappedBuffer = MapBufferRange<GLColor32F>(GL_UNIFORM_BUFFER, 0, 2048, GL_MAP_WRITE_BIT);
+    ASSERT_FALSE(mappedBuffer.empty());
 
     // Only set up three of the five offsets. The other two must be present, but unused.
-    GLColor32F *binding0 = reinterpret_cast<GLColor32F *>(mappedBuffer);
-    GLColor32F *binding1 = reinterpret_cast<GLColor32F *>(ANGLE_UNSAFE_TODO(mappedBuffer + 256));
-    GLColor32F *binding4 = reinterpret_cast<GLColor32F *>(ANGLE_UNSAFE_TODO(mappedBuffer + 1024));
-    *binding0            = kFloatRed;
-    *binding1            = kFloatGreen;
-    *binding4            = kFloatBlue;
+    mappedBuffer[0]  = kFloatRed;
+    mappedBuffer[16] = kFloatGreen;  // Byte offset 256.
+    mappedBuffer[64] = kFloatBlue;   // Byte offset 1024.
     glUnmapBuffer(GL_UNIFORM_BUFFER);
 
     // Start with binding0=red and binding1=green
@@ -3129,97 +3118,92 @@ TEST_P(ProgramPipelineTest32, CreateProgramWithTransformFeedbackVarying)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_tessellation_shader"));
 
-    const char *kVS =
-        "#version 320 es\n"
-        "\n"
-        "#extension GL_EXT_shader_io_blocks : require\n"
-        "\n"
-        "precision highp float;\n"
+    const char *kVS = R"(#version 320 es
 
-        "out BLOCK_INOUT { vec4 value; } user_out;\n"
-        "\n"
-        "void main()\n"
-        "{\n"
-        "    gl_Position    = vec4(1.0, 0.0, 0.0, 1.0);\n"
-        "    user_out.value = vec4(4.0, 5.0, 6.0, 7.0);\n"
-        "}\n";
+#extension GL_EXT_shader_io_blocks : require
+
+precision highp float;
+
+out BLOCK_INOUT { vec4 value; } user_out;
+
+void main()
+{
+    gl_Position    = vec4(1.0, 0.0, 0.0, 1.0);
+    user_out.value = vec4(4.0, 5.0, 6.0, 7.0);
+})";
 
     // Fragment shader body
-    const char *kFS =
-        "#version 320 es\n"
-        "\n"
-        "#extension GL_EXT_shader_io_blocks : require\n"
-        "\n"
-        "precision highp float;\n"
-        "in BLOCK_INOUT { vec4 value; } user_in;\n"
-        "\n"
-        "void main()\n"
-        "{\n"
-        "}\n";
+    const char *kFS = R"(#version 320 es
+
+#extension GL_EXT_shader_io_blocks : require
+
+precision highp float;
+in BLOCK_INOUT { vec4 value; } user_in;
+
+void main()
+{
+})";
 
     // Geometry shader body
-    const char *kGS =
-        "#version 320 es\n"
-        "\n"
-        "#extension GL_EXT_geometry_shader : require\n"
-        "\n"
-        "layout(points)                   in;\n"
-        "layout(points, max_vertices = 1) out;\n"
-        "\n"
-        "precision highp float;\n"
-        "//${IN_PER_VERTEX_DECL_ARRAY}\n"
-        "//${OUT_PER_VERTEX_DECL}\n"
-        "in  BLOCK_INOUT { vec4 value; } user_in[];\n"
-        "out BLOCK_INOUT { vec4 value; } user_out;\n"
-        "\n"
-        "void main()\n"
-        "{\n"
-        "    user_out.value = vec4(1.0, 2.0, 3.0, 4.0);\n"
-        "    gl_Position    = vec4(0.0, 0.0, 0.0, 1.0);\n"
-        "\n"
-        "    EmitVertex();\n"
-        "}\n";
+    const char *kGS = R"(#version 320 es
+
+#extension GL_EXT_geometry_shader : require
+
+layout(points)                   in;
+layout(points, max_vertices = 1) out;
+
+precision highp float;
+//${IN_PER_VERTEX_DECL_ARRAY}
+//${OUT_PER_VERTEX_DECL}
+in  BLOCK_INOUT { vec4 value; } user_in[];
+out BLOCK_INOUT { vec4 value; } user_out;
+
+void main()
+{
+    user_out.value = vec4(1.0, 2.0, 3.0, 4.0);
+    gl_Position    = vec4(0.0, 0.0, 0.0, 1.0);
+
+    EmitVertex();
+})";
 
     // tessellation control shader body
-    const char *kTCS =
-        "#version 320 es\n"
-        "\n"
-        "#extension GL_EXT_tessellation_shader : require\n"
-        "#extension GL_EXT_shader_io_blocks : require\n"
-        "\n"
-        "layout (vertices=4) out;\n"
-        "\n"
-        "precision highp float;\n"
-        "in  BLOCK_INOUT { vec4 value; } user_in[];\n"
-        "out BLOCK_INOUT { vec4 value; } user_out[];\n"
-        "\n"
-        "void main()\n"
-        "{\n"
-        "    gl_out   [gl_InvocationID].gl_Position = vec4(0.0, 0.0, 0.0, 1.0);\n"
-        "    user_out [gl_InvocationID].value       = vec4(2.0, 3.0, 4.0, 5.0);\n"
-        "\n"
-        "    gl_TessLevelOuter[0] = 1.0;\n"
-        "    gl_TessLevelOuter[1] = 1.0;\n"
-        "}\n";
+    const char *kTCS = R"(#version 320 es
+
+#extension GL_EXT_tessellation_shader : require
+#extension GL_EXT_shader_io_blocks : require
+
+layout (vertices=4) out;
+
+precision highp float;
+in  BLOCK_INOUT { vec4 value; } user_in[];
+out BLOCK_INOUT { vec4 value; } user_out[];
+
+void main()
+{
+    gl_out   [gl_InvocationID].gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+    user_out [gl_InvocationID].value       = vec4(2.0, 3.0, 4.0, 5.0);
+
+    gl_TessLevelOuter[0] = 1.0;
+    gl_TessLevelOuter[1] = 1.0;
+})";
 
     // Tessellation evaluation shader
-    const char *kTES =
-        "#version 320 es\n"
-        "\n"
-        "#extension GL_EXT_tessellation_shader : require\n"
-        "#extension GL_EXT_shader_io_blocks : require\n"
-        "\n"
-        "layout (isolines, point_mode) in;\n"
-        "\n"
-        "precision highp float;\n"
-        "in  BLOCK_INOUT { vec4 value; } user_in[];\n"
-        "out BLOCK_INOUT { vec4 value; } user_out;\n"
-        "\n"
-        "void main()\n"
-        "{\n"
-        "    gl_Position     = gl_in[0].gl_Position;\n"
-        "    user_out.value = vec4(3.0, 4.0, 5.0, 6.0);\n"
-        "}\n";
+    const char *kTES           = R"(#version 320 es
+
+#extension GL_EXT_tessellation_shader : require
+#extension GL_EXT_shader_io_blocks : require
+
+layout (isolines, point_mode) in;
+
+precision highp float;
+in  BLOCK_INOUT { vec4 value; } user_in[];
+out BLOCK_INOUT { vec4 value; } user_out;
+
+void main()
+{
+    gl_Position     = gl_in[0].gl_Position;
+    user_out.value = vec4(3.0, 4.0, 5.0, 6.0);
+})";
     const GLchar *kVaryingName = "BLOCK_INOUT.value";
 
     GLuint fsProgram = createShaderProgram(GL_FRAGMENT_SHADER, kFS);

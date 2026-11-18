@@ -33,6 +33,12 @@ struct FrontendFeatures : FeatureSetBase
         &members,
     };
 
+    FeatureInfo disallowNonZeroBaseLevelAndIncompatibleLevelsOnHardenedContexts = {
+        "disallowNonZeroBaseLevelAndIncompatibleLevelsOnHardenedContexts",
+        FeatureCategory::FrontendWorkarounds,
+        &members,
+    };
+
     FeatureInfo disableProgramCachingForTransformFeedback = {
         "disableProgramCachingForTransformFeedback",
         FeatureCategory::FrontendWorkarounds,
@@ -83,6 +89,12 @@ struct FrontendFeatures : FeatureSetBase
 
     FeatureInfo forceInitShaderVariables = {
         "forceInitShaderVariables",
+        FeatureCategory::FrontendFeatures,
+        &members,
+    };
+
+    FeatureInfo ensureLoopForwardProgress = {
+        "ensureLoopForwardProgress",
         FeatureCategory::FrontendFeatures,
         &members,
     };
@@ -215,6 +227,12 @@ struct FrontendFeatures : FeatureSetBase
 
     FeatureInfo forceDebugContexts = {
         "forceDebugContexts",
+        FeatureCategory::FrontendFeatures,
+        &members,
+    };
+
+    FeatureInfo retainShaderDebugInfo = {
+        "retainShaderDebugInfo",
         FeatureCategory::FrontendFeatures,
         &members,
     };

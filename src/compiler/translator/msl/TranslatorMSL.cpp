@@ -23,9 +23,7 @@
 #include "compiler/translator/tree_ops/MonomorphizeUnsupportedFunctions.h"
 #include "compiler/translator/tree_ops/PreTransformTextureCubeGradDerivatives.h"
 #include "compiler/translator/tree_ops/ReduceInterfaceBlocks.h"
-#include "compiler/translator/tree_ops/RemoveAtomicCounterBuiltins.h"
 #include "compiler/translator/tree_ops/RewriteArrayOfArrayOfOpaqueUniforms.h"
-#include "compiler/translator/tree_ops/RewriteAtomicCounters.h"
 #include "compiler/translator/tree_ops/RewriteDfdy.h"
 #include "compiler/translator/tree_ops/RewriteStructSamplers.h"
 #include "compiler/translator/tree_ops/UseGeneratedNamesForAnonymousStructs.h"
@@ -350,6 +348,7 @@ void AddFragDepthEXTDeclaration(TCompiler &compiler, TIntermBlock &root, TSymbol
                                             TSymbolTable &symbolTable,
                                             const DriverUniformMetal *driverUniforms,
                                             bool includeEmulateAlphaToCoverage,
+                                            bool writeHelperSampleMask,
                                             bool usesSampleMask)
 {
     // uint32_t ANGLE_metal_SampleMask [[sample_mask]]
@@ -360,21 +359,12 @@ void AddFragDepthEXTDeclaration(TCompiler &compiler, TIntermBlock &root, TSymbol
 
     // Write all-enabled sample mask even for single-sampled rendering
     // when the shader uses derivatives to workaround a driver bug.
-    if (compiler.usesDerivatives())
+    if (writeHelperSampleMask)
     {
-        TIntermBlock *helperAssignBlock = new TIntermBlock;
-        helperAssignBlock->appendStatement(new TIntermBinary(
-            EOpAssign, new TIntermSymbol(angleSampleMask), CreateUIntNode(0xFFFFFFFFu)));
-
-        TVariable *writeHelperSampleMaskVar =
-            new TVariable(&symbolTable, sh::ImmutableString(mtl::kWriteHelperSampleMaskConstName),
-                          StaticType::Get<EbtBool, EbpUndefined, EvqSpecConst, 1, 1>(),
-                          SymbolType::AngleInternal);
-
         if (!RunAtTheBeginningOfShader(
                 &compiler, &root,
-                new TIntermIfElse(new TIntermSymbol(writeHelperSampleMaskVar), helperAssignBlock,
-                                  nullptr)))
+                new TIntermBinary(EOpAssign, new TIntermSymbol(angleSampleMask),
+                                  CreateUIntNode(0xFFFFFFFFu))))
         {
             return false;
         }
@@ -556,19 +546,8 @@ void AddFragDepthEXTDeclaration(TCompiler &compiler, TIntermBlock &root, TSymbol
         alphaBlock->appendStatement(new TIntermBinary(
             EOpBitwiseAndAssign, new TIntermSymbol(angleSampleMask), new TIntermSymbol(alphaMask)));
 
-        TIntermBlock *emulateAlphaToCoverageEnabledBlock = new TIntermBlock;
-        emulateAlphaToCoverageEnabledBlock->appendStatement(
+        block->appendStatement(
             new TIntermIfElse(driverUniforms->getAlphaToCoverage(), alphaBlock, nullptr));
-
-        TVariable *emulateAlphaToCoverageVar =
-            new TVariable(&symbolTable, sh::ImmutableString(mtl::kEmulateAlphaToCoverageConstName),
-                          StaticType::Get<EbtBool, EbpUndefined, EvqSpecConst, 1, 1>(),
-                          SymbolType::AngleInternal);
-        TIntermIfElse *useAlphaToCoverage =
-            new TIntermIfElse(new TIntermSymbol(emulateAlphaToCoverageVar),
-                              emulateAlphaToCoverageEnabledBlock, nullptr);
-
-        block->appendStatement(useAlphaToCoverage);
     }
 
     // Sample mask assignment is guarded by ANGLEMultisampledRendering specialization constant
@@ -878,7 +857,8 @@ bool TranslatorMSL::translateImpl(TInfoSinkBase &sink,
     TSymbolTable &symbolTable = getSymbolTable();
     IdGen idGen;
     ProgramPreludeConfig ppc(metalShaderTypeFromGLSL(getShaderType()));
-    ppc.usesDerivatives = usesDerivatives();
+    ppc.allowSamplerCompareGradient = compileOptions.metal.allowSamplerCompareGradient;
+    ppc.writeHelperSampleMask = compileOptions.metal.writeHelperSampleMask && usesDerivatives();
 
     // The MSL generator prefers every struct to have a name, and is not bound by GLSL's requirement
     // that anonymous structs match their (lack of) name between shader stages.
@@ -899,17 +879,11 @@ bool TranslatorMSL::translateImpl(TInfoSinkBase &sink,
 
     // Write out default uniforms into a uniform block assigned to a specific set/binding.
     int aggregateTypesUsedForUniforms = 0;
-    int atomicCounterCount            = 0;
     for (const auto &uniform : getUniforms())
     {
         if (uniform.isStruct() || uniform.isArrayOfArrays())
         {
             ++aggregateTypesUsedForUniforms;
-        }
-
-        if (uniform.active && gl::IsAtomicCounterType(uniform.type))
-        {
-            ++atomicCounterCount;
         }
     }
 
@@ -929,13 +903,12 @@ bool TranslatorMSL::translateImpl(TInfoSinkBase &sink,
     // This has a few benefits:
     //
     // - It dramatically simplifies future transformations w.r.t to samplers in structs, array of
-    //   arrays of opaque types, atomic counters etc.
+    //   arrays of opaque types etc.
     // - Avoids the need for shader*ArrayDynamicIndexing Vulkan features.
     if (!compileOptions.useIR)
     {
         UnsupportedFunctionArgsBitSet args{UnsupportedFunctionArgs::StructContainingSamplers,
                                            UnsupportedFunctionArgs::ArrayOfArrayOfSamplerOrImage,
-                                           UnsupportedFunctionArgs::AtomicCounter,
                                            UnsupportedFunctionArgs::Image};
         if (!MonomorphizeUnsupportedFunctions(this, root, &getSymbolTable(), args))
         {
@@ -972,40 +945,20 @@ bool TranslatorMSL::translateImpl(TInfoSinkBase &sink,
         }
     }
 
-    if (getShaderType() == GL_COMPUTE_SHADER)
+    ASSERT(getShaderType() != GL_COMPUTE_SHADER && "compute shaders not currently supported");
+
+    if (compileOptions.useIR)
     {
-        driverUniforms->addComputeDriverUniformsToShader(root, &getSymbolTable());
+        driverUniforms->findDeclarationAddedByIR(root);
     }
     else
     {
         driverUniforms->addGraphicsDriverUniformsToShader(root, &getSymbolTable());
     }
 
-    if (atomicCounterCount > 0)
+    if (!ReplaceGLDepthRangeWithDriverUniform(this, root, driverUniforms, &getSymbolTable()))
     {
-        const TIntermTyped *acbBufferOffsets = driverUniforms->getAcbBufferOffsets();
-        if (!RewriteAtomicCounters(this, root, &symbolTable, acbBufferOffsets, nullptr))
-        {
-            return false;
-        }
-    }
-    else if (getShaderVersion() >= 310)
-    {
-        // Vulkan doesn't support Atomic Storage as a Storage Class, but we've seen
-        // cases where builtins are using it even with no active atomic counters.
-        // This pass simply removes those builtins in that scenario.
-        if (!RemoveAtomicCounterBuiltins(this, root))
-        {
-            return false;
-        }
-    }
-
-    if (getShaderType() != GL_COMPUTE_SHADER)
-    {
-        if (!ReplaceGLDepthRangeWithDriverUniform(this, root, driverUniforms, &getSymbolTable()))
-        {
-            return false;
-        }
+        return false;
     }
 
     {
@@ -1203,8 +1156,7 @@ bool TranslatorMSL::translateImpl(TInfoSinkBase &sink,
             DeclareRightBeforeMain(*root, *BuiltInVariable::gl_PointCoord());
         }
 
-        if (usesFragCoord || compileOptions.emulateAlphaToCoverage ||
-            compileOptions.metal.generateShareableShaders)
+        if (usesFragCoord || compileOptions.emulateAlphaToCoverage)
         {
             if (!InsertFragCoordCorrection(this, compileOptions, root, GetMainSequence(root),
                                            &getSymbolTable(), driverUniforms))
@@ -1323,9 +1275,8 @@ bool TranslatorMSL::translateImpl(TInfoSinkBase &sink,
     {
         mValidateASTOptions.validateVariableReferences = false;
         if (!AddSampleMaskDeclaration(*this, *root, symbolTable, driverUniforms,
-                                      compileOptions.emulateAlphaToCoverage ||
-                                          compileOptions.metal.generateShareableShaders,
-                                      usesSampleMask))
+                                      compileOptions.emulateAlphaToCoverage,
+                                      ppc.writeHelperSampleMask, usesSampleMask))
         {
             return false;
         }

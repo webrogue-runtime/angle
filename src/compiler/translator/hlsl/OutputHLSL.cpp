@@ -475,7 +475,7 @@ TString OutputHLSL::structInitializerString(int indent,
         for (unsigned int fieldIndex = 0; fieldIndex < fields.size(); fieldIndex++)
         {
             const TField &field      = *fields[fieldIndex];
-            const TString &fieldName = name + "." + Decorate(field.name());
+            const TString &fieldName = name + "." + DecorateField(field.name(), structure);
             const TType &fieldType   = *field.type();
 
             init += structInitializerString(indent + 1, fieldType, fieldName);
@@ -549,13 +549,13 @@ TString OutputHLSL::generateStructMapping(const std::vector<MappedStruct> &std14
                 mappedName += "_";
             }
 
-            TString fieldName = Decorate(mappedStruct.field->name());
+            TType *structType = mappedStruct.field->type();
+            TString fieldName = DecorateField(mappedStruct.field->name(), *structType->getStruct());
             originalName += fieldName;
             mappedName += fieldName;
 
-            TType *structType = mappedStruct.field->type();
             mappedStructs +=
-                "static " + Decorate(structType->getStruct()->name()) + " " + mappedName;
+                "static " + DecorateStruct(structType->getStruct()->name()) + " " + mappedName;
 
             if (structType->isArray())
             {
@@ -577,8 +577,8 @@ void OutputHLSL::writeReferencedAttributes(TInfoSinkBase &out) const
         const TType &type           = attribute.second->getType();
         const ImmutableString &name = attribute.second->name();
 
-        out << "static " << TypeString(type) << " " << Decorate(name) << ArrayString(type) << " = "
-            << zeroInitializer(type) << ";\n";
+        out << "static " << TypeString(type) << " " << DecorateInterfaceVariable(name)
+            << ArrayString(type) << " = " << zeroInitializer(type) << ";\n";
     }
 }
 
@@ -590,8 +590,8 @@ void OutputHLSL::writeReferencedVaryings(TInfoSinkBase &out) const
 
         // Program linking depends on this exact format
         out << "static " << InterpolationString(type.getQualifier()) << " " << TypeString(type)
-            << " " << DecorateVariableIfNeeded(*varying.second) << ArrayString(type) << " = "
-            << zeroInitializer(type) << ";\n";
+            << " " << DecorateVariableIfNeeded(*varying.second, DebugNames::Retain)
+            << ArrayString(type) << " = " << zeroInitializer(type) << ";\n";
     }
 }
 
@@ -1159,7 +1159,7 @@ void OutputHLSL::visitSymbol(TIntermSymbol *node)
                 mReferencedUniforms[uniqueId.get()] = &variable;
             }
 
-            out << DecorateVariableIfNeeded(variable);
+            out << DecorateVariableIfNeeded(variable, DebugNames::Retain);
         }
         else if (qualifier == EvqBuffer)
         {
@@ -1168,12 +1168,12 @@ void OutputHLSL::visitSymbol(TIntermSymbol *node)
         else if (qualifier == EvqAttribute || qualifier == EvqVertexIn)
         {
             mReferencedAttributes[uniqueId.get()] = &variable;
-            out << Decorate(name);
+            out << DecorateInterfaceVariable(name);
         }
         else if (IsVarying(qualifier))
         {
             mReferencedVaryings[uniqueId.get()] = &variable;
-            out << DecorateVariableIfNeeded(variable);
+            out << DecorateVariableIfNeeded(variable, DebugNames::Retain);
         }
         else if (qualifier == EvqFragmentOut)
         {
@@ -1271,7 +1271,8 @@ void OutputHLSL::visitSymbol(TIntermSymbol *node)
         }
         else
         {
-            out << DecorateVariableIfNeeded(variable);
+            out << DecorateVariableIfNeeded(
+                variable, mCompileOptions.outputDebugInfo ? DebugNames::Retain : DebugNames::Drop);
         }
     }
 }
@@ -1511,7 +1512,7 @@ bool OutputHLSL::visitBinary(Visit visit, TIntermBinary *node)
                         if (fieldType->isMatrix() || fieldType->isVectorArray() ||
                             fieldType->isScalarArray())
                         {
-                            out << "." << Decorate(field->name());
+                            out << "." << DecorateUserStructField(field->name());
                         }
                     }
                 }
@@ -1540,7 +1541,7 @@ bool OutputHLSL::visitBinary(Visit visit, TIntermBinary *node)
                         if (fieldType->isMatrix() || fieldType->isVectorArray() ||
                             fieldType->isScalarArray())
                         {
-                            out << "." << Decorate(field->name());
+                            out << "." << DecorateUserStructField(field->name());
                         }
                     }
                 }
@@ -1586,7 +1587,7 @@ bool OutputHLSL::visitBinary(Visit visit, TIntermBinary *node)
                 {
                     out << ".";
                 }
-                out << Decorate(field->name());
+                out << DecorateUserStructField(field->name());
 
                 return false;
             }
@@ -2656,7 +2657,8 @@ void OutputHLSL::writeParameter(const TVariable *param, TInfoSinkBase &out)
     const TType &type    = param->getType();
     TQualifier qualifier = type.getQualifier();
 
-    TString nameStr = DecorateVariableIfNeeded(*param);
+    TString nameStr = DecorateVariableIfNeeded(
+        *param, mCompileOptions.outputDebugInfo ? DebugNames::Retain : DebugNames::Drop);
     ASSERT(nameStr != "");  // HLSL demands named arguments, also for prototypes
 
     if (IsSampler(type.getBasicType()))
@@ -2848,8 +2850,8 @@ TString OutputHLSL::addStructEqualityFunction(const TStructure &structure)
         const TField *field    = fields[i];
         const TType *fieldType = field->type();
 
-        const TString &fieldNameA = "a." + Decorate(field->name());
-        const TString &fieldNameB = "b." + Decorate(field->name());
+        const TString &fieldNameA = "a." + DecorateUserStructField(field->name());
+        const TString &fieldNameB = "b." + DecorateUserStructField(field->name());
 
         if (i > 0)
         {

@@ -770,10 +770,8 @@ void AssignInterfaceBlockBindings(const SpvSourceOptions &options,
                                   SpvProgramInterfaceInfo *programInterfaceInfo,
                                   ShaderInterfaceVariableInfoMap *variableInfoMapOut)
 {
-    for (uint32_t blockIndex = 0; blockIndex < blocks.size(); ++blockIndex)
+    for (const gl::InterfaceBlock &block : blocks)
     {
-        const gl::InterfaceBlock &block = blocks[blockIndex];
-
         // TODO: http://anglebug.com/42263134: All blocks should be active
         const gl::ShaderBitSet activeShaders =
             programExecutable.getLinkedShaderStages() & block.activeShaders();
@@ -1303,13 +1301,21 @@ void SpirvPerVertexTrimmer::visitMemberDecorate(spirv::IdRef id,
             UNREACHABLE();
     }
 
-    if (id == ID::OutputPerVertexBlock && perVertexMember == mOutputPerVertexMaxActiveMember)
+    // The block does not necessarily include every member up to the max active one; for example
+    // gl_ClipDistance is not declared when unused, and the input block of a stage may not include
+    // every member written by the previous stage. Keep the largest member whose built-in is at or
+    // before the max active member. The members of gl_PerVertex are always declared in the order
+    // of gl::PerVertexMember, so the member indices are monotonic in that order.
+    const uint32_t memberIndex = member;
+    if (id == ID::OutputPerVertexBlock && perVertexMember <= mOutputPerVertexMaxActiveMember)
     {
-        mOutputPerVertexMaxActiveMemberIndex = member;
+        mOutputPerVertexMaxActiveMemberIndex =
+            std::max(mOutputPerVertexMaxActiveMemberIndex, memberIndex);
     }
-    else if (id == ID::InputPerVertexBlock && perVertexMember == mInputPerVertexMaxActiveMember)
+    else if (id == ID::InputPerVertexBlock && perVertexMember <= mInputPerVertexMaxActiveMember)
     {
-        mInputPerVertexMaxActiveMemberIndex = member;
+        mInputPerVertexMaxActiveMemberIndex =
+            std::max(mInputPerVertexMaxActiveMemberIndex, memberIndex);
     }
 }
 
@@ -1571,6 +1577,14 @@ class SpirvVaryingPrecisionFixer final : angle::NonCopyable
                                           spv::StorageClass storageClass,
                                           spirv::Blob *blobOut);
 
+    TransformationState transformExtInst(const uint32_t *instruction, spirv::Blob *blobOut);
+
+    void transformAccessChain(spirv::IdResultType typeId,
+                              spirv::IdResult id,
+                              spirv::IdRef baseId,
+                              const spirv::IdRefList &indexList,
+                              spirv::Blob *blobOut);
+
     void modifyEntryPointInterfaceList(EntryPointList entryPointList,
                                        spirv::IdRefList *interfaceList);
     void addDecorate(spirv::IdRef replacedId, spirv::Blob *blobOut);
@@ -1642,6 +1656,53 @@ TransformationState SpirvVaryingPrecisionFixer::transformVariable(
         return TransformationState::Transformed;
     }
     return TransformationState::Unchanged;
+}
+
+TransformationState SpirvVaryingPrecisionFixer::transformExtInst(const uint32_t *instruction,
+                                                                 spirv::Blob *blobOut)
+{
+    spirv::IdResultType typeId;
+    spirv::IdResult id;
+    spirv::IdRef set;
+    spirv::LiteralExtInstInteger extInst;
+    spirv::IdRefList operands;
+    spirv::ParseExtInst(instruction, &typeId, &id, &set, &extInst, &operands);
+
+    switch (extInst)
+    {
+        case spv::GLSLstd450InterpolateAtCentroid:
+        case spv::GLSLstd450InterpolateAtSample:
+        case spv::GLSLstd450InterpolateAtOffset:
+            ASSERT(operands.size() >= 1);
+            ASSERT(operands[0] < mFixedVaryingId.size());
+            if (mFixedVaryingId[operands[0]].valid())
+            {
+                operands[0] = mFixedVaryingId[operands[0]];
+                spirv::WriteExtInst(blobOut, typeId, id, set, extInst, operands);
+                return TransformationState::Transformed;
+            }
+            break;
+        default:
+            return TransformationState::Unchanged;
+    }
+    return TransformationState::Unchanged;
+}
+
+void SpirvVaryingPrecisionFixer::transformAccessChain(spirv::IdResultType typeId,
+                                                      spirv::IdResult id,
+                                                      spirv::IdRef baseId,
+                                                      const spirv::IdRefList &indexList,
+                                                      spirv::Blob *blobOut)
+{
+    ASSERT(baseId < mFixedVaryingId.size());
+    ASSERT(id < mFixedVaryingId.size());
+    if (mFixedVaryingId[baseId].valid())
+    {
+        mFixedVaryingId[id] = SpirvTransformerBase::GetNewId(blobOut);
+        spirv::WriteAccessChain(blobOut, typeId, mFixedVaryingId[id], mFixedVaryingId[baseId],
+                                indexList);
+    }
+    return;
 }
 
 void SpirvVaryingPrecisionFixer::writeInputPreamble(
@@ -2401,9 +2462,8 @@ void SpirvTransformFeedbackCodeGenerator::writeTransformFeedbackEmulationOutput(
 
         // Go over the varyings of this buffer in order.
         const std::vector<XfbVarying> &varyings = mXfbVaryings[bufferIndex];
-        for (size_t varyingIndex = 0; varyingIndex < varyings.size(); ++varyingIndex)
+        for (const XfbVarying &varying : varyings)
         {
-            const XfbVarying &varying                  = varyings[varyingIndex];
             const ShaderInterfaceVariableXfbInfo *info = varying.info;
             ASSERT(info->pod.buffer == bufferIndex);
 
@@ -4829,6 +4889,13 @@ TransformationState SpirvTransformer::transformExtInstImport(const uint32_t *ins
 
 TransformationState SpirvTransformer::transformExtInst(const uint32_t *instruction)
 {
+    if (mOptions.useSpirvVaryingPrecisionFixer &&
+        mVaryingPrecisionFixer.transformExtInst(instruction, mSpirvBlobOut) ==
+            TransformationState::Transformed)
+    {
+        return TransformationState::Transformed;
+    }
+
     sh::vk::spirv::NonSemanticInstruction inst;
     if (!mNonSemanticInstructions.visitExtInst(instruction, &inst))
     {
@@ -5017,19 +5084,24 @@ TransformationState SpirvTransformer::transformAccessChain(const uint32_t *instr
         }
     }
 
-    if (mOptions.useSpirvVaryingPrecisionFixer)
+    if (info->activeStages[mOptions.shaderType])
     {
-        if (info->activeStages[mOptions.shaderType] &&
+        if (!mOptions.useSpirvVaryingPrecisionFixer ||
             info->useRelaxedPrecision == PrecisionAdjustmentEnum::kUnchanged)
         {
             return TransformationState::Unchanged;
         }
-    }
-    else
-    {
-        if (info->activeStages[mOptions.shaderType])
+        // If the fragment shader calls following built-in functions:
+        // interpolateAtCentroid(inputVarying[index])
+        // interpolateAtOffset(inputVarying[index])
+        // interpolateAtSample(inputVarying[index])
+        // And we replace the inputVarying with replacementVarying, we need to generate access chain
+        // instruction on the replaceVarying so that we can modify the functions to take the
+        // replacementVarying[index].
+        if (mOptions.shaderType == gl::ShaderType::Fragment && info->varyingIsInput)
         {
-            return TransformationState::Unchanged;
+            mVaryingPrecisionFixer.transformAccessChain(typeId, id, baseId, indexList,
+                                                        mSpirvBlobOut);
         }
     }
 
@@ -6099,10 +6171,9 @@ void SpvAssignTransformFeedbackLocations(gl::ShaderType shaderType,
 
     if (isTransformFeedbackStage)
     {
-        for (uint32_t varyingIndex = 0; varyingIndex < tfVaryings.size(); ++varyingIndex)
+        for (const gl::TransformFeedbackVarying &tfVarying : tfVaryings)
         {
-            const gl::TransformFeedbackVarying &tfVarying = tfVaryings[varyingIndex];
-            const std::string &tfVaryingName              = tfVarying.name;
+            const std::string &tfVaryingName = tfVarying.name;
 
             if (tfVaryingName == "gl_Position")
             {

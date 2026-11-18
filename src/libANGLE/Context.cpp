@@ -739,6 +739,7 @@ Context::Context(egl::Display *display,
       mProgramPipelineObserverBinding(this, kProgramPipelineSubjectIndex),
       mFrameCapture(new angle::FrameCapture),
       mRefCount(0),
+      mIsCurrentOnAnyThread(false),
       mIsDestroyed(false),
       mDestroyedManagers(false)
 {
@@ -932,7 +933,7 @@ void Context::initializeDefaultResources()
     mTilingDirtyObjects |= kTilingDirtyObjectsBase;
 }
 
-egl::Error Context::onDestroy(const egl::Display *display)
+egl::Error Context::onDestroy(const egl::ThreadSafeDisplay *display)
 {
     if (!mHasBeenCurrent)
     {
@@ -945,11 +946,13 @@ egl::Error Context::onDestroy(const egl::Display *display)
 
     mState.ensureNoPendingLink(this);
 
-    // eglDestoryContext() must have been called for this Context and there must not be any Threads
+    // eglDestroyContext() must have been called for this Context and there must not be any thread
     // that still have it current.
-    ASSERT(mIsDestroyed == true && mRefCount == 0);
+    ASSERT(mIsDestroyed == true && !isCurrentOnAnyThread());
+    // No other references should exist for this context.
+    ASSERT(mRefCount == 0);
 
-    ANGLE_TRY(unMakeCurrent(display));
+    ANGLE_TRY(unMakeCurrent());
 
     // Dump frame capture if enabled.
     getShareGroup()->getFrameCaptureShared()->onDestroyContext(this);
@@ -1073,11 +1076,12 @@ EGLLabelKHR Context::getLabel() const
     return mLabel;
 }
 
-egl::Error Context::makeCurrent(egl::Display *display,
+// Make sure this function only uses ThreadSafeDisplay since caller will not take display lock.
+egl::Error Context::makeCurrent(egl::ThreadSafeDisplay *display,
                                 egl::Surface *drawSurface,
                                 egl::Surface *readSurface)
 {
-    mDisplay = display;
+    mDisplay = static_cast<egl::Display *>(display);
 
     EGLint width  = 0;
     EGLint height = 0;
@@ -1127,8 +1131,10 @@ egl::Error Context::makeCurrent(egl::Display *display,
     return egl::NoError();
 }
 
-egl::Error Context::unMakeCurrent(const egl::Display *display)
+// Make sure this function only uses ThreadSafeDisplay since caller will not take display lock.
+egl::Error Context::unMakeCurrent()
 {
+    egl::ThreadSafeDisplay *display = mDisplay;
     ANGLE_TRY(angle::ResultToEGL(mImplementation->onUnMakeCurrent(this)));
 
     ANGLE_TRY(unsetDefaultFramebuffer());
@@ -1137,11 +1143,11 @@ egl::Error Context::unMakeCurrent(const egl::Display *display)
     // this one is not current.
     if (mScratchBuffer.valid())
     {
-        mDisplay->returnScratchBuffer(mScratchBuffer.release());
+        display->returnScratchBuffer(mScratchBuffer.release());
     }
     if (mZeroFilledBuffer.valid())
     {
-        mDisplay->returnZeroFilledBuffer(mZeroFilledBuffer.release());
+        display->returnZeroFilledBuffer(mZeroFilledBuffer.release());
     }
 
     return egl::NoError();
@@ -3668,40 +3674,7 @@ const char *Context::makeStaticString(const std::string &str)
 
 void Context::initRendererString()
 {
-    std::ostringstream frontendRendererString;
-
-    constexpr char kRendererString[]        = "ANGLE_GL_RENDERER";
-    constexpr char kAndroidRendererString[] = "debug.angle.gl_renderer";
-
-    std::string overrideRenderer =
-        angle::GetEnvironmentVarOrAndroidProperty(kRendererString, kAndroidRendererString);
-    if (!overrideRenderer.empty())
-    {
-        frontendRendererString << overrideRenderer;
-    }
-    else
-    {
-        std::string vendorString(mDisplay->getBackendVendorString());
-        std::string rendererString(mDisplay->getBackendRendererDescription());
-        std::string versionString(mDisplay->getBackendVersionString(!isWebGL()));
-        // Commas are used as a separator in ANGLE's renderer string, so remove commas from each
-        // element.
-        vendorString.erase(std::remove(vendorString.begin(), vendorString.end(), ','),
-                           vendorString.end());
-        rendererString.erase(std::remove(rendererString.begin(), rendererString.end(), ','),
-                             rendererString.end());
-        versionString.erase(std::remove(versionString.begin(), versionString.end(), ','),
-                            versionString.end());
-        frontendRendererString << "ANGLE (";
-        frontendRendererString << vendorString;
-        frontendRendererString << ", ";
-        frontendRendererString << rendererString;
-        frontendRendererString << ", ";
-        frontendRendererString << versionString;
-        frontendRendererString << ")";
-    }
-
-    mRendererString = makeStaticString(frontendRendererString.str());
+    mRendererString = makeStaticString(mDisplay->generateRendererString(!isWebGL()));
 }
 
 void Context::initVendorString()
@@ -3997,6 +3970,7 @@ Extensions Context::generateSupportedExtensions() const
         supportedExtensions.clipDistanceAPPLE        = false;
         supportedExtensions.disjointTimerQueryEXT    = false;
         supportedExtensions.robustnessKHR            = false;
+        supportedExtensions.robustBufferAccessBehaviorKHR = false;
 
         supportedExtensions.blendEquationAdvancedKHR         = false;
         supportedExtensions.blendEquationAdvancedCoherentKHR = false;
@@ -4211,11 +4185,6 @@ Extensions Context::generateSupportedExtensions() const
     // Determine robust resource init availability from EGL.
     supportedExtensions.robustResourceInitializationANGLE = mState.isRobustResourceInitEnabled();
 
-    // mState.getExtensions().robustBufferAccessBehaviorKHR is true only if robust access is true
-    // and the backend supports it.
-    supportedExtensions.robustBufferAccessBehaviorKHR =
-        mState.hasRobustAccess() && supportedExtensions.robustBufferAccessBehaviorKHR;
-
     // Enable the cache control query unconditionally.
     supportedExtensions.programCacheControlANGLE = true;
 
@@ -4341,22 +4310,22 @@ void Context::initCaps()
     {
         INFO() << "Limiting compressed format support.\n";
 
-        mSupportedExtensions.compressedETC1RGB8SubTextureEXT                 = false;
-        mSupportedExtensions.compressedETC1RGB8TextureOES                    = false;
-        mSupportedExtensions.compressedTextureEtcANGLE                       = false;
-        mSupportedExtensions.textureCompressionPvrtcIMG                      = false;
-        mSupportedExtensions.pvrtcSRGBEXT                                    = false;
-        mSupportedExtensions.copyCompressedTextureCHROMIUM                   = false;
-        mSupportedExtensions.textureCompressionAstcHdrKHR                    = false;
-        mSupportedExtensions.textureCompressionAstcLdrKHR                    = false;
-        mSupportedExtensions.textureCompressionAstcOES                       = false;
-        mSupportedExtensions.textureCompressionBptcEXT                       = false;
-        mSupportedExtensions.textureCompressionDxt1EXT                       = false;
-        mSupportedExtensions.textureCompressionDxt3ANGLE                     = false;
-        mSupportedExtensions.textureCompressionDxt5ANGLE                     = false;
-        mSupportedExtensions.textureCompressionRgtcEXT                       = false;
-        mSupportedExtensions.textureCompressionS3tcSrgbEXT                   = false;
-        mSupportedExtensions.textureCompressionAstcSliced3dKHR               = false;
+        mSupportedExtensions.compressedETC1RGB8SubTextureEXT   = false;
+        mSupportedExtensions.compressedETC1RGB8TextureOES      = false;
+        mSupportedExtensions.compressedTextureEtcANGLE         = false;
+        mSupportedExtensions.textureCompressionPvrtcIMG        = false;
+        mSupportedExtensions.pvrtcSRGBEXT                      = false;
+        mSupportedExtensions.copyCompressedTextureCHROMIUM     = false;
+        mSupportedExtensions.textureCompressionAstcHdrKHR      = false;
+        mSupportedExtensions.textureCompressionAstcLdrKHR      = false;
+        mSupportedExtensions.textureCompressionAstcOES         = false;
+        mSupportedExtensions.textureCompressionBptcEXT         = false;
+        mSupportedExtensions.textureCompressionDxt1EXT         = false;
+        mSupportedExtensions.textureCompressionDxt3ANGLE       = false;
+        mSupportedExtensions.textureCompressionDxt5ANGLE       = false;
+        mSupportedExtensions.textureCompressionRgtcEXT         = false;
+        mSupportedExtensions.textureCompressionS3tcSrgbEXT     = false;
+        mSupportedExtensions.textureCompressionAstcSliced3dKHR = false;
 
         caps->compressedTextureFormats.clear();
     }
@@ -4921,11 +4890,15 @@ void Context::updateCaps()
         mTilingDirtyObjects.set(state::DIRTY_OBJECT_DRAW_ATTACHMENTS);
     }
 
-    // If we are in a WebGL or robust access context and the back-end does not support robust buffer
-    // access behaviour, we need to validate the buffer bounds manually.
+    // If we are in a WebGL or robust access context, buffer bounds must be validated manually
+    // unless the back-end provides robust buffer access behaviour.
+    // GL_KHR_robust_buffer_access_behavior is exposed regardless of context robustness, but
+    // back-ends only guarantee the behaviour in robust access contexts, so non-robust
+    // WebGL contexts still need validation.
     mRequiresRobustBehavior = mState.isWebGL() || mState.hasRobustAccess();
-    mBufferAccessValidationEnabled =
-        !mSupportedExtensions.robustBufferAccessBehaviorKHR && mRequiresRobustBehavior;
+    const bool contextSupportsRobustAccess =
+        mSupportedExtensions.robustBufferAccessBehaviorKHR && mState.hasRobustAccess();
+    mBufferAccessValidationEnabled = mRequiresRobustBehavior && !contextSupportsRobustAccess;
 
     // Cache this in the VertexArrays. They need to check it in state change notifications.
     // Note: vertex array objects are private to context and so the map doesn't need locking
@@ -4955,7 +4928,7 @@ angle::Result Context::prepareForClearBuffer(GLenum buffer, GLint drawbuffer)
     return syncStateForClear();
 }
 
-ANGLE_INLINE angle::Result Context::prepareForCopyImage()
+angle::Result Context::prepareForCopyImage()
 {
     ANGLE_TRY(syncDirtyObjects(mCopyImageDirtyObjects, Command::CopyImage));
     return syncDirtyBits(mCopyImageDirtyBits, kCopyImageExtendedDirtyBits, Command::CopyImage);
@@ -5998,6 +5971,12 @@ void Context::compressedTexSubImage2D(TextureTarget target,
                                       GLsizei imageSize,
                                       const void *data)
 {
+    // Zero sized uploads are valid but no-ops
+    if (width == 0 || height == 0)
+    {
+        return;
+    }
+
     ANGLE_CONTEXT_TRY(syncStateForTexImage());
 
     Box area(xoffset, yoffset, 0, width, height, 1);
@@ -6022,7 +6001,7 @@ void Context::compressedTexSubImage3D(TextureTarget target,
                                       const void *data)
 {
     // Zero sized uploads are valid but no-ops
-    if (width == 0 || height == 0)
+    if (width == 0 || height == 0 || depth == 0)
     {
         return;
     }
@@ -9073,6 +9052,11 @@ void Context::getSemaphoreParameterui64v(SemaphoreID semaphore, GLenum pname, GL
     UNIMPLEMENTED();
 }
 
+void Context::trimMemory(MemoryTrimLevel trimLevel)
+{
+    mImplementation->trimMemory(this, trimLevel);
+}
+
 void Context::acquireTextures(GLuint numTextures,
                               const TextureID *textureIds,
                               const GLenum *layouts)
@@ -9700,17 +9684,23 @@ egl::Error Context::setDefaultFramebuffer(egl::Surface *drawSurface, egl::Surfac
     mCurrentDrawSurface = drawSurface;
     mCurrentReadSurface = readSurface;
 
+    egl::Error result = egl::NoError();
     if (drawSurface != nullptr)
     {
-        ANGLE_TRY(drawSurface->makeCurrent(this));
+        result = drawSurface->makeCurrent(this);
     }
-
-    ANGLE_TRY(mDefaultFramebuffer->setSurfaces(this, drawSurface, readSurface));
-
-    if (readSurface && (drawSurface != readSurface))
+    if (drawSurface != readSurface)
     {
-        ANGLE_TRY(readSurface->makeCurrent(this));
+        ASSERT(readSurface != nullptr);
+        egl::Error readResult = readSurface->makeCurrent(this);
+        if (!result.isError())
+        {
+            result = readResult;
+        }
     }
+    ANGLE_TRY(result);
+
+    mDefaultFramebuffer->setSurfaces(this, drawSurface, readSurface);
 
     // Update default framebuffer, the binding of the previous default
     // framebuffer (or lack of) will have a nullptr.
@@ -9747,7 +9737,7 @@ egl::Error Context::unsetDefaultFramebuffer()
             mDrawFramebufferObserverBinding.bind(nullptr);
         }
 
-        ANGLE_TRY(defaultFramebuffer->unsetSurfaces(this));
+        defaultFramebuffer->unsetSurfaces(this);
         mState.mFramebufferManager->setDefaultFramebuffer(nullptr);
     }
 
@@ -9762,6 +9752,7 @@ egl::Error Context::unsetDefaultFramebuffer()
     }
     if (drawSurface != readSurface)
     {
+        ASSERT(readSurface != nullptr);
         ANGLE_TRY(readSurface->unMakeCurrent(this));
     }
 

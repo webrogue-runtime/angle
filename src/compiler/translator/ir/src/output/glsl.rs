@@ -11,6 +11,7 @@
 // this.  It will also serve as basis for WGSL, MSL, and HLSL generation.
 //
 
+use super::utils;
 use crate::ir::*;
 use crate::*;
 
@@ -339,6 +340,17 @@ impl Generator {
         .to_string()
     }
 
+    fn field_built_in_str(built_in: BuiltIn) -> String {
+        (match built_in {
+            BuiltIn::Position => "gl_Position",
+            BuiltIn::PointSize => "gl_PointSize",
+            BuiltIn::ClipDistance => "gl_ClipDistance",
+            BuiltIn::CullDistance => "gl_CullDistance",
+            _ => panic!("Internal error: Invalid built-in field"),
+        })
+        .to_string()
+    }
+
     fn name_str(
         name: &Name,
         temp_prefix: &'static str,
@@ -553,20 +565,6 @@ impl Generator {
         });
     }
 
-    fn get_swizzle(index: u32) -> &'static str {
-        match index {
-            0 => "x",
-            1 => "y",
-            2 => "z",
-            3 => "w",
-            _ => panic!("Internal error: Unexpected swizzle index"),
-        }
-    }
-
-    fn get_swizzle_multi(indices: &[u32]) -> String {
-        indices.iter().map(|&index| Self::get_swizzle(index)).collect::<Vec<_>>().join("")
-    }
-
     fn get_constant_expression(&self, id: ConstantId) -> &String {
         &self.constants[&id].text
     }
@@ -631,9 +629,13 @@ impl ast::Target for Generator {
         // TODO(http://anglebug.com/349994211): add #version and #extension lines when ANGLE uses
         // the IR all the way through to
         // codegen.
-        println!("{}", self.function_declarations);
-        // TODO(http://anglebug.com/349994211): return the resulting string instead
-        "".to_string()
+        format!(
+            "{}{}{}{}",
+            self.preamble,
+            self.type_declarations,
+            self.global_variables,
+            self.function_declarations
+        )
     }
 
     fn new_type(&mut self, ir_meta: &IRMeta, id: TypeId, type_info: &Type) {
@@ -877,10 +879,6 @@ impl ast::Target for Generator {
             ir_meta.all_global_variables(),
             None,
         );
-
-        println!("{}", self.preamble);
-        println!("{}", self.type_declarations);
-        println!("{}", self.global_variables);
     }
 
     fn begin_block(
@@ -905,7 +903,7 @@ impl ast::Target for Generator {
         id: TypedId,
         index: u32,
     ) {
-        let expr = format!("{}.{}", self.get_expression(id), Self::get_swizzle(index));
+        let expr = format!("{}.{}", self.get_expression(id), utils::get_swizzle(index));
         self.expressions.insert(result, expr);
     }
 
@@ -916,7 +914,7 @@ impl ast::Target for Generator {
         id: TypedId,
         indices: &[u32],
     ) {
-        let expr = format!("{}.{}", self.get_expression(id), Self::get_swizzle_multi(indices));
+        let expr = format!("{}.{}", self.get_expression(id), utils::get_swizzle_multi(indices));
         self.expressions.insert(result, expr);
     }
 
@@ -940,8 +938,11 @@ impl ast::Target for Generator {
         field: &Field,
     ) {
         let lhs = self.get_expression(id);
-        let field_name =
-            Self::name_str(&field.name, TEMP_STRUCT_FIELD_PREFIX, USER_VARIABLE_PREFIX, index);
+        let field_name = if let Some(built_in) = field.built_in {
+            Self::field_built_in_str(built_in)
+        } else {
+            Self::name_str(&field.name, TEMP_STRUCT_FIELD_PREFIX, USER_VARIABLE_PREFIX, index)
+        };
         // Note: if selecting the field of a nameless interface block, just use the field.
         let expr = if lhs.is_empty() { field_name } else { format!("{}.{}", lhs, field_name) };
         self.expressions.insert(result, expr);
@@ -1183,6 +1184,7 @@ impl ast::Target for Generator {
 
     fn built_in(
         &mut self,
+        _ir_meta: &IRMeta,
         block_result: &mut String,
         result: Option<RegisterId>,
         built_in_op: BuiltInOpCode,
@@ -1239,7 +1241,8 @@ impl ast::Target for Generator {
             | BuiltInOpCode::SamplePosition
             | BuiltInOpCode::InterpolateAtCenter
             | BuiltInOpCode::LoopForwardProgress
-            | BuiltInOpCode::Saturate => {
+            | BuiltInOpCode::Saturate
+            | BuiltInOpCode::ConvertFromUniformLayout => {
                 panic!("Internal error: Unexpected non-GLSL opcode for GLSL generator")
             }
         };

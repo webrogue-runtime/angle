@@ -202,7 +202,7 @@ WindowSurfaceCGL::~WindowSurfaceCGL()
     }
 }
 
-egl::Error WindowSurfaceCGL::initialize(const egl::Display *display)
+egl::Error WindowSurfaceCGL::initialize(const egl::ThreadSafeDisplay *display)
 {
     EnsureCGLContextIsCurrent ensureContextCurrent(mContext);
 
@@ -314,7 +314,7 @@ egl::Error WindowSurfaceCGL::releaseTexImage(const gl::Context *context, EGLint 
     return egl::Error(EGL_SUCCESS);
 }
 
-void WindowSurfaceCGL::setSwapInterval(const egl::Display *display, EGLint interval)
+void WindowSurfaceCGL::setSwapInterval(const egl::ThreadSafeDisplay *display, EGLint interval)
 {
     // TODO(cwallez) investigate implementing swap intervals other than 0
 }
@@ -327,7 +327,7 @@ gl::Extents WindowSurfaceCGL::getSize() const
     return gl::Extents(width, height, 1);
 }
 
-egl::Error WindowSurfaceCGL::getUserSize(const egl::Display *display,
+egl::Error WindowSurfaceCGL::getUserSize(const egl::ThreadSafeDisplay *display,
                                          EGLint *width,
                                          EGLint *height) const
 {
@@ -355,8 +355,7 @@ EGLint WindowSurfaceCGL::getSwapBehavior() const
     return EGL_BUFFER_DESTROYED;
 }
 
-egl::Error WindowSurfaceCGL::attachToFramebuffer(const gl::Context *context,
-                                                 gl::Framebuffer *framebuffer)
+void WindowSurfaceCGL::attachToFramebuffer(const gl::Context *context, gl::Framebuffer *framebuffer)
 {
     FramebufferGL *framebufferGL = GetImplAs<FramebufferGL>(framebuffer);
     ASSERT(framebufferGL->getFramebufferID() == 0);
@@ -373,16 +372,13 @@ egl::Error WindowSurfaceCGL::attachToFramebuffer(const gl::Context *context,
         mFramebufferID = framebufferID;
     }
     framebufferGL->setFramebufferID(mFramebufferID);
-    return egl::NoError();
 }
 
-egl::Error WindowSurfaceCGL::detachFromFramebuffer(const gl::Context *context,
-                                                   gl::Framebuffer *framebuffer)
+void WindowSurfaceCGL::detachFromFramebuffer(gl::Framebuffer *framebuffer)
 {
     FramebufferGL *framebufferGL = GetImplAs<FramebufferGL>(framebuffer);
     ASSERT(framebufferGL->getFramebufferID() == mFramebufferID);
     framebufferGL->setFramebufferID(0);
-    return egl::NoError();
 }
 
 }  // namespace rx

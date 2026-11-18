@@ -28,7 +28,7 @@ class PbufferSurfaceCGL : public SurfaceGL
                       EGLint height);
     ~PbufferSurfaceCGL() override;
 
-    egl::Error initialize(const egl::Display *display) override;
+    egl::Error initialize(const egl::ThreadSafeDisplay *display) override;
     egl::Error makeCurrent(const gl::Context *context) override;
 
     egl::Error swap(const gl::Context *context, SurfaceSwapFeedback *feedback) override;
@@ -42,17 +42,15 @@ class PbufferSurfaceCGL : public SurfaceGL
                             gl::Texture *texture,
                             EGLint buffer) override;
     egl::Error releaseTexImage(const gl::Context *context, EGLint buffer) override;
-    void setSwapInterval(const egl::Display *display, EGLint interval) override;
+    void setSwapInterval(const egl::ThreadSafeDisplay *display, EGLint interval) override;
 
     gl::Extents getSize() const override;
 
     EGLint isPostSubBufferSupported() const override;
     EGLint getSwapBehavior() const override;
 
-    egl::Error attachToFramebuffer(const gl::Context *context,
-                                   gl::Framebuffer *framebuffer) override;
-    egl::Error detachFromFramebuffer(const gl::Context *context,
-                                     gl::Framebuffer *framebuffer) override;
+    void attachToFramebuffer(const gl::Context *context, gl::Framebuffer *framebuffer) override;
+    void detachFromFramebuffer(gl::Framebuffer *framebuffer) override;
 
   private:
     unsigned mWidth;

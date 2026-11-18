@@ -8,8 +8,8 @@
 //
 
 #include <array>
+#include <vector>
 
-#include "common/unsafe_buffers.h"
 #include "test_utils/ANGLETest.h"
 #include "test_utils/gl_raii.h"
 
@@ -151,8 +151,7 @@ class EXTMultisampleCompatibilityTest : public ANGLETest<>
 // Test simple state tracking
 TEST_P(EXTMultisampleCompatibilityTest, TestStateTracking)
 {
-    if (!isApplicable())
-        return;
+    ANGLE_SKIP_TEST_IF(!isApplicable());
 
     EXPECT_TRUE(glIsEnabled(GL_MULTISAMPLE_EXT));
     glDisable(GL_MULTISAMPLE_EXT);
@@ -172,8 +171,7 @@ TEST_P(EXTMultisampleCompatibilityTest, TestStateTracking)
 // Test that disabling GL_MULTISAMPLE_EXT is handled correctly.
 TEST_P(EXTMultisampleCompatibilityTest, DrawAndResolve)
 {
-    if (!isApplicable())
-        return;
+    ANGLE_SKIP_TEST_IF(!isApplicable());
 
     static const float kBlue[]  = {0.0f, 0.0f, 1.0f, 1.0f};
     static const float kGreen[] = {0.0f, 1.0f, 0.0f, 1.0f};
@@ -183,7 +181,7 @@ TEST_P(EXTMultisampleCompatibilityTest, DrawAndResolve)
     // values. These might be due to different MSAA sample counts causing
     // different samples to hit.  Other option is driver bugs. Just test that
     // disabling multisample causes a difference.
-    std::array<std::unique_ptr<uint8_t[]>, 3> results;
+    std::array<std::vector<uint8_t>, 3> results;
     const GLint kResultSize = kWidth * kHeight * 4;
     for (int pass = 0; pass < 3; pass++)
     {
@@ -208,23 +206,21 @@ TEST_P(EXTMultisampleCompatibilityTest, DrawAndResolve)
             glEnable(GL_MULTISAMPLE_EXT);
         }
         prepareForVerify();
-        results[pass].reset(new uint8_t[kResultSize]);
-        ANGLE_UNSAFE_TODO(memset(results[pass].get(), 123u, kResultSize));
-        glReadPixels(0, 0, kWidth, kHeight, GL_RGBA, GL_UNSIGNED_BYTE, results[pass].get());
+        results[pass].assign(kResultSize, 123u);
+        glReadPixels(0, 0, kWidth, kHeight, GL_RGBA, GL_UNSIGNED_BYTE, results[pass].data());
 
         cleanup();
     }
-    ANGLE_UNSAFE_TODO(EXPECT_NE(0, memcmp(results[0].get(), results[1].get(), kResultSize)));
+    EXPECT_NE(results[0], results[1]);
     // Verify that rendering is deterministic, so that the pass above does not
     // come from non-deterministic rendering.
-    ANGLE_UNSAFE_TODO(EXPECT_EQ(0, memcmp(results[0].get(), results[2].get(), kResultSize)));
+    EXPECT_EQ(results[0], results[2]);
 }
 
 // Test that enabling GL_SAMPLE_ALPHA_TO_ONE_EXT affects rendering.
 TEST_P(EXTMultisampleCompatibilityTest, DrawAlphaOneAndResolve)
 {
-    if (!isApplicable())
-        return;
+    ANGLE_SKIP_TEST_IF(!isApplicable());
 
     // SAMPLE_ALPHA_TO_ONE is specified to transform alpha values of
     // covered samples to 1.0. In order to detect it, we use non-1.0
@@ -239,7 +235,7 @@ TEST_P(EXTMultisampleCompatibilityTest, DrawAlphaOneAndResolve)
     // even approximate sample values is not that easy.  Thus, just test
     // representative positions which have fractional pixels, inspecting that
     // normal rendering is different to SAMPLE_ALPHA_TO_ONE rendering.
-    std::array<std::unique_ptr<uint8_t[]>, 3> results;
+    std::array<std::vector<uint8_t>, 3> results;
     const GLint kResultSize = kWidth * kHeight * 4;
 
     for (int pass = 0; pass < 3; ++pass)
@@ -261,9 +257,8 @@ TEST_P(EXTMultisampleCompatibilityTest, DrawAlphaOneAndResolve)
         glDrawArrays(GL_TRIANGLES, 6, 3);
 
         prepareForVerify();
-        results[pass].reset(new uint8_t[kResultSize]);
-        ANGLE_UNSAFE_TODO(memset(results[pass].get(), 123u, kResultSize));
-        glReadPixels(0, 0, kWidth, kHeight, GL_RGBA, GL_UNSIGNED_BYTE, results[pass].get());
+        results[pass].assign(kResultSize, 123u);
+        glReadPixels(0, 0, kWidth, kHeight, GL_RGBA, GL_UNSIGNED_BYTE, results[pass].data());
         if (pass == 1)
         {
             glDisable(GL_SAMPLE_ALPHA_TO_ONE_EXT);
@@ -271,10 +266,10 @@ TEST_P(EXTMultisampleCompatibilityTest, DrawAlphaOneAndResolve)
 
         cleanup();
     }
-    ANGLE_UNSAFE_TODO(EXPECT_NE(0, memcmp(results[0].get(), results[1].get(), kResultSize)));
+    EXPECT_NE(results[0], results[1]);
     // Verify that rendering is deterministic, so that the pass above does not
     // come from non-deterministic rendering.
-    ANGLE_UNSAFE_TODO(EXPECT_EQ(0, memcmp(results[0].get(), results[2].get(), kResultSize)));
+    EXPECT_EQ(results[0], results[2]);
 }
 
 ANGLE_INSTANTIATE_TEST_ES2_AND_ES3(EXTMultisampleCompatibilityTest);
@@ -367,8 +362,7 @@ class MultisampleCompatibilityTest : public ANGLETest<>
 // Test that enabling GL_SAMPLE_COVERAGE affects rendering.
 TEST_P(MultisampleCompatibilityTest, DrawCoverageAndResolve)
 {
-    if (!isApplicable())
-        return;
+    ANGLE_SKIP_TEST_IF(!isApplicable());
 
     // TODO: Figure out why this fails on Android.
     ANGLE_SKIP_TEST_IF(IsAndroid() && IsOpenGLES());

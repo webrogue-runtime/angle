@@ -97,27 +97,45 @@ enum class CommandID : uint16_t
     ResetEvent,
     ResetQueryPool,
     ResolveImage,
+    SetAlphaToCoverageEnable,
+    SetAlphaToOneEnable,
     SetBlendConstants,
+    SetColorBlendAdvanced,
+    SetColorBlendEnable,
+    SetColorBlendEquation,
+    SetColorWriteMask,
     SetCullMode,
     SetDepthBias,
     SetDepthBiasEnable,
+    SetDepthClampEnable,
+    SetDepthClipNegativeOneToOne,
     SetDepthCompareOp,
     SetDepthTestEnable,
     SetDepthWriteEnable,
     SetEvent,
     SetFragmentShadingRate,
     SetFrontFace,
+    SetLineRasterizationMode,
+    SetLineStippleEnable,
     SetLineWidth,
     SetLogicOp,
+    SetLogicOpEnable,
+    SetPatchControlPoints,
+    SetPolygonMode,
     SetPrimitiveRestartEnable,
     SetPrimitiveTopology,
+    SetProvokingVertexMode,
     SetRasterizerDiscardEnable,
+    SetRasterizationSamples,
+    SetRasterizationStream,
+    SetSampleMask,
     SetScissor,
     SetStencilCompareMask,
     SetStencilOp,
     SetStencilReference,
     SetStencilTestEnable,
     SetStencilWriteMask,
+    SetTessellationDomainOrigin,
     SetVertexInput,
     SetViewport,
     WaitEvents,
@@ -614,6 +632,22 @@ struct ResolveImageParams
 };
 VERIFY_8_BYTE_ALIGNMENT(ResolveImageParams)
 
+struct SetAlphaToCoverageEnableParams
+{
+    CommandHeader header;
+
+    VkBool32 alphaToCoverageEnable;
+};
+VERIFY_8_BYTE_ALIGNMENT(SetAlphaToCoverageEnableParams)
+
+struct SetAlphaToOneEnableParams
+{
+    CommandHeader header;
+
+    VkBool32 alphaToOneEnable;
+};
+VERIFY_8_BYTE_ALIGNMENT(SetAlphaToOneEnableParams)
+
 struct SetBlendConstantsParams
 {
     CommandHeader header;
@@ -622,6 +656,49 @@ struct SetBlendConstantsParams
     std::array<float, 4> blendConstants;
 };
 VERIFY_8_BYTE_ALIGNMENT(SetBlendConstantsParams)
+
+struct SetColorBlendAdvancedParams
+{
+    CommandHeader header;
+
+    VkBlendOp advancedBlendOp;
+};
+VERIFY_8_BYTE_ALIGNMENT(SetColorBlendAdvancedParams)
+
+struct SetColorBlendEnableParams
+{
+    CommandHeader header;
+
+    uint32_t attachment : 16;
+    uint32_t colorBlendEnable : 16;
+};
+VERIFY_8_BYTE_ALIGNMENT(SetColorBlendEnableParams)
+
+struct SetColorBlendEquationParams
+{
+    CommandHeader header;
+
+    uint32_t attachment : 6;
+
+    // Note: advanced blend operations are never set via this function.  VkBlendFactor fits in 5
+    // bits and VkBlendOp (the non-advanced ops) fit in 3 bits.
+    uint32_t srcColorBlendFactor : 5;
+    uint32_t dstColorBlendFactor : 5;
+    uint32_t colorBlendOp : 3;
+    uint32_t srcAlphaBlendFactor : 5;
+    uint32_t dstAlphaBlendFactor : 5;
+    uint32_t alphaBlendOp : 3;
+};
+VERIFY_8_BYTE_ALIGNMENT(SetColorBlendEquationParams)
+
+struct SetColorWriteMaskParams
+{
+    CommandHeader header;
+
+    uint32_t attachment : 16;
+    uint32_t colorWriteMask : 16;
+};
+VERIFY_8_BYTE_ALIGNMENT(SetColorWriteMaskParams)
 
 struct SetCullModeParams
 {
@@ -648,6 +725,22 @@ struct SetDepthBiasEnableParams
     VkBool32 depthBiasEnable;
 };
 VERIFY_8_BYTE_ALIGNMENT(SetDepthBiasEnableParams)
+
+struct SetDepthClampEnableParams
+{
+    CommandHeader header;
+
+    VkBool32 depthClampEnable;
+};
+VERIFY_8_BYTE_ALIGNMENT(SetDepthClampEnableParams)
+
+struct SetDepthClipNegativeOneToOneParams
+{
+    CommandHeader header;
+
+    VkBool32 negativeOneToOne;
+};
+VERIFY_8_BYTE_ALIGNMENT(SetDepthClipNegativeOneToOneParams)
 
 struct SetDepthCompareOpParams
 {
@@ -701,6 +794,22 @@ struct SetFrontFaceParams
 };
 VERIFY_8_BYTE_ALIGNMENT(SetFrontFaceParams)
 
+struct SetLineRasterizationModeParams
+{
+    CommandHeader header;
+
+    VkLineRasterizationMode lineRasterizationMode;
+};
+VERIFY_8_BYTE_ALIGNMENT(SetLineRasterizationModeParams)
+
+struct SetLineStippleEnableParams
+{
+    CommandHeader header;
+
+    uint32_t padding;
+};
+VERIFY_8_BYTE_ALIGNMENT(SetLineStippleEnableParams)
+
 struct SetLineWidthParams
 {
     CommandHeader header;
@@ -716,6 +825,30 @@ struct SetLogicOpParams
     VkLogicOp logicOp;
 };
 VERIFY_8_BYTE_ALIGNMENT(SetLogicOpParams)
+
+struct SetLogicOpEnableParams
+{
+    CommandHeader header;
+
+    VkBool32 logicOpEnable;
+};
+VERIFY_8_BYTE_ALIGNMENT(SetLogicOpEnableParams)
+
+struct SetPatchControlPointsParams
+{
+    CommandHeader header;
+
+    uint32_t patchControlPoints;
+};
+VERIFY_8_BYTE_ALIGNMENT(SetPatchControlPointsParams)
+
+struct SetPolygonModeParams
+{
+    CommandHeader header;
+
+    VkPolygonMode polygonMode;
+};
+VERIFY_8_BYTE_ALIGNMENT(SetPolygonModeParams)
 
 struct SetPrimitiveRestartEnableParams
 {
@@ -733,6 +866,14 @@ struct SetPrimitiveTopologyParams
 };
 VERIFY_8_BYTE_ALIGNMENT(SetPrimitiveTopologyParams)
 
+struct SetProvokingVertexModeParams
+{
+    CommandHeader header;
+
+    uint32_t padding;
+};
+VERIFY_8_BYTE_ALIGNMENT(SetProvokingVertexModeParams)
+
 struct SetRasterizerDiscardEnableParams
 {
     CommandHeader header;
@@ -740,6 +881,30 @@ struct SetRasterizerDiscardEnableParams
     VkBool32 rasterizerDiscardEnable;
 };
 VERIFY_8_BYTE_ALIGNMENT(SetRasterizerDiscardEnableParams)
+
+struct SetRasterizationSamplesParams
+{
+    CommandHeader header;
+
+    VkSampleCountFlagBits rasterizationSamples;
+};
+VERIFY_8_BYTE_ALIGNMENT(SetRasterizationSamplesParams)
+
+struct SetRasterizationStreamParams
+{
+    CommandHeader header;
+
+    uint32_t padding;
+};
+VERIFY_8_BYTE_ALIGNMENT(SetRasterizationStreamParams)
+
+struct SetSampleMaskParams
+{
+    CommandHeader header;
+
+    VkSampleMask sampleMask;
+};
+VERIFY_8_BYTE_ALIGNMENT(SetSampleMaskParams)
 
 struct SetScissorParams
 {
@@ -797,6 +962,14 @@ struct SetStencilWriteMaskParams
     uint16_t writeBackMask;
 };
 VERIFY_8_BYTE_ALIGNMENT(SetStencilWriteMaskParams)
+
+struct SetTessellationDomainOriginParams
+{
+    CommandHeader header;
+
+    uint32_t padding;
+};
+VERIFY_8_BYTE_ALIGNMENT(SetTessellationDomainOriginParams)
 
 struct SetVertexInputParams
 {
@@ -1109,12 +1282,28 @@ class SecondaryCommandBuffer final : angle::NonCopyable
                       uint32_t regionCount,
                       const VkImageResolve *regions);
 
-    void setBlendConstants(const float blendConstants[4]);
+    void setAlphaToCoverageEnable(VkBool32 alphaToCoverageEnable);
+    void setAlphaToOneEnable(VkBool32 alphaToOneEnable);
+    void setBlendConstants(const gl::ColorF &blendConstants);
+    void setColorBlendAdvanced(uint32_t firstAttachment,
+                               uint32_t attachmentCount,
+                               const VkColorBlendAdvancedEXT *colorBlendAdvanced);
+    void setColorBlendEnable(uint32_t firstAttachment,
+                             uint32_t attachmentCount,
+                             const VkBool32 *colorBlendEnables);
+    void setColorBlendEquation(uint32_t firstAttachment,
+                               uint32_t attachmentCount,
+                               const VkColorBlendEquationEXT *colorBlendEquations);
+    void setColorWriteMask(uint32_t firstAttachment,
+                           uint32_t attachmentCount,
+                           const VkColorComponentFlags *colorWriteMasks);
     void setCullMode(VkCullModeFlags cullMode);
     void setDepthBias(float depthBiasConstantFactor,
                       float depthBiasClamp,
                       float depthBiasSlopeFactor);
     void setDepthBiasEnable(VkBool32 depthBiasEnable);
+    void setDepthClampEnable(VkBool32 depthClampEnable);
+    void setDepthClipNegativeOneToOne(VkBool32 negativeOneToOne);
     void setDepthCompareOp(VkCompareOp depthCompareOp);
     void setDepthTestEnable(VkBool32 depthTestEnable);
     void setDepthWriteEnable(VkBool32 depthWriteEnable);
@@ -1122,11 +1311,20 @@ class SecondaryCommandBuffer final : angle::NonCopyable
     void setFragmentShadingRate(const VkExtent2D *fragmentSize,
                                 VkFragmentShadingRateCombinerOpKHR ops[2]);
     void setFrontFace(VkFrontFace frontFace);
+    void setLineRasterizationMode(VkLineRasterizationMode lineRasterizationMode);
+    void setLineStippleEnable(VkBool32 stippledLineEnable);
     void setLineWidth(float lineWidth);
     void setLogicOp(VkLogicOp logicOp);
+    void setLogicOpEnable(VkBool32 logicOpEnable);
+    void setPatchControlPoints(uint32_t patchControlPoints);
+    void setPolygonMode(VkPolygonMode polygonMode);
     void setPrimitiveRestartEnable(VkBool32 primitiveRestartEnable);
     void setPrimitiveTopology(VkPrimitiveTopology primitiveTopology);
+    void setProvokingVertexMode(VkProvokingVertexModeEXT provokingVertexMode);
     void setRasterizerDiscardEnable(VkBool32 rasterizerDiscardEnable);
+    void setRasterizationSamples(VkSampleCountFlagBits rasterizationSamples);
+    void setRasterizationStream(uint32_t rasterizationStream);
+    void setSampleMask(VkSampleCountFlagBits samples, const VkSampleMask *sampleMask);
     void setScissor(uint32_t firstScissor, uint32_t scissorCount, const VkRect2D *scissors);
     void setStencilCompareMask(uint32_t compareFrontMask, uint32_t compareBackMask);
     void setStencilOp(VkStencilFaceFlags faceMask,
@@ -1137,6 +1335,7 @@ class SecondaryCommandBuffer final : angle::NonCopyable
     void setStencilReference(uint32_t frontReference, uint32_t backReference);
     void setStencilTestEnable(VkBool32 stencilTestEnable);
     void setStencilWriteMask(uint32_t writeFrontMask, uint32_t writeBackMask);
+    void setTessellationDomainOrigin(VkTessellationDomainOrigin domainOrigin);
     void setVertexInput(uint32_t vertexBindingDescriptionCount,
                         const VkVertexInputBindingDescription2EXT *vertexBindingDescriptions,
                         uint32_t vertexAttributeDescriptionCount,
@@ -2151,15 +2350,101 @@ ANGLE_INLINE void SecondaryCommandBuffer::resolveImage(const Image &srcImage,
     paramStruct->dstImageLayout     = dstImageLayout;
 }
 
-ANGLE_INLINE void SecondaryCommandBuffer::setBlendConstants(const float blendConstants[4])
+ANGLE_INLINE void SecondaryCommandBuffer::setAlphaToCoverageEnable(VkBool32 alphaToCoverageEnable)
+{
+    SetAlphaToCoverageEnableParams *paramStruct =
+        initCommand<SetAlphaToCoverageEnableParams>(CommandID::SetAlphaToCoverageEnable);
+    paramStruct->alphaToCoverageEnable = alphaToCoverageEnable;
+}
+
+ANGLE_INLINE void SecondaryCommandBuffer::setAlphaToOneEnable(VkBool32 alphaToOneEnable)
+{
+    SetAlphaToOneEnableParams *paramStruct =
+        initCommand<SetAlphaToOneEnableParams>(CommandID::SetAlphaToOneEnable);
+    paramStruct->alphaToOneEnable = alphaToOneEnable;
+}
+
+ANGLE_INLINE void SecondaryCommandBuffer::setBlendConstants(const gl::ColorF &blendConstants)
 {
     SetBlendConstantsParams *paramStruct =
         initCommand<SetBlendConstantsParams>(CommandID::SetBlendConstants);
-    for (uint32_t channel = 0; channel < 4; ++channel)
-    {
-        ANGLE_UNSAFE_TODO(paramStruct->blendConstants[channel]) =
-            ANGLE_UNSAFE_TODO(blendConstants[channel]);
-    }
+    paramStruct->blendConstants = {blendConstants.red, blendConstants.green, blendConstants.blue,
+                                   blendConstants.alpha};
+}
+
+ANGLE_INLINE void SecondaryCommandBuffer::setColorBlendAdvanced(
+    uint32_t firstAttachment,
+    uint32_t attachmentCount,
+    const VkColorBlendAdvancedEXT *colorBlendAdvanced)
+{
+    // GL allows advanced blend only on 1 attachment, and that is attachment 0.
+    ASSERT(firstAttachment == 0);
+    ASSERT(attachmentCount == 1);
+
+    // The following are the default (unconfigurable) values in GL.  When state is static, ANGLE
+    // never includes VkPipelineColorBlendAdvancedStateCreateInfoEXT, and the spec says:
+    //
+    // > If this structure is not present, srcPremultiplied and dstPremultiplied are both considered
+    // > to be VK_TRUE, and blendOverlap is considered to be VK_BLEND_OVERLAP_UNCORRELATED_EXT.
+    //
+    // Also corresponding to static state, clamp is not enabled.  The spec says in the Blend
+    // Operations section:
+    //
+    // > If the color attachment is floating-point, no clamping occurs.
+    ASSERT(colorBlendAdvanced[0].srcPremultiplied == VK_TRUE);
+    ASSERT(colorBlendAdvanced[0].dstPremultiplied == VK_TRUE);
+    ASSERT(colorBlendAdvanced[0].blendOverlap == VK_BLEND_OVERLAP_UNCORRELATED_EXT);
+    ASSERT(colorBlendAdvanced[0].clampResults == VK_FALSE);
+
+    SetColorBlendAdvancedParams *paramStruct =
+        initCommand<SetColorBlendAdvancedParams>(CommandID::SetColorBlendAdvanced);
+    paramStruct->advancedBlendOp = colorBlendAdvanced[0].advancedBlendOp;
+}
+
+ANGLE_INLINE void SecondaryCommandBuffer::setColorBlendEnable(uint32_t firstAttachment,
+                                                              uint32_t attachmentCount,
+                                                              const VkBool32 *colorBlendEnables)
+{
+    // Blend is enabled one attachment at a time.
+    ASSERT(attachmentCount == 1);
+
+    SetColorBlendEnableParams *paramStruct =
+        initCommand<SetColorBlendEnableParams>(CommandID::SetColorBlendEnable);
+    SetBitField(paramStruct->attachment, firstAttachment);
+    SetBitField(paramStruct->colorBlendEnable, colorBlendEnables[0]);
+}
+
+ANGLE_INLINE void SecondaryCommandBuffer::setColorBlendEquation(
+    uint32_t firstAttachment,
+    uint32_t attachmentCount,
+    const VkColorBlendEquationEXT *colorBlendEquation)
+{
+    // Blend equation is set one attachment at a time.
+    ASSERT(attachmentCount == 1);
+
+    SetColorBlendEquationParams *paramStruct =
+        initCommand<SetColorBlendEquationParams>(CommandID::SetColorBlendEquation);
+    SetBitField(paramStruct->attachment, firstAttachment);
+    SetBitField(paramStruct->srcColorBlendFactor, colorBlendEquation[0].srcColorBlendFactor);
+    SetBitField(paramStruct->dstColorBlendFactor, colorBlendEquation[0].dstColorBlendFactor);
+    SetBitField(paramStruct->colorBlendOp, colorBlendEquation[0].colorBlendOp);
+    SetBitField(paramStruct->srcAlphaBlendFactor, colorBlendEquation[0].srcAlphaBlendFactor);
+    SetBitField(paramStruct->dstAlphaBlendFactor, colorBlendEquation[0].dstAlphaBlendFactor);
+    SetBitField(paramStruct->alphaBlendOp, colorBlendEquation[0].alphaBlendOp);
+}
+
+ANGLE_INLINE void SecondaryCommandBuffer::setColorWriteMask(
+    uint32_t firstAttachment,
+    uint32_t attachmentCount,
+    const VkColorComponentFlags *colorWriteMask)
+{
+    // Masks are set one attachment at a time.
+    ASSERT(attachmentCount == 1);
+
+    SetColorWriteMaskParams *paramStruct =
+        initCommand<SetColorWriteMaskParams>(CommandID::SetColorWriteMask);
+    SetBitField(paramStruct->attachment, firstAttachment);
+    SetBitField(paramStruct->colorWriteMask, colorWriteMask[0]);
 }
 
 ANGLE_INLINE void SecondaryCommandBuffer::setCullMode(VkCullModeFlags cullMode)
@@ -2183,6 +2468,20 @@ ANGLE_INLINE void SecondaryCommandBuffer::setDepthBiasEnable(VkBool32 depthBiasE
     SetDepthBiasEnableParams *paramStruct =
         initCommand<SetDepthBiasEnableParams>(CommandID::SetDepthBiasEnable);
     paramStruct->depthBiasEnable = depthBiasEnable;
+}
+
+ANGLE_INLINE void SecondaryCommandBuffer::setDepthClampEnable(VkBool32 depthClampEnable)
+{
+    SetDepthClampEnableParams *paramStruct =
+        initCommand<SetDepthClampEnableParams>(CommandID::SetDepthClampEnable);
+    paramStruct->depthClampEnable = depthClampEnable;
+}
+
+ANGLE_INLINE void SecondaryCommandBuffer::setDepthClipNegativeOneToOne(VkBool32 negativeOneToOne)
+{
+    SetDepthClipNegativeOneToOneParams *paramStruct =
+        initCommand<SetDepthClipNegativeOneToOneParams>(CommandID::SetDepthClipNegativeOneToOne);
+    paramStruct->negativeOneToOne = negativeOneToOne;
 }
 
 ANGLE_INLINE void SecondaryCommandBuffer::setDepthCompareOp(VkCompareOp depthCompareOp)
@@ -2238,6 +2537,20 @@ ANGLE_INLINE void SecondaryCommandBuffer::setFrontFace(VkFrontFace frontFace)
     paramStruct->frontFace          = frontFace;
 }
 
+ANGLE_INLINE void SecondaryCommandBuffer::setLineRasterizationMode(
+    VkLineRasterizationMode lineRasterizationMode)
+{
+    SetLineRasterizationModeParams *paramStruct =
+        initCommand<SetLineRasterizationModeParams>(CommandID::SetLineRasterizationMode);
+    paramStruct->lineRasterizationMode = lineRasterizationMode;
+}
+
+ANGLE_INLINE void SecondaryCommandBuffer::setLineStippleEnable(VkBool32 stippledLineEnable)
+{
+    ASSERT(stippledLineEnable == VK_FALSE);
+    initCommand<SetLineStippleEnableParams>(CommandID::SetLineStippleEnable);
+}
+
 ANGLE_INLINE void SecondaryCommandBuffer::setLineWidth(float lineWidth)
 {
     SetLineWidthParams *paramStruct = initCommand<SetLineWidthParams>(CommandID::SetLineWidth);
@@ -2248,6 +2561,27 @@ ANGLE_INLINE void SecondaryCommandBuffer::setLogicOp(VkLogicOp logicOp)
 {
     SetLogicOpParams *paramStruct = initCommand<SetLogicOpParams>(CommandID::SetLogicOp);
     paramStruct->logicOp          = logicOp;
+}
+
+ANGLE_INLINE void SecondaryCommandBuffer::setLogicOpEnable(VkBool32 logicOpEnable)
+{
+    SetLogicOpEnableParams *paramStruct =
+        initCommand<SetLogicOpEnableParams>(CommandID::SetLogicOpEnable);
+    paramStruct->logicOpEnable = logicOpEnable;
+}
+
+ANGLE_INLINE void SecondaryCommandBuffer::setPatchControlPoints(uint32_t patchControlPoints)
+{
+    SetPatchControlPointsParams *paramStruct =
+        initCommand<SetPatchControlPointsParams>(CommandID::SetPatchControlPoints);
+    paramStruct->patchControlPoints = patchControlPoints;
+}
+
+ANGLE_INLINE void SecondaryCommandBuffer::setPolygonMode(VkPolygonMode polygonMode)
+{
+    SetPolygonModeParams *paramStruct =
+        initCommand<SetPolygonModeParams>(CommandID::SetPolygonMode);
+    paramStruct->polygonMode = polygonMode;
 }
 
 ANGLE_INLINE void SecondaryCommandBuffer::setPrimitiveRestartEnable(VkBool32 primitiveRestartEnable)
@@ -2265,12 +2599,51 @@ ANGLE_INLINE void SecondaryCommandBuffer::setPrimitiveTopology(
     paramStruct->primitiveTopology = primitiveTopology;
 }
 
+ANGLE_INLINE void SecondaryCommandBuffer::setProvokingVertexMode(
+    VkProvokingVertexModeEXT provokingVertexMode)
+{
+    ASSERT(provokingVertexMode == VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT);
+
+    initCommand<SetProvokingVertexModeParams>(CommandID::SetProvokingVertexMode);
+}
+
 ANGLE_INLINE void SecondaryCommandBuffer::setRasterizerDiscardEnable(
     VkBool32 rasterizerDiscardEnable)
 {
     SetRasterizerDiscardEnableParams *paramStruct =
         initCommand<SetRasterizerDiscardEnableParams>(CommandID::SetRasterizerDiscardEnable);
     paramStruct->rasterizerDiscardEnable = rasterizerDiscardEnable;
+}
+
+ANGLE_INLINE void SecondaryCommandBuffer::setRasterizationSamples(
+    VkSampleCountFlagBits rasterizationSamples)
+{
+    SetRasterizationSamplesParams *paramStruct =
+        initCommand<SetRasterizationSamplesParams>(CommandID::SetRasterizationSamples);
+    paramStruct->rasterizationSamples = rasterizationSamples;
+}
+
+ANGLE_INLINE void SecondaryCommandBuffer::setRasterizationStream(uint32_t rasterizationStream)
+{
+    ASSERT(rasterizationStream == 0);
+
+    initCommand<SetRasterizationStreamParams>(CommandID::SetRasterizationStream);
+}
+
+ANGLE_INLINE void SecondaryCommandBuffer::setSampleMask(VkSampleCountFlagBits samples,
+                                                        const VkSampleMask *sampleMask)
+{
+    // The maximum sample count that ANGLE exposes is 16.  The validation language around
+    // VK_DYNAMIC_STATE_SAMPLE_MASK_EXT state that:
+    //
+    // > ... the samples parameter in the last call to vkCmdSetSampleMaskEXT must be greater than or
+    // > equal to the rasterizationSamples ...
+    //
+    // So we can always use VK_SAMPLE_COUNT_16_BIT in the call to the driver.
+    ASSERT(samples == VK_SAMPLE_COUNT_16_BIT);
+
+    SetSampleMaskParams *paramStruct = initCommand<SetSampleMaskParams>(CommandID::SetSampleMask);
+    paramStruct->sampleMask          = sampleMask[0];
 }
 
 ANGLE_INLINE void SecondaryCommandBuffer::setScissor(uint32_t firstScissor,
@@ -2330,6 +2703,14 @@ ANGLE_INLINE void SecondaryCommandBuffer::setStencilWriteMask(uint32_t writeFron
         initCommand<SetStencilWriteMaskParams>(CommandID::SetStencilWriteMask);
     paramStruct->writeFrontMask = static_cast<uint16_t>(writeFrontMask);
     paramStruct->writeBackMask  = static_cast<uint16_t>(writeBackMask);
+}
+
+ANGLE_INLINE void SecondaryCommandBuffer::setTessellationDomainOrigin(
+    VkTessellationDomainOrigin domainOrigin)
+{
+    ASSERT(domainOrigin == VK_TESSELLATION_DOMAIN_ORIGIN_LOWER_LEFT);
+
+    initCommand<SetTessellationDomainOriginParams>(CommandID::SetTessellationDomainOrigin);
 }
 
 ANGLE_INLINE void SecondaryCommandBuffer::setVertexInput(

@@ -12,6 +12,7 @@
 #include "common/debug.h"
 
 #include "libANGLE/Display.h"
+#include "libANGLE/LoggingAnnotator.h"
 #include "libANGLE/renderer/null/ContextNULL.h"
 #include "libANGLE/renderer/null/DeviceNULL.h"
 #include "libANGLE/renderer/null/ImageNULL.h"
@@ -37,14 +38,13 @@ void DisplayNULL::terminate()
     mAllocationTracker.reset();
 }
 
-egl::Error DisplayNULL::makeCurrent(egl::Display *display,
-                                    egl::Surface *drawSurface,
-                                    egl::Surface *readSurface,
-                                    gl::Context *context)
+egl::Error ThreadSafeDisplayNULL::makeCurrent(egl::Surface *drawSurface,
+                                              egl::Surface *readSurface,
+                                              gl::Context *context)
 {
     // Ensure that the correct global DebugAnnotator is installed when the end2end tests change
     // the ANGLE back-end (done frequently).
-    display->setGlobalDebugAnnotator();
+    angle::SetGlobalDebugAnnotator();
 
     return egl::NoError();
 }
@@ -92,12 +92,12 @@ egl::ConfigSet DisplayNULL::generateConfigs()
     return configSet;
 }
 
-bool DisplayNULL::testDeviceLost()
+bool ThreadSafeDisplayNULL::testDeviceLost()
 {
     return false;
 }
 
-egl::Error DisplayNULL::restoreLostDevice(const egl::Display *display)
+egl::Error ThreadSafeDisplayNULL::restoreLostDevice(const egl::ThreadSafeDisplay *display)
 {
     return egl::NoError();
 }

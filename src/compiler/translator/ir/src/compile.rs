@@ -9,9 +9,6 @@ use crate::*;
 
 #[cxx::bridge(namespace = "sh::ir::ffi")]
 mod ffi {
-    // TODO(http://anglebug.com/349994211): equivalent enums to the options in ShaderLang.h, eventually all options need to be
-    // passed to IR: add them as the translator is converted to IR.
-
     // Matching ShShaderSpec
     #[derive(Copy, Clone)]
     #[repr(u32)]
@@ -219,6 +216,10 @@ mod ffi {
         scalarize_vec_and_mat_constructor_args: bool,
         // Clamp non-constant indices to the bounds of the entity being indexed for robustness.
         clamp_indirect_indices: bool,
+        // Whether ESSL300 fragment outputs should be expanded to vec4s.
+        expand_fragment_outputs_to_vec4: bool,
+        // Generate support code for emulating transform feedback in Vulkan transform feedback.
+        add_vulkan_xfb_emulation_support_code: bool,
 
         // Whether the ANGLE_pixel_local_storage extension has been used and there are PLS uniforms
         // to rewrite.
@@ -344,9 +345,12 @@ mod ffi {
     }
 
     struct Output {
-        // Note: For now, generate always results in an AST. Eventually either text or binary
-        // should be returned.
+        // CXX does not support Rust enums with data payloads (tagged unions) across the FFI
+        // boundary, so AST and text outputs are represented as separate fields. When generating
+        // text source directly from IR (e.g. WGSL), `ast` is null and `output_source` is
+        // populated; otherwise `ast` is non-null and `output_source` is empty.
         ast: *mut TIntermBlock,
+        output_source: String,
 
         // Reflection info
         inputs: Vec<ShaderVariable>,
@@ -408,7 +412,7 @@ pub use ffi::ShaderSpec;
 pub use ffi::ShaderVariable;
 
 unsafe fn generate_ast(
-    mut ir: Box<IR>,
+    ir: Box<IR>,
     compiler: *mut ffi::TCompiler,
     allocator: *mut ffi::PoolAllocator,
     options: &Options,
@@ -416,19 +420,15 @@ unsafe fn generate_ast(
     // SAFETY: Pointer is obtained from C++ and passed back to it.
     unsafe { ffi::set_global_pool_allocator(allocator) };
 
-    // Apply transforms shared by multiple generators:
-    common_pre_variable_collection_transforms(&mut ir, options);
-    collect_reflection_info(&mut ir, options);
-    common_post_variable_collection_transforms(&mut ir, options);
-
-    // Generator-specific transformations and codegen.  Note that currently no codegen is actually
-    // implemented from IR, so these would only do transformations and the common IR->AST generator
-    // is used for all.
+    // Generator-specific transformations and codegen. WGSL generates source code directly from IR,
+    // while other backends currently run IR transformations and use the common IR->AST generator.
     match options.output {
-        OutputLanguage::Null => output::null::generate(&mut ir, options),
+        OutputLanguage::Null => generate_null(ir, compiler, options),
         OutputLanguage::Essl => {
             #[cfg(angle_enable_essl)]
-            output::essl::generate(&mut ir, options);
+            {
+                generate_essl(ir, compiler, options)
+            }
             #[cfg(not(angle_enable_essl))]
             panic!("Internal error: ESSL generator is not built");
         }
@@ -441,37 +441,115 @@ unsafe fn generate_ast(
         | OutputLanguage::Glsl440Core
         | OutputLanguage::Glsl450Core => {
             #[cfg(angle_enable_glsl)]
-            output::glsl::generate(&mut ir, options);
+            {
+                generate_glsl(ir, compiler, options)
+            }
             #[cfg(not(angle_enable_glsl))]
             panic!("Internal error: GLSL generator is not built");
         }
         OutputLanguage::Hlsl41 => {
             #[cfg(angle_enable_hlsl)]
-            output::hlsl::generate(&mut ir, options);
+            {
+                generate_hlsl(ir, compiler, options)
+            }
             #[cfg(not(angle_enable_hlsl))]
             panic!("Internal error: HLSL generator is not built");
         }
         OutputLanguage::Spirv => {
             #[cfg(angle_enable_spirv)]
-            output::spirv::generate(&mut ir, options);
+            {
+                generate_spirv(ir, compiler, options)
+            }
             #[cfg(not(angle_enable_spirv))]
             panic!("Internal error: SPIR-V generator is not built");
         }
         OutputLanguage::Msl => {
             #[cfg(angle_enable_msl)]
-            output::msl::generate(&mut ir, options);
+            {
+                generate_msl(ir, compiler, options)
+            }
             #[cfg(not(angle_enable_msl))]
             panic!("Internal error: MSL generator is not built");
         }
         OutputLanguage::Wgsl => {
             #[cfg(angle_enable_wgsl)]
-            output::wgsl::generate(&mut ir, options);
+            {
+                generate_wgsl(ir, options)
+            }
             #[cfg(not(angle_enable_wgsl))]
             panic!("Internal error: WGSL generator is not built");
         }
         _ => panic!("Internal error: Invalid generator"),
-    };
+    }
+}
 
+fn generate_null(mut ir: Box<IR>, compiler: *mut ffi::TCompiler, options: &Options) -> ffi::Output {
+    pre_codegen_transforms(&mut ir, options);
+    output::null::generate(&mut ir, options);
+    generate_legacy_ast(ir, compiler, options)
+}
+
+#[cfg(angle_enable_essl)]
+fn generate_essl(mut ir: Box<IR>, compiler: *mut ffi::TCompiler, options: &Options) -> ffi::Output {
+    pre_codegen_transforms(&mut ir, options);
+    output::essl::generate(&mut ir, options);
+    generate_legacy_ast(ir, compiler, options)
+}
+
+#[cfg(angle_enable_glsl)]
+fn generate_glsl(mut ir: Box<IR>, compiler: *mut ffi::TCompiler, options: &Options) -> ffi::Output {
+    pre_codegen_transforms(&mut ir, options);
+    output::glsl::generate(&mut ir, options);
+    generate_legacy_ast(ir, compiler, options)
+}
+
+#[cfg(angle_enable_hlsl)]
+fn generate_hlsl(mut ir: Box<IR>, compiler: *mut ffi::TCompiler, options: &Options) -> ffi::Output {
+    pre_codegen_transforms(&mut ir, options);
+    output::hlsl::generate(&mut ir, options);
+    generate_legacy_ast(ir, compiler, options)
+}
+
+#[cfg(angle_enable_spirv)]
+fn generate_spirv(
+    mut ir: Box<IR>,
+    compiler: *mut ffi::TCompiler,
+    options: &Options,
+) -> ffi::Output {
+    pre_codegen_transforms(&mut ir, options);
+    output::spirv::generate(&mut ir, options);
+    generate_legacy_ast(ir, compiler, options)
+}
+
+#[cfg(angle_enable_msl)]
+fn generate_msl(mut ir: Box<IR>, compiler: *mut ffi::TCompiler, options: &Options) -> ffi::Output {
+    pre_codegen_transforms(&mut ir, options);
+    output::msl::generate(&mut ir, options);
+    generate_legacy_ast(ir, compiler, options)
+}
+
+#[cfg(angle_enable_wgsl)]
+fn generate_wgsl(mut ir: Box<IR>, options: &Options) -> ffi::Output {
+    pre_codegen_transforms(&mut ir, options);
+    output::wgsl::generate(&mut ir, options);
+
+    let mut wgsl_gen = output::wgsl::Generator::new();
+    let (output_source, reflection_info) = generate_from_ast_target(ir, options, &mut wgsl_gen);
+    build_output(reflection_info, std::ptr::null_mut(), output_source)
+}
+
+fn pre_codegen_transforms(ir: &mut IR, options: &Options) {
+    // Apply transforms shared by multiple generators:
+    common_pre_variable_collection_transforms(ir, options);
+    collect_reflection_info(ir, options);
+    common_post_variable_collection_transforms(ir, options);
+}
+
+fn generate_from_ast_target<T: ast::Target>(
+    mut ir: Box<IR>,
+    options: &Options,
+    target: &mut T,
+) -> (T::BlockResult, reflection::Info) {
     // Run dead-code elimination again before generating output, so that any stray instructions the
     // transformations might have left around are removed.
     transform::run!(dead_code_eliminate, &mut ir);
@@ -485,12 +563,28 @@ unsafe fn generate_ast(
     };
     let uncached_registers_with_side_effect = transform::run!(astify, &mut ir, &astify_options);
 
-    let mut ast_gen = output::legacy::Generator::new(compiler, options);
     let mut generator = ast::Generator::new(*ir, uncached_registers_with_side_effect);
-    let ast = generator.generate(&mut ast_gen);
+    (generator.generate(target), reflection_info)
+}
 
+fn generate_legacy_ast(
+    ir: Box<IR>,
+    compiler: *mut ffi::TCompiler,
+    options: &Options,
+) -> ffi::Output {
+    let mut ast_gen = output::legacy::Generator::new(compiler, options);
+    let (ast, reflection_info) = generate_from_ast_target(ir, options, &mut ast_gen);
+    build_output(reflection_info, ast, String::new())
+}
+
+fn build_output(
+    reflection_info: reflection::Info,
+    ast: *mut ffi::TIntermBlock,
+    output_source: String,
+) -> ffi::Output {
     ffi::Output {
         ast,
+        output_source,
         inputs: reflection_info.inputs,
         outputs: reflection_info.outputs,
         uniforms: reflection_info.uniforms,
@@ -672,6 +766,11 @@ fn common_post_variable_collection_transforms(ir: &mut IR, options: &Options) {
             max_dual_source_draw_buffers: options.limits.max_dual_source_draw_buffers,
         };
         transform::run!(localized_workarounds, ir, &transform_options);
+    }
+
+    if options.expand_fragment_outputs_to_vec4 && options.shader_version >= 300 {
+        debug_assert!(ir.meta.get_shader_type() == ShaderType::Fragment);
+        transform::run!(expand_fragment_outputs_to_vec4, ir);
     }
 }
 

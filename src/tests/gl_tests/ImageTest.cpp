@@ -11,6 +11,8 @@
 #    pragma allow_unsafe_buffers
 #endif
 
+#include <array>
+
 #include "test_utils/ANGLETest.h"
 #include "test_utils/MultiThreadSteps.h"
 #include "test_utils/gl_raii.h"
@@ -82,9 +84,9 @@ GLubyte kLinearColorCube[] = {75, 135, 205, 255, 201, 89,  133, 255, 111, 201, 1
                               30, 90,  230, 255, 180, 210, 70,  255, 77,  111, 99,  255};
 GLubyte kSrgbColorCube[]   = {148, 192, 232, 255, 230, 159, 191, 255, 176, 230, 174, 255,
                               96,  160, 244, 255, 219, 234, 143, 255, 149, 176, 167, 255};
-GLfloat kCubeFaceX[]       = {1.0, -1.0, 0.0, 0.0, 0.0, 0.0};
-GLfloat kCubeFaceY[]       = {0.0, 0.0, 1.0, -1.0, 0.0, 0.0};
-GLfloat kCubeFaceZ[]       = {0.0, 0.0, 0.0, 0.0, 1.0, -1.0};
+constexpr std::array<GLfloat, 6> kCubeFaceX = {1.0, -1.0, 0.0, 0.0, 0.0, 0.0};
+constexpr std::array<GLfloat, 6> kCubeFaceY = {0.0, 0.0, 1.0, -1.0, 0.0, 0.0};
+constexpr std::array<GLfloat, 6> kCubeFaceZ = {0.0, 0.0, 0.0, 0.0, 1.0, -1.0};
 // YUV texture data - ensure they are narrow range compatible values
 GLubyte kYUVColorBlackY[]   = {16, 16, 16, 16};
 GLubyte kYUVColorBlackCb[]  = {128};
@@ -1263,6 +1265,13 @@ void main()
     void SourceAHBTarget2DArray_helper(const EGLint *attribs);
     void SourceAHBTargetExternal_helper(const EGLint *attribs);
     void SourceAHBTargetExternalESSL3_helper(const EGLint *attribs);
+    enum class AHBDrawType
+    {
+        Arrays,
+        ElementsInstanced,
+        ElementsIndirect,
+    };
+    void testAHBDrawFlush(AHBDrawType drawType, bool flushBeforeFence);
     void SourceNativeClientBufferTargetExternal_helper(const EGLint *attribs);
     void SourceNativeClientBufferTargetRenderbuffer_helper(const EGLint *attribs);
     void Source2DTarget2D_helper(const EGLint *attribs);
@@ -1715,18 +1724,6 @@ void main()
         return IsEGLDisplayExtensionEnabled(getEGLWindow()->getDisplay(), kWebGPUTextureExt);
     }
 
-    angle::VulkanPerfCounters getPerfCounters()
-    {
-        ASSERT(IsVulkan());
-
-        if (mCounterNameToIndexMap.empty())
-        {
-            mCounterNameToIndexMap = BuildCounterNameToIndexMap();
-        }
-
-        return GetPerfCounters(mCounterNameToIndexMap);
-    }
-
     void externalTextureTracerTestHelper(const EGLint *attribsToRecoverInMEC)
     {
         const EGLWindow *eglWindow = getEGLWindow();
@@ -1897,8 +1894,6 @@ void main()
     GLuint mRenderYUVProgram        = 0;
     GLuint mRenderYUVProgram2       = 0;
     GLint mRenderYUVUniformLocation = -1;
-
-    CounterNameToIndexMap mCounterNameToIndexMap;
 };
 
 class ImageTestES3 : public ImageTest
@@ -8970,7 +8965,7 @@ TEST_P(ImageTest, MipLevels)
     const std::vector<GLColor> mip0Data(kTextureSize * kTextureSize, GLColor::red);
     const std::vector<GLColor> mip1Data(mip0Data.size() >> 2, GLColor::green);
     const std::vector<GLColor> mip2Data(mip0Data.size() >> 4, GLColor::blue);
-    const GLColor *data[kMipLevels] = {
+    std::array<const GLColor *, kMipLevels> data = {
         mip0Data.data(),
         mip1Data.data(),
         mip2Data.data(),
@@ -9062,7 +9057,7 @@ TEST_P(ImageTestES3, MipLevelsNonZeroBaseLevel)
     const std::vector<GLColor> mip0Data(kTextureSize * kTextureSize, GLColor::red);
     const std::vector<GLColor> mip1Data(mip0Data.size() >> 2, GLColor::green);
     const std::vector<GLColor> mip2Data(mip0Data.size() >> 4, GLColor::blue);
-    const GLColor *data[kMipLevels] = {
+    std::array<const GLColor *, kMipLevels> data = {
         mip0Data.data(),
         mip1Data.data(),
         mip2Data.data(),
@@ -9329,6 +9324,152 @@ TEST_P(ImageTest, UpdatedData)
 
     // Clean up
     eglDestroyImageKHR(window->getDisplay(), image);
+}
+
+// Verify AHB contents on the CPU after flushing a draw and waiting for an EGL fence.
+void ImageTest::testAHBDrawFlush(AHBDrawType drawType, bool flushBeforeFence)
+{
+    ANGLE_SKIP_TEST_IF(!hasOESExt() || !hasBaseExt());
+    ANGLE_SKIP_TEST_IF(!hasAndroidImageNativeBufferExt() || !hasAndroidHardwareBufferSupport());
+    EGLDisplay display = getEGLWindow()->getDisplay();
+    ANGLE_SKIP_TEST_IF(!IsEGLDisplayExtensionEnabled(display, "EGL_KHR_fence_sync") ||
+                       !IsGLExtensionEnabled("GL_OES_EGL_sync"));
+
+    constexpr uint32_t kWidth  = 16;
+    constexpr uint32_t kHeight = 16;
+    ANGLE_SKIP_TEST_IF(!isAndroidHardwareBufferConfigurationSupported(
+        kWidth, kHeight, 1, AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM, kDefaultAHBUsage));
+
+    // Avoid vertex uploads that could independently require a flush.
+    constexpr char kVS[] = R"(#version 300 es
+void main()
+{
+    const vec2 positions[3] = vec2[3](vec2(-1, -1), vec2(3, -1), vec2(-1, 3));
+    gl_Position = vec4(positions[gl_VertexID], 0, 1);
+})";
+    constexpr char kFS[] = R"(#version 300 es
+precision mediump float;
+uniform vec4 color;
+out vec4 fragColor;
+void main()
+{
+    fragColor = color;
+})";
+    ANGLE_GL_PROGRAM(program, kVS, kFS);
+    glUseProgram(program);
+    GLint colorLocation = glGetUniformLocation(program, "color");
+    ASSERT_NE(-1, colorLocation);
+    glUniform4f(colorLocation, 1, 0, 0, 1);
+
+    GLVertexArray vao;
+    glBindVertexArray(vao);
+    GLBuffer indexBuffer;
+    constexpr GLushort kIndices[] = {0, 1, 2};
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBuffer);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(kIndices), kIndices, GL_STATIC_DRAW);
+
+    GLBuffer indirectBuffer;
+    if (drawType == AHBDrawType::ElementsIndirect)
+    {
+        // count, instanceCount, firstIndex, baseVertex, reservedMustBeZero.
+        constexpr GLuint kCommand[] = {3, 2, 0, 0, 0};
+        glBindBuffer(GL_DRAW_INDIRECT_BUFFER, indirectBuffer);
+        glBufferData(GL_DRAW_INDIRECT_BUFFER, sizeof(kCommand), kCommand, GL_STATIC_DRAW);
+    }
+
+    AHardwareBuffer *source = nullptr;
+    EGLImageKHR image       = EGL_NO_IMAGE_KHR;
+    ASSERT_NO_FATAL_FAILURE(createEGLImageAndroidHardwareBufferSource(
+        kWidth, kHeight, 1, AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM, kDefaultAHBUsage,
+        kDefaultAttribs, {}, &source, &image));
+
+    // Keep image and AHB cleanup reachable if an assertion returns from this lambda.
+    [&]() {
+        ASSERT_NE(image, EGL_NO_IMAGE_KHR);
+        GLTexture target;
+        createEGLImageTargetTexture2D(image, target);
+        GLFramebuffer framebuffer;
+        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target, 0);
+        ASSERT_GL_FRAMEBUFFER_COMPLETE(GL_FRAMEBUFFER);
+        glViewport(0, 0, kWidth, kHeight);
+
+        const auto draw = [drawType]() {
+            switch (drawType)
+            {
+                case AHBDrawType::Arrays:
+                    glDrawArrays(GL_TRIANGLES, 0, 3);
+                    break;
+                case AHBDrawType::ElementsInstanced:
+                    glDrawElementsInstanced(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, nullptr, 2);
+                    break;
+                case AHBDrawType::ElementsIndirect:
+                    glDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_SHORT, nullptr);
+                    break;
+            }
+        };
+
+        // Finish setup and the red draw to clear any pending flush before drawing green.
+        draw();
+        ASSERT_GL_NO_ERROR();
+        glUniform4f(colorLocation, 0, 1, 0, 1);
+        glFinish();
+        ASSERT_GL_NO_ERROR();
+
+        draw();
+        ASSERT_GL_NO_ERROR();
+        if (flushBeforeFence)
+        {
+            // Flush the draw first so the fence must independently require a flush.
+            glFlush();
+        }
+
+        EGLSyncKHR fence = eglCreateSyncKHR(display, EGL_SYNC_FENCE_KHR, nullptr);
+        ASSERT_NE(fence, EGL_NO_SYNC_KHR);
+        EXPECT_EGL_SUCCESS();
+        glFlush();
+        EXPECT_GL_NO_ERROR();
+
+        // Requesting a flush here could hide a missing submission by glFlush.
+        EGLint result = eglClientWaitSyncKHR(display, fence, 0, 1'000'000'000);
+        EXPECT_EGL_SUCCESS();
+        EXPECT_EGL_TRUE(eglDestroySyncKHR(display, fence));
+        ASSERT_EQ(EGL_CONDITION_SATISFIED_KHR, result);
+
+        const std::vector<GLColor> expected(kWidth * kHeight, GLColor::green);
+        verifyResultAHB(source,
+                        {{reinterpret_cast<const GLubyte *>(expected.data()), sizeof(GLColor)}});
+    }();
+
+    EXPECT_EGL_TRUE(eglDestroyImageKHR(display, image));
+    destroyAndroidHardwareBuffer(source);
+}
+
+// Tests that glDrawArrays rendering to an AHB is visible to the CPU after flushing
+// and waiting for an EGL fence.
+TEST_P(ImageTestES3, AHBDrawArraysFlush)
+{
+    testAHBDrawFlush(AHBDrawType::Arrays, false);
+}
+
+// Tests that glDrawElementsInstanced rendering to an AHB is visible to the CPU after flushing
+// and waiting for an EGL fence.
+TEST_P(ImageTestES3, AHBDrawElementsInstancedFlush)
+{
+    testAHBDrawFlush(AHBDrawType::ElementsInstanced, false);
+}
+
+// Tests that glDrawElementsIndirect rendering to an AHB is visible to the CPU after flushing
+// and waiting for an EGL fence.
+TEST_P(ImageTestES31, AHBDrawElementsIndirectFlush)
+{
+    testAHBDrawFlush(AHBDrawType::ElementsIndirect, false);
+}
+
+// Tests that an EGL fence created after flushing an AHB draw is submitted by the next glFlush.
+TEST_P(ImageTestES3, AHBFenceAfterDrawFlush)
+{
+    testAHBDrawFlush(AHBDrawType::Arrays, true);
 }
 
 // Check that the external texture is successfully updated when only glTexSubImage2D is called.
@@ -9618,7 +9759,7 @@ TEST_P(ImageTest, SourceCubeAndSameTargetTextureWithEachCubeFace)
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     ASSERT_GL_NO_ERROR();
 
-    EGLImageKHR images[6];
+    std::array<EGLImageKHR, 6> images;
     GLTexture targetTexture;
     glBindTexture(GL_TEXTURE_2D, targetTexture);
 
@@ -11284,7 +11425,7 @@ TEST_P(ImageTestES3, CreatesRGBImages)
     constexpr GLsizei kWidth        = 2;
     constexpr GLsizei kHeight       = 2;
 
-    for (size_t i = 0; i < colorSpaces.size(); i++)
+    for (EGLint colorSpace : colorSpaces)
     {
         // Create sRGB texture
         GLTexture sRGBTexture;
@@ -11300,7 +11441,7 @@ TEST_P(ImageTestES3, CreatesRGBImages)
         ASSERT_GL_NO_ERROR();
 
         EGLint createImageAttribs[] = {
-            EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_GL_COLORSPACE_KHR, colorSpaces[i], EGL_NONE,
+            EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_GL_COLORSPACE_KHR, colorSpace, EGL_NONE,
         };
 
         // Create the Image using sRGB texture
@@ -11333,10 +11474,10 @@ TEST_P(ImageTestES3, DmaBufNegativeValidation)
 
     EGLImageKHR image;
 
-    for (size_t i = 0; i < 4; i++)
+    for (const EGLint *attribs : invalidImageAttributeList)
     {
         image = eglCreateImageKHR(window->getDisplay(), EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, NULL,
-                                  invalidImageAttributeList[i]);
+                                  attribs);
         ASSERT_EGL_ERROR(EGL_BAD_ATTRIBUTE);
         ASSERT_EQ(image, EGL_NO_IMAGE_KHR);
     }
@@ -15564,6 +15705,538 @@ TEST_P(ImageTestES3RobustInit, NonZeroLevelAndFaceReadbackRenderbuffer)
     // Clean up
     eglDestroyImageKHR(window->getDisplay(), image);
     ASSERT_GL_NO_ERROR();
+}
+
+// Copy from target to another mip of itself (orphans target)
+TEST_P(ImageTestES3RobustInit, SelfCopy)
+{
+    EGLWindow *window = getEGLWindow();
+    ANGLE_SKIP_TEST_IF(!hasOESExt() || !hasBaseExt() || !has2DTextureExt());
+
+    constexpr uint32_t kSize = 10;
+
+    // Create a texture that's not initialized
+    GLTexture source;
+    EGLImageKHR image;
+    createEGLImage2DTextureSource(kSize, kSize, GL_RGBA, GL_UNSIGNED_BYTE, kDefaultAttribs, nullptr,
+                                  source, &image);
+
+    // Create a texture target
+    GLTexture target;
+    createEGLImageTargetTexture2D(image, target);
+
+    // Copy from level 0 of target to level 1
+    GLFramebuffer fbo;
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target, 0);
+    ASSERT_GL_FRAMEBUFFER_COMPLETE(GL_FRAMEBUFFER);
+
+    glCopyTexImage2D(GL_TEXTURE_2D, 1, GL_RGBA, 0, 0, kSize, kSize, 0);
+    ASSERT_GL_NO_ERROR();
+
+    // Check that level 1 has the result of copy (target is now orphaned).
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 1);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target, 1);
+    EXPECT_PIXEL_RECT_EQ(0, 0, kSize, kSize, GLColor::transparentBlack);
+    ASSERT_GL_NO_ERROR();
+
+    // Check that source was robust cleared
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, source, 0);
+    EXPECT_PIXEL_RECT_EQ(0, 0, kSize, kSize, GLColor::transparentBlack);
+    ASSERT_GL_NO_ERROR();
+
+    // Clean up
+    eglDestroyImageKHR(window->getDisplay(), image);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Copy from target to another mip of itself (orphans target), while the copy area is out of bounds.
+TEST_P(ImageTestES3RobustInit, SelfCopyOutOfBounds)
+{
+    EGLWindow *window = getEGLWindow();
+    ANGLE_SKIP_TEST_IF(!hasOESExt() || !hasBaseExt() || !has2DTextureExt());
+
+    constexpr uint32_t kSize = 10;
+
+    // Create a texture that's not initialized
+    GLTexture source;
+    EGLImageKHR image;
+    createEGLImage2DTextureSource(kSize, kSize, GL_RGBA, GL_UNSIGNED_BYTE, kDefaultAttribs, nullptr,
+                                  source, &image);
+
+    // Create a texture target
+    GLTexture target;
+    createEGLImageTargetTexture2D(image, target);
+
+    // Initialize level 0 to something
+    GLFramebuffer fbo;
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target, 0);
+    ASSERT_GL_FRAMEBUFFER_COMPLETE(GL_FRAMEBUFFER);
+
+    ANGLE_GL_PROGRAM(drawRed, essl1_shaders::vs::Simple(), essl1_shaders::fs::Red());
+    drawQuad(drawRed, essl1_shaders::PositionAttrib(), 0.0f);
+    EXPECT_PIXEL_RECT_EQ(0, 0, kSize, kSize, GLColor::red);
+
+    // Copy from level 0 of target to level 1, out of bounds.
+    glCopyTexImage2D(GL_TEXTURE_2D, 1, GL_RGBA, kSize * 2, kSize + 1, kSize, kSize, 0);
+    ASSERT_GL_NO_ERROR();
+
+    // Check that level 1 has the result of copy (target is now orphaned), which should be
+    // transparent black due to robust init.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 1);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target, 1);
+    EXPECT_PIXEL_RECT_EQ(0, 0, kSize, kSize, GLColor::transparentBlack);
+    ASSERT_GL_NO_ERROR();
+
+    // Check that source has the draw results
+    //
+    // TODO: This currently fails as the source texture is robust-initialized again by mistake.
+    // http://anglebug.com/532592076
+    //
+    // glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, source, 0);
+    // EXPECT_PIXEL_RECT_EQ(0, 0, kSize, kSize, GLColor::red);
+    // ASSERT_GL_NO_ERROR();
+
+    // Clean up
+    eglDestroyImageKHR(window->getDisplay(), image);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Copy from target to another mip of itself (orphans target), while the copy area is partially out
+// of bounds.
+TEST_P(ImageTestES3RobustInit, SelfCopyPartiallyOutOfBounds)
+{
+    EGLWindow *window = getEGLWindow();
+    ANGLE_SKIP_TEST_IF(!hasOESExt() || !hasBaseExt() || !has2DTextureExt());
+
+    constexpr uint32_t kSize = 10;
+
+    // Create a texture that's not initialized
+    GLTexture source;
+    EGLImageKHR image;
+    createEGLImage2DTextureSource(kSize, kSize, GL_RGBA, GL_UNSIGNED_BYTE, kDefaultAttribs, nullptr,
+                                  source, &image);
+
+    // Create a texture target
+    GLTexture target;
+    createEGLImageTargetTexture2D(image, target);
+
+    // Initialize level 0 to something
+    GLFramebuffer fbo;
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target, 0);
+    ASSERT_GL_FRAMEBUFFER_COMPLETE(GL_FRAMEBUFFER);
+
+    ANGLE_GL_PROGRAM(drawRed, essl1_shaders::vs::Simple(), essl1_shaders::fs::Red());
+    drawQuad(drawRed, essl1_shaders::PositionAttrib(), 0.0f);
+    EXPECT_PIXEL_RECT_EQ(0, 0, kSize, kSize, GLColor::red);
+
+    // Copy from level 0 of target to level 1, out of bounds.
+    glCopyTexImage2D(GL_TEXTURE_2D, 1, GL_RGBA, kSize / 2, 0, kSize, kSize, 0);
+    ASSERT_GL_NO_ERROR();
+
+    // Check that level 1 has the result of copy (target is now orphaned), which should be
+    // transparent black on the left half due to robust init.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 1);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target, 1);
+    EXPECT_PIXEL_RECT_EQ(0, 0, kSize / 2, kSize, GLColor::transparentBlack);
+    EXPECT_PIXEL_RECT_EQ(kSize / 2, 0, kSize - kSize / 2, kSize, GLColor::red);
+    ASSERT_GL_NO_ERROR();
+
+    // Check that source has the draw results
+    //
+    // TODO: This currently fails as the source texture is robust-initialized again by mistake.
+    // http://anglebug.com/532592076
+    //
+    // glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, source, 0);
+    // EXPECT_PIXEL_RECT_EQ(0, 0, kSize, kSize, GLColor::red);
+    // ASSERT_GL_NO_ERROR();
+
+    // Clean up
+    eglDestroyImageKHR(window->getDisplay(), image);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Copy from target to another mip of itself (orphans target)
+TEST_P(ImageTestES3RobustInit, SelfSubCopy)
+{
+    EGLWindow *window = getEGLWindow();
+    ANGLE_SKIP_TEST_IF(!hasOESExt() || !hasBaseExt() || !has2DTextureExt());
+
+    constexpr uint32_t kSize = 10;
+
+    // Create a texture that's not initialized
+    GLTexture source;
+    EGLImageKHR image;
+    createEGLImage2DTextureSource(kSize, kSize, GL_RGBA, GL_UNSIGNED_BYTE, kDefaultAttribs, nullptr,
+                                  source, &image);
+
+    // Create a texture target
+    GLTexture target;
+    createEGLImageTargetTexture2D(image, target);
+
+    // Copy from level 0 of target to level 1
+    GLFramebuffer fbo;
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target, 0);
+    ASSERT_GL_FRAMEBUFFER_COMPLETE(GL_FRAMEBUFFER);
+
+    glTexImage2D(GL_TEXTURE_2D, 1, GL_RGBA, kSize, kSize, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 1, 0, 0, 0, 0, kSize, kSize);
+    ASSERT_GL_NO_ERROR();
+
+    // Check that level 1 has the result of copy (target is now orphaned).
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 1);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target, 1);
+    EXPECT_PIXEL_RECT_EQ(0, 0, kSize, kSize, GLColor::transparentBlack);
+    ASSERT_GL_NO_ERROR();
+
+    // Check that source was robust cleared
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, source, 0);
+    EXPECT_PIXEL_RECT_EQ(0, 0, kSize, kSize, GLColor::transparentBlack);
+    ASSERT_GL_NO_ERROR();
+
+    // Clean up
+    eglDestroyImageKHR(window->getDisplay(), image);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Copy from target to another mip of itself (orphans target), while the copy area is out of bounds.
+TEST_P(ImageTestES3RobustInit, SelfSubCopyOutOfBounds)
+{
+    EGLWindow *window = getEGLWindow();
+    ANGLE_SKIP_TEST_IF(!hasOESExt() || !hasBaseExt() || !has2DTextureExt());
+
+    constexpr uint32_t kSize = 10;
+
+    // Create a texture that's not initialized
+    GLTexture source;
+    EGLImageKHR image;
+    createEGLImage2DTextureSource(kSize, kSize, GL_RGBA, GL_UNSIGNED_BYTE, kDefaultAttribs, nullptr,
+                                  source, &image);
+
+    // Create a texture target
+    GLTexture target;
+    createEGLImageTargetTexture2D(image, target);
+
+    // Initialize level 0 to something
+    GLFramebuffer fbo;
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target, 0);
+    ASSERT_GL_FRAMEBUFFER_COMPLETE(GL_FRAMEBUFFER);
+
+    ANGLE_GL_PROGRAM(drawRed, essl1_shaders::vs::Simple(), essl1_shaders::fs::Red());
+    drawQuad(drawRed, essl1_shaders::PositionAttrib(), 0.0f);
+    EXPECT_PIXEL_RECT_EQ(0, 0, kSize, kSize, GLColor::red);
+
+    // Copy from level 0 of target to level 1, out of bounds.
+    glTexImage2D(GL_TEXTURE_2D, 1, GL_RGBA, kSize, kSize, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 1, 0, 0, kSize * 2, kSize + 1, kSize, kSize);
+    ASSERT_GL_NO_ERROR();
+
+    // Check that level 1 has the result of copy (target is now orphaned), which should be
+    // transparent black due to robust init.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 1);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target, 1);
+    EXPECT_PIXEL_RECT_EQ(0, 0, kSize, kSize, GLColor::transparentBlack);
+    ASSERT_GL_NO_ERROR();
+
+    // Check that source has the draw results
+    //
+    // TODO: This currently fails as the source texture is robust-initialized again by mistake.
+    // http://anglebug.com/532592076
+    //
+    // glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, source, 0);
+    // EXPECT_PIXEL_RECT_EQ(0, 0, kSize, kSize, GLColor::red);
+    // ASSERT_GL_NO_ERROR();
+
+    // Clean up
+    eglDestroyImageKHR(window->getDisplay(), image);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Copy from target to another mip of itself (orphans target), while the copy area is partially out
+// of bounds.
+TEST_P(ImageTestES3RobustInit, SelfSubCopyPartiallyOutOfBounds)
+{
+    EGLWindow *window = getEGLWindow();
+    ANGLE_SKIP_TEST_IF(!hasOESExt() || !hasBaseExt() || !has2DTextureExt());
+
+    constexpr uint32_t kSize = 10;
+
+    // Create a texture that's not initialized
+    GLTexture source;
+    EGLImageKHR image;
+    createEGLImage2DTextureSource(kSize, kSize, GL_RGBA, GL_UNSIGNED_BYTE, kDefaultAttribs, nullptr,
+                                  source, &image);
+
+    // Create a texture target
+    GLTexture target;
+    createEGLImageTargetTexture2D(image, target);
+
+    // Initialize level 0 to something
+    GLFramebuffer fbo;
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target, 0);
+    ASSERT_GL_FRAMEBUFFER_COMPLETE(GL_FRAMEBUFFER);
+
+    ANGLE_GL_PROGRAM(drawRed, essl1_shaders::vs::Simple(), essl1_shaders::fs::Red());
+    drawQuad(drawRed, essl1_shaders::PositionAttrib(), 0.0f);
+    EXPECT_PIXEL_RECT_EQ(0, 0, kSize, kSize, GLColor::red);
+
+    // Copy from level 0 of target to level 1, out of bounds.
+    glTexImage2D(GL_TEXTURE_2D, 1, GL_RGBA, kSize, kSize, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 1, 0, 0, kSize / 2, 0, kSize, kSize);
+    ASSERT_GL_NO_ERROR();
+
+    // Check that level 1 has the result of copy (target is now orphaned), which should be
+    // transparent black on the left half due to robust init.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 1);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target, 1);
+    EXPECT_PIXEL_RECT_EQ(0, 0, kSize / 2, kSize, GLColor::transparentBlack);
+    EXPECT_PIXEL_RECT_EQ(kSize / 2, 0, kSize - kSize / 2, kSize, GLColor::red);
+    ASSERT_GL_NO_ERROR();
+
+    // Check that source has the draw results
+    //
+    // TODO: This currently fails as the source texture is robust-initialized again by mistake.
+    // http://anglebug.com/532592076
+    //
+    // glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, source, 0);
+    // EXPECT_PIXEL_RECT_EQ(0, 0, kSize, kSize, GLColor::red);
+    // ASSERT_GL_NO_ERROR();
+
+    // Clean up
+    eglDestroyImageKHR(window->getDisplay(), image);
+    ASSERT_GL_NO_ERROR();
+}
+
+// Test that calling eglCreateImageKHR with a non-current context while another shared context is
+// current works properly and does not flush staged updates on the non-current context.
+// Reproduces bug b/565518145 from peridot trace.
+TEST_P(ImageTest, CreateImageWithNonCurrentContext)
+{
+    EGLWindow *window  = getEGLWindow();
+    EGLDisplay display = window->getDisplay();
+    EGLConfig config   = window->getConfig();
+    EGLSurface surface = window->getSurface();
+
+    ANGLE_SKIP_TEST_IF(!hasOESExt() || !hasBaseExt() || !has2DTextureExt() || !hasExternalExt());
+    ANGLE_SKIP_TEST_IF(!IsEGLDisplayExtensionEnabled(display, "EGL_KHR_surfaceless_context"));
+
+    const EGLint contextAttribs[] = {EGL_CONTEXT_CLIENT_VERSION, window->getClientMajorVersion(),
+                                     EGL_NONE};
+    EGLContext context1 = eglCreateContext(display, config, window->getContext(), contextAttribs);
+    ASSERT_NE(context1, EGL_NO_CONTEXT);
+    EGLContext context2 = eglCreateContext(display, config, context1, contextAttribs);
+    ASSERT_NE(context2, EGL_NO_CONTEXT);
+
+    ASSERT_EGL_TRUE(eglMakeCurrent(display, surface, surface, context1));
+
+    // Create initial texture and EGLImage, bind to external texture, and draw a textured quad.
+    GLTexture sourceTex1;
+    glBindTexture(GL_TEXTURE_2D, sourceTex1);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                 GLColor::blue.data());
+    EGLImageKHR image1 =
+        eglCreateImageKHR(display, context1, EGL_GL_TEXTURE_2D_KHR,
+                          reinterpretHelper<EGLClientBuffer>(sourceTex1), kDefaultAttribs);
+    ASSERT_EGL_SUCCESS();
+
+    GLTexture externalTex;
+    createEGLImageTargetTextureExternal(image1, externalTex);
+
+    glUseProgram(mTextureExternalProgram);
+    glBindTexture(GL_TEXTURE_EXTERNAL_OES, externalTex);
+    glUniform1i(mTextureExternalUniformLocation, 0);
+    drawQuad(mTextureExternalProgram, "position", 0.5f);
+    ASSERT_GL_NO_ERROR();
+
+    // Switch to context2 with EGL_NO_SURFACE
+    ASSERT_EGL_TRUE(eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, context2));
+
+    // Destroy old EGLImage and its backing texture
+    sourceTex1.reset();
+    eglDestroyImageKHR(display, image1);
+
+    // Create new backing 2D texture with initial staged data while context2 is current,
+    // but call eglCreateImageKHR with non-current context1.
+    constexpr GLsizei kWidth  = 64;
+    constexpr GLsizei kHeight = 64;
+    std::vector<GLColor> initialData(kWidth * kHeight, GLColor::green);
+    GLTexture sourceTex2;
+    glBindTexture(GL_TEXTURE_2D, sourceTex2);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, kWidth, kHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                 initialData.data());
+
+    EGLImageKHR image2 =
+        eglCreateImageKHR(display, context1, EGL_GL_TEXTURE_2D_KHR,
+                          reinterpretHelper<EGLClientBuffer>(sourceTex2), kDefaultAttribs);
+    ASSERT_EGL_SUCCESS();
+
+    glBindTexture(GL_TEXTURE_EXTERNAL_OES, externalTex);
+
+    // Update the backing texture data via glTexSubImage2D (UpdateEGLImageData)
+    std::vector<GLColor> updateData(kWidth * kHeight, GLColor::red);
+    glBindTexture(GL_TEXTURE_2D, sourceTex2);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kWidth, kHeight, GL_RGBA, GL_UNSIGNED_BYTE,
+                    updateData.data());
+
+    // Switch back to context1 with EGL_NO_SURFACE
+    ASSERT_EGL_TRUE(eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, context1));
+
+    // Bind the new EGLImage to externalTex and verify its contents on surface
+    ASSERT_EGL_TRUE(eglMakeCurrent(display, surface, surface, context1));
+    glBindTexture(GL_TEXTURE_EXTERNAL_OES, externalTex);
+    glEGLImageTargetTexture2DOES(GL_TEXTURE_EXTERNAL_OES, image2);
+    drawQuad(mTextureExternalProgram, "position", 0.5f);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::red);
+
+    // Clean up
+    eglDestroyImageKHR(display, image2);
+    ASSERT_EGL_TRUE(eglMakeCurrent(display, surface, surface, window->getContext()));
+    eglDestroyContext(display, context1);
+    eglDestroyContext(display, context2);
+}
+
+// Similar to CreateImageWithNonCurrentContext, but uses two threads with context1 current on
+// thread1 and context2 current on thread2, creating image2 on thread2 with context1 as the
+// argument.
+TEST_P(ImageTest, CreateImageWithNonCurrentContextTwoThreads)
+{
+    EGLWindow *window  = getEGLWindow();
+    EGLDisplay display = window->getDisplay();
+    EGLConfig config   = window->getConfig();
+
+    ANGLE_SKIP_TEST_IF(!hasOESExt() || !hasBaseExt() || !has2DTextureExt() || !hasExternalExt());
+    ANGLE_SKIP_TEST_IF(!IsEGLDisplayExtensionEnabled(display, "EGL_KHR_surfaceless_context"));
+    ANGLE_SKIP_TEST_IF(!platformSupportsMultithreading());
+
+    EGLint extraAttributes1[] = {EGL_CONTEXT_VIRTUALIZATION_GROUP_ANGLE, 1, EGL_NONE};
+    EGLint extraAttributes2[] = {EGL_CONTEXT_VIRTUALIZATION_GROUP_ANGLE, 2, EGL_NONE};
+    if (!IsEGLDisplayExtensionEnabled(display, "EGL_ANGLE_context_virtualization"))
+    {
+        extraAttributes1[0] = EGL_NONE;
+        extraAttributes2[0] = EGL_NONE;
+    }
+    EGLContext context1 = window->createContext(window->getContext(), extraAttributes1);
+    ASSERT_NE(context1, EGL_NO_CONTEXT);
+    EGLContext context2 = window->createContext(context1, extraAttributes2);
+    ASSERT_NE(context2, EGL_NO_CONTEXT);
+
+    constexpr EGLint kPBufferSize = 64;
+    const EGLint pbufferAttribs[] = {EGL_WIDTH, kPBufferSize, EGL_HEIGHT, kPBufferSize, EGL_NONE};
+    EGLSurface surface1           = eglCreatePbufferSurface(display, config, pbufferAttribs);
+    ASSERT_NE(surface1, EGL_NO_SURFACE);
+
+    std::mutex mutex;
+    std::condition_variable condVar;
+
+    enum class Step
+    {
+        Start,
+        Thread1DrewImage1,
+        Thread2CreatedImage2,
+        Finish,
+        Abort,
+    };
+    Step currentStep = Step::Start;
+
+    GLTexture sourceTex1;
+    GLTexture sourceTex2;
+    GLTexture externalTex;
+    EGLImageKHR image1 = EGL_NO_IMAGE_KHR;
+    EGLImageKHR image2 = EGL_NO_IMAGE_KHR;
+
+    ASSERT_EGL_TRUE(eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+
+    std::thread thread1([&]() {
+        ThreadSynchronization<Step> threadSynchronization(&currentStep, &mutex, &condVar);
+
+        ASSERT_EGL_TRUE(eglMakeCurrent(display, surface1, surface1, context1));
+
+        // Create initial texture and EGLImage, bind to external texture, and draw a textured quad.
+        glBindTexture(GL_TEXTURE_2D, sourceTex1);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                     GLColor::blue.data());
+        image1 = eglCreateImageKHR(display, context1, EGL_GL_TEXTURE_2D_KHR,
+                                   reinterpretHelper<EGLClientBuffer>(sourceTex1), kDefaultAttribs);
+        ASSERT_EGL_SUCCESS();
+
+        createEGLImageTargetTextureExternal(image1, externalTex);
+
+        glUseProgram(mTextureExternalProgram);
+        glBindTexture(GL_TEXTURE_EXTERNAL_OES, externalTex);
+        glUniform1i(mTextureExternalUniformLocation, 0);
+        drawQuad(mTextureExternalProgram, "position", 0.5f);
+        ASSERT_GL_NO_ERROR();
+
+        threadSynchronization.nextStep(Step::Thread1DrewImage1);
+        ASSERT_TRUE(threadSynchronization.waitForStep(Step::Thread2CreatedImage2));
+
+        threadSynchronization.nextStep(Step::Finish);
+    });
+
+    std::thread thread2([&]() {
+        ThreadSynchronization<Step> threadSynchronization(&currentStep, &mutex, &condVar);
+
+        ASSERT_EGL_TRUE(eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, context2));
+
+        ASSERT_TRUE(threadSynchronization.waitForStep(Step::Thread1DrewImage1));
+
+        // Destroy old EGLImage and its backing texture
+        sourceTex1.reset();
+        eglDestroyImageKHR(display, image1);
+
+        // Create new backing 2D texture with initial staged data while context2 is current on
+        // thread2, but call eglCreateImageKHR with context1 (which is current on thread1).
+        constexpr GLsizei kWidth  = 64;
+        constexpr GLsizei kHeight = 64;
+        std::vector<GLColor> initialData(kWidth * kHeight, GLColor::green);
+        glBindTexture(GL_TEXTURE_2D, sourceTex2);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, kWidth, kHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                     initialData.data());
+
+        image2 = eglCreateImageKHR(display, context1, EGL_GL_TEXTURE_2D_KHR,
+                                   reinterpretHelper<EGLClientBuffer>(sourceTex2), kDefaultAttribs);
+        EXPECT_EQ(eglGetError(), EGL_BAD_ACCESS);
+
+        threadSynchronization.nextStep(Step::Thread2CreatedImage2);
+        ASSERT_TRUE(threadSynchronization.waitForStep(Step::Finish));
+
+        ASSERT_EGL_TRUE(eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+    });
+
+    thread1.join();
+    thread2.join();
+
+    // Clean up
+    ASSERT_EGL_TRUE(
+        eglMakeCurrent(display, window->getSurface(), window->getSurface(), window->getContext()));
+    if (image2 != EGL_NO_IMAGE_KHR)
+    {
+        eglDestroyImageKHR(display, image2);
+    }
+    sourceTex1.reset();
+    sourceTex2.reset();
+    externalTex.reset();
+    eglDestroySurface(display, surface1);
+    eglDestroyContext(display, context1);
+    eglDestroyContext(display, context2);
+
+    ASSERT_NE(currentStep, Step::Abort);
 }
 
 ANGLE_INSTANTIATE_TEST_ES2_AND_ES3_AND(ImageTest,

@@ -158,6 +158,10 @@ struct RectangleImpl
     explicit constexpr RectangleImpl(const RectangleImpl<S> rect)
         : x(rect.x), y(rect.y), width(rect.width), height(rect.height)
     {}
+    template <typename O, typename E>
+    RectangleImpl(const O &offset, const E &size)
+        : x(offset.x), y(offset.y), width(size.width), height(size.height)
+    {}
 
     T x0() const { return x; }
     T y0() const { return y; }
@@ -1428,6 +1432,15 @@ bool DecompressBlob(const uint8_t *compressedData,
                     const size_t compressedSize,
                     size_t maxUncompressedDataSize,
                     MemoryBuffer *uncompressedData);
+#if defined(ANGLE_HAS_ZSTD)
+bool CompressBlobZstd(const size_t cacheSize,
+                      const uint8_t *cacheData,
+                      MemoryBuffer *compressedData);
+bool DecompressBlobZstd(const uint8_t *compressedData,
+                        const size_t compressedSize,
+                        size_t maxUncompressedDataSize,
+                        MemoryBuffer *uncompressedData);
+#endif  // defined(ANGLE_HAS_ZSTD)
 uint32_t GenerateCRC32(const uint8_t *data, size_t size);
 uint32_t InitCRC32();
 uint32_t UpdateCRC32(uint32_t prevCrc32, const uint8_t *data, size_t size);
@@ -1459,9 +1472,7 @@ namespace angle
 //
 // Some entry points pass a void pointer argument to UnlockedTailCall::run method intended to
 // contain the return value filled by the backend, the rest of the entry points pass in a
-// nullptr.  Regardless, Display::terminate runs pending tail calls passing in a nullptr, so
-// the tail calls that return a value in the argument still have to guard against a nullptr
-// parameter.
+// nullptr.
 class UnlockedTailCall final : angle::NonCopyable
 {
   public:
@@ -1484,12 +1495,6 @@ class UnlockedTailCall final : angle::NonCopyable
   private:
     void runImpl(void *resultOut);
 
-    // Typically, there is only one tail call.  It is possible to end up with 2 tail calls currently
-    // with unMakeCurrent destroying both the read and draw surfaces, each adding a tail call in the
-    // Vulkan backend.
-    //
-    // Some apps will create multiple windows surfaces and not call corresponding destroy api, which
-    // cause many tail calls been added, so remove the max call count limitations.
     std::vector<CallType> mCalls;
 };
 

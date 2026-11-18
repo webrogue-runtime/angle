@@ -89,7 +89,7 @@ void SurfaceD3D::releaseSwapChain()
     SafeDelete(mSwapChain);
 }
 
-egl::Error SurfaceD3D::initialize(const egl::Display *display)
+egl::Error SurfaceD3D::initialize(const egl::ThreadSafeDisplay *display)
 {
     if (mNativeWindow->getNativeWindow())
     {
@@ -165,7 +165,7 @@ egl::Error SurfaceD3D::getMscRate(EGLint *numerator, EGLint *denominator)
     return egl::Error(EGL_BAD_ACCESS);
 }
 
-egl::Error SurfaceD3D::resetSwapChain(const egl::Display *display)
+egl::Error SurfaceD3D::resetSwapChain(const egl::ThreadSafeDisplay *display)
 {
     ASSERT(!mSwapChain);
 
@@ -368,7 +368,7 @@ rx::SwapChainD3D *SurfaceD3D::getSwapChain() const
     return mSwapChain;
 }
 
-void SurfaceD3D::setSwapInterval(const egl::Display *display, EGLint interval)
+void SurfaceD3D::setSwapInterval(const egl::ThreadSafeDisplay *display, EGLint interval)
 {
     if (mSwapInterval == interval)
     {
@@ -424,17 +424,6 @@ egl::Error SurfaceD3D::querySurfacePointerANGLE(EGLint attribute, void **value)
 const angle::Format *SurfaceD3D::getClientBufferTextureColorFormat() const
 {
     return mColorFormat;
-}
-
-egl::Error SurfaceD3D::attachToFramebuffer(const gl::Context *context, gl::Framebuffer *framebuffer)
-{
-    return egl::NoError();
-}
-
-egl::Error SurfaceD3D::detachFromFramebuffer(const gl::Context *context,
-                                             gl::Framebuffer *framebuffer)
-{
-    return egl::NoError();
 }
 
 angle::Result SurfaceD3D::getAttachmentRenderTarget(const gl::Context *context,

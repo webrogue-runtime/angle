@@ -1194,6 +1194,13 @@ PFN_vkGetAndroidHardwareBufferPropertiesANDROID vkGetAndroidHardwareBufferProper
 PFN_vkGetMemoryAndroidHardwareBufferANDROID vkGetMemoryAndroidHardwareBufferANDROID = nullptr;
 #    endif
 
+// VK_KHR_pipeline_binary
+PFN_vkGetPipelineKeyKHR vkGetPipelineKeyKHR                           = nullptr;
+PFN_vkCreatePipelineBinariesKHR vkCreatePipelineBinariesKHR           = nullptr;
+PFN_vkDestroyPipelineBinaryKHR vkDestroyPipelineBinaryKHR             = nullptr;
+PFN_vkGetPipelineBinaryDataKHR vkGetPipelineBinaryDataKHR             = nullptr;
+PFN_vkReleaseCapturedPipelineDataKHR vkReleaseCapturedPipelineDataKHR = nullptr;
+
 #    define GET_INSTANCE_FUNC(vkName)                                                              \
         do                                                                                         \
         {                                                                                          \
@@ -1234,16 +1241,31 @@ PFN_vkCmdSetPatchControlPointsEXT vkCmdSetPatchControlPointsEXT           = null
 PFN_vkCmdSetPrimitiveRestartEnableEXT vkCmdSetPrimitiveRestartEnableEXT   = nullptr;
 PFN_vkCmdSetRasterizerDiscardEnableEXT vkCmdSetRasterizerDiscardEnableEXT = nullptr;
 
+// VK_EXT_extended_dynamic_state3
+PFN_vkCmdSetColorWriteMaskEXT vkCmdSetColorWriteMaskEXT                       = nullptr;
+PFN_vkCmdSetColorBlendEnableEXT vkCmdSetColorBlendEnableEXT                   = nullptr;
+PFN_vkCmdSetColorBlendEquationEXT vkCmdSetColorBlendEquationEXT               = nullptr;
+PFN_vkCmdSetSampleMaskEXT vkCmdSetSampleMaskEXT                               = nullptr;
+PFN_vkCmdSetAlphaToCoverageEnableEXT vkCmdSetAlphaToCoverageEnableEXT         = nullptr;
+PFN_vkCmdSetRasterizationSamplesEXT vkCmdSetRasterizationSamplesEXT           = nullptr;
+PFN_vkCmdSetAlphaToOneEnableEXT vkCmdSetAlphaToOneEnableEXT                   = nullptr;
+PFN_vkCmdSetDepthClipNegativeOneToOneEXT vkCmdSetDepthClipNegativeOneToOneEXT = nullptr;
+PFN_vkCmdSetDepthClampEnableEXT vkCmdSetDepthClampEnableEXT                   = nullptr;
+PFN_vkCmdSetPolygonModeEXT vkCmdSetPolygonModeEXT                             = nullptr;
+PFN_vkCmdSetLogicOpEnableEXT vkCmdSetLogicOpEnableEXT                         = nullptr;
+PFN_vkCmdSetTessellationDomainOriginEXT vkCmdSetTessellationDomainOriginEXT   = nullptr;
+PFN_vkCmdSetColorBlendAdvancedEXT vkCmdSetColorBlendAdvancedEXT               = nullptr;
+PFN_vkCmdSetProvokingVertexModeEXT vkCmdSetProvokingVertexModeEXT             = nullptr;
+PFN_vkCmdSetRasterizationStreamEXT vkCmdSetRasterizationStreamEXT             = nullptr;
+PFN_vkCmdSetLineRasterizationModeEXT vkCmdSetLineRasterizationModeEXT         = nullptr;
+PFN_vkCmdSetLineStippleEnableEXT vkCmdSetLineStippleEnableEXT                 = nullptr;
+
 // VK_EXT_vertex_input_dynamic_state
 PFN_vkCmdSetVertexInputEXT vkCmdSetVertexInputEXT = nullptr;
 
 // VK_KHR_dynamic_rendering
 PFN_vkCmdBeginRenderingKHR vkCmdBeginRenderingKHR = nullptr;
 PFN_vkCmdEndRenderingKHR vkCmdEndRenderingKHR     = nullptr;
-
-// VK_KHR_dynamic_rendering_local_read
-PFN_vkCmdSetRenderingAttachmentLocationsKHR vkCmdSetRenderingAttachmentLocationsKHR       = nullptr;
-PFN_vkCmdSetRenderingInputAttachmentIndicesKHR vkCmdSetRenderingInputAttachmentIndicesKHR = nullptr;
 
 // VK_KHR_fragment_shading_rate
 PFN_vkGetPhysicalDeviceFragmentShadingRatesKHR vkGetPhysicalDeviceFragmentShadingRatesKHR = nullptr;
@@ -1369,6 +1391,53 @@ void InitExtendedDynamicState2EXTFunctions(VkDevice device)
     GET_DEVICE_FUNC(vkCmdSetRasterizerDiscardEnableEXT);
 }
 
+// VK_EXT_extended_dynamic_state3
+void InitExtendedDynamicState3EXTFunctions(VkDevice device)
+{
+    GET_DEVICE_FUNC(vkCmdSetColorWriteMaskEXT);
+    GET_DEVICE_FUNC(vkCmdSetColorBlendEnableEXT);
+    GET_DEVICE_FUNC(vkCmdSetColorBlendEquationEXT);
+    GET_DEVICE_FUNC(vkCmdSetSampleMaskEXT);
+    GET_DEVICE_FUNC(vkCmdSetAlphaToCoverageEnableEXT);
+    GET_DEVICE_FUNC(vkCmdSetRasterizationSamplesEXT);
+    GET_DEVICE_FUNC(vkCmdSetAlphaToOneEnableEXT);
+    GET_DEVICE_FUNC(vkCmdSetDepthClampEnableEXT);
+    GET_DEVICE_FUNC(vkCmdSetPolygonModeEXT);
+    GET_DEVICE_FUNC(vkCmdSetLogicOpEnableEXT);
+    GET_DEVICE_FUNC(vkCmdSetTessellationDomainOriginEXT);
+}
+
+// VK_EXT_extended_dynamic_state3 + VK_EXT_depth_clip_control
+void InitExtendedDynamicState3EXTWithDepthClipControlEXTFunctions(VkDevice device)
+{
+    GET_DEVICE_FUNC(vkCmdSetDepthClipNegativeOneToOneEXT);
+}
+
+// VK_EXT_extended_dynamic_state3 + VK_EXT_blend_operation_advanced
+void InitExtendedDynamicState3EXTWithBlendOperationAdvancedEXTFunctions(VkDevice device)
+{
+    GET_DEVICE_FUNC(vkCmdSetColorBlendAdvancedEXT);
+}
+
+// VK_EXT_extended_dynamic_state3 + VK_EXT_provoking_vertex
+void InitExtendedDynamicState3EXTWithProvokingVertexEXTFunctions(VkDevice device)
+{
+    GET_DEVICE_FUNC(vkCmdSetProvokingVertexModeEXT);
+}
+
+// VK_EXT_extended_dynamic_state3 + VK_EXT_transform_feedback
+void InitExtendedDynamicState3EXTWithTransformFeedbackEXTFunctions(VkDevice device)
+{
+    GET_DEVICE_FUNC(vkCmdSetRasterizationStreamEXT);
+}
+
+// VK_EXT_extended_dynamic_state3 + VK_EXT_line_rasterization
+void InitExtendedDynamicState3EXTWithLineRasterizationEXTFunctions(VkDevice device)
+{
+    GET_DEVICE_FUNC(vkCmdSetLineRasterizationModeEXT);
+    GET_DEVICE_FUNC(vkCmdSetLineStippleEnableEXT);
+}
+
 // VK_EXT_vertex_input_dynamic_state
 void InitVertexInputDynamicStateEXTFunctions(VkDevice device)
 {
@@ -1380,13 +1449,6 @@ void InitDynamicRenderingFunctions(VkDevice device)
 {
     GET_DEVICE_FUNC(vkCmdBeginRenderingKHR);
     GET_DEVICE_FUNC(vkCmdEndRenderingKHR);
-}
-
-// VK_KHR_dynamic_rendering_local_read
-void InitDynamicRenderingLocalReadFunctions(VkDevice device)
-{
-    GET_DEVICE_FUNC(vkCmdSetRenderingAttachmentLocationsKHR);
-    GET_DEVICE_FUNC(vkCmdSetRenderingInputAttachmentIndicesKHR);
 }
 
 // VK_KHR_fragment_shading_rate
@@ -1455,6 +1517,15 @@ void InitExternalMemoryHostFunctions(VkDevice device)
 void InitBufferDeviceAddressFunctions(VkDevice device)
 {
     GET_DEVICE_FUNC(vkGetBufferDeviceAddressKHR);
+}
+
+void InitPipelineBinaryKHRFunctions(VkDevice device)
+{
+    GET_DEVICE_FUNC(vkGetPipelineKeyKHR);
+    GET_DEVICE_FUNC(vkCreatePipelineBinariesKHR);
+    GET_DEVICE_FUNC(vkDestroyPipelineBinaryKHR);
+    GET_DEVICE_FUNC(vkGetPipelineBinaryDataKHR);
+    GET_DEVICE_FUNC(vkReleaseCapturedPipelineDataKHR);
 }
 
 #    undef GET_INSTANCE_FUNC
@@ -1802,6 +1873,104 @@ VkLogicOp GetLogicOp(const GLenum logicOp)
 {
     // GL's logic op values are 0x1500 + op, where op is the same value as Vulkan's VkLogicOp.
     return static_cast<VkLogicOp>(logicOp - GL_CLEAR);
+}
+
+VkBlendOp GetBlendOp(const gl::BlendEquationType blendOp)
+{
+    switch (blendOp)
+    {
+        case gl::BlendEquationType::Add:
+            return VK_BLEND_OP_ADD;
+        case gl::BlendEquationType::Subtract:
+            return VK_BLEND_OP_SUBTRACT;
+        case gl::BlendEquationType::ReverseSubtract:
+            return VK_BLEND_OP_REVERSE_SUBTRACT;
+        case gl::BlendEquationType::Min:
+            return VK_BLEND_OP_MIN;
+        case gl::BlendEquationType::Max:
+            return VK_BLEND_OP_MAX;
+        case gl::BlendEquationType::Multiply:
+            return VK_BLEND_OP_MULTIPLY_EXT;
+        case gl::BlendEquationType::Screen:
+            return VK_BLEND_OP_SCREEN_EXT;
+        case gl::BlendEquationType::Overlay:
+            return VK_BLEND_OP_OVERLAY_EXT;
+        case gl::BlendEquationType::Darken:
+            return VK_BLEND_OP_DARKEN_EXT;
+        case gl::BlendEquationType::Lighten:
+            return VK_BLEND_OP_LIGHTEN_EXT;
+        case gl::BlendEquationType::Colordodge:
+            return VK_BLEND_OP_COLORDODGE_EXT;
+        case gl::BlendEquationType::Colorburn:
+            return VK_BLEND_OP_COLORBURN_EXT;
+        case gl::BlendEquationType::Hardlight:
+            return VK_BLEND_OP_HARDLIGHT_EXT;
+        case gl::BlendEquationType::Softlight:
+            return VK_BLEND_OP_SOFTLIGHT_EXT;
+        case gl::BlendEquationType::Difference:
+            return VK_BLEND_OP_DIFFERENCE_EXT;
+        case gl::BlendEquationType::Exclusion:
+            return VK_BLEND_OP_EXCLUSION_EXT;
+        case gl::BlendEquationType::HslHue:
+            return VK_BLEND_OP_HSL_HUE_EXT;
+        case gl::BlendEquationType::HslSaturation:
+            return VK_BLEND_OP_HSL_SATURATION_EXT;
+        case gl::BlendEquationType::HslColor:
+            return VK_BLEND_OP_HSL_COLOR_EXT;
+        case gl::BlendEquationType::HslLuminosity:
+            return VK_BLEND_OP_HSL_LUMINOSITY_EXT;
+        default:
+            UNREACHABLE();
+            return VK_BLEND_OP_ADD;
+    }
+}
+
+VkBlendFactor GetBlendFactor(const gl::BlendFactorType blendFactor)
+{
+    switch (blendFactor)
+    {
+        case gl::BlendFactorType::Zero:
+            return VK_BLEND_FACTOR_ZERO;
+        case gl::BlendFactorType::One:
+            return VK_BLEND_FACTOR_ONE;
+        case gl::BlendFactorType::SrcColor:
+            return VK_BLEND_FACTOR_SRC_COLOR;
+        case gl::BlendFactorType::DstColor:
+            return VK_BLEND_FACTOR_DST_COLOR;
+        case gl::BlendFactorType::OneMinusSrcColor:
+            return VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
+        case gl::BlendFactorType::SrcAlpha:
+            return VK_BLEND_FACTOR_SRC_ALPHA;
+        case gl::BlendFactorType::OneMinusSrcAlpha:
+            return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        case gl::BlendFactorType::DstAlpha:
+            return VK_BLEND_FACTOR_DST_ALPHA;
+        case gl::BlendFactorType::OneMinusDstAlpha:
+            return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
+        case gl::BlendFactorType::OneMinusDstColor:
+            return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
+        case gl::BlendFactorType::SrcAlphaSaturate:
+            return VK_BLEND_FACTOR_SRC_ALPHA_SATURATE;
+        case gl::BlendFactorType::ConstantColor:
+            return VK_BLEND_FACTOR_CONSTANT_COLOR;
+        case gl::BlendFactorType::ConstantAlpha:
+            return VK_BLEND_FACTOR_CONSTANT_ALPHA;
+        case gl::BlendFactorType::OneMinusConstantColor:
+            return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR;
+        case gl::BlendFactorType::OneMinusConstantAlpha:
+            return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
+        case gl::BlendFactorType::Src1Color:
+            return VK_BLEND_FACTOR_SRC1_COLOR;
+        case gl::BlendFactorType::Src1Alpha:
+            return VK_BLEND_FACTOR_SRC1_ALPHA;
+        case gl::BlendFactorType::OneMinusSrc1Color:
+            return VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR;
+        case gl::BlendFactorType::OneMinusSrc1Alpha:
+            return VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
+        default:
+            UNREACHABLE();
+            return VK_BLEND_FACTOR_ZERO;
+    }
 }
 
 void GetOffset(const gl::Offset &glOffset, VkOffset3D *vkOffset)

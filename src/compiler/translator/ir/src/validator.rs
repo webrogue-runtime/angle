@@ -26,9 +26,15 @@
 //     validate_interface_variables_have_unique_names()
 //   - NameSource::ShaderInterface and NameSource::Internal are never found inside body blocks,
 //     those should always be Temporary: validate_block_variable_name_sources_are_temporary()
+//   - NameSource::Internal names don't start with the user and temporary name prefixes (*_PREFIX
+//     constants): validate_internal_name_prefixes()
+//   - A NameSource::Internal interface block or struct variable is never given an empty ("") name:
+//     validate_internal_interface_block_and_struct_variable_names()
 //
 // Types:
 //   - Validate that ImageType fields are valid in combination with ImageDimension:
+//     validate_image_types()
+//   - Images with the Rect dimension can only be 2D samplers (not storage image, array, msaa, etc).
 //     validate_image_types()
 //   - Variables are Pointers: validate_all_alive_variables_are_pointers()
 //   - No pointer->pointer type: validate_no_pointer_to_pointer_type()
@@ -61,10 +67,16 @@
 //     and they both end in a Merge with an ID.  (Technically, we should be able to also support one
 //     block being merge and the other discard/return/break/continue, but no such code can be
 //     generated right now): validate_merge_block_with_input()
+//   - Loop blocks ends in the appropriate instructions:
+//     validate_loop_block_ends_in_appropriate_instruction()
+//   - There is no foldable control flow (`If constant`, `Switch constant ...`, `Loop`+`LoopIf
+//     false`): validate_no_constant_foldable_instruction(), validate_no_foldable_loop()
 //
 // Instructions:
 //   - Access to struct fields are in bounds: validate_struct_field_in_bounds()
-//   - If conditions are boolean: validate_if_condition_is_bool()
+//   - If conditions are boolean: validate_instruction_operand_and_result_type()
+//   - Instruction result / operand types are correct and consistent. For example:
+//     BinaryOpCode::Equal should return a bool type: validate_instruction_operand_and_result_type()
 //   - No operations should have entirely constant arguments, that should be folded (and
 //     transformations shouldn't retintroduce it): validate_no_constant_foldable_instruction()
 //   - Case values are always ConstantId, and the Constant data type is int or uint:
@@ -78,6 +90,8 @@
 //     applicable (including uniforms and samplers for example).  Needs to work to make sure
 //     precision is always assigned: validate_precision(),
 //     validate_glsl_result_precision_and_propagation_rules()
+//   - Check for invalid texture* combinations, like non-shadow samplers with TextureCompare ops, or
+//     is_proj is false for cubemaps: validate_sampler_operand_is_compatable_with_textureop()
 //
 // Functions:
 //   - Check that function parameter variables don't have an initializer:
@@ -87,21 +101,18 @@
 
 // TODO(http://anglebug.com/349994211): to validate:
 //   - If there's a cached "has side effect", that it's correct.
-//   - Loop blocks ends in the appropriate instructions.
-//   - NameSource::Internal names don't start with the user and temporary name prefixes (_u, t and f
-//     respectively).
-//   - Type matches?
 //   - Whatever else is in the AST validation currently.
 //   - Validate built-ins that accept an out or inout parameter, that the corresponding parameter is
 //     passed a Pointer at the call site.  For that matter, do the same for user function calls too.
-//   - Check for invalid texture* combinations, like non-shadow samplers with TextureCompare ops, or
-//     is_proj is false for cubemaps.
-//   - Images with the Rect dimension can only have a Float base type and be 2D samplers (not
-//     storage image, array, msaa, etc).
-//   - Instruction result / operand types are correct and consistent. For example:
-//     BinaryOpCode::Equal should return a bool type.
+//   - Variables with PerVertexIn and PerVertexOut must be unique and applicable to shader (i.e. no
+//     two variables with PerVertexOut, or no PerVertexIn in a vertex shader).
+//   - Variables decorated with PerVertexIn and PerVertexOut can only be of a struct type, whose
+//     members are all one (and at most one) of the following built-ins: Position, PointSize,
+//     ClipDistance, CullDistance.  No other variable should have built-in fields.
+//   - Field names must not be empty, unless for built-ins for which it they must be empty.
 
 use crate::ir::*;
+use crate::traverser::BlockKind;
 use crate::*;
 use std::fmt;
 
@@ -304,6 +315,8 @@ impl<'a> Validator<'a> {
         self.validate_misuse_of_builtin_names();
         self.validate_interface_variables_have_unique_names();
         self.validate_block_variable_name_sources_are_temporary();
+        self.validate_internal_interface_block_and_struct_variable_names();
+        self.validate_internal_name_prefixes();
         self.validate_decorations();
         self.validate_no_pointer_to_pointer_type();
         self.validate_all_variables_are_declared_in_scope();
@@ -313,6 +326,8 @@ impl<'a> Validator<'a> {
         self.validate_no_dead_code();
         self.validate_all_branch_instructions_have_valid_target();
         self.validate_merge_block_with_input();
+        self.validate_loop_block_ends_in_appropriate_instruction();
+        self.validate_no_foldable_loop();
         self.validate_all_instructions();
         self.validate_function_parameter_variables();
         self.validate_function_return_types();
@@ -1293,144 +1308,839 @@ impl<'a> Validator<'a> {
     fn validate_image_types(&self) {
         for ir_type in self.ir.meta.all_types() {
             if let Type::Image(basic_type, image_type) = ir_type {
-                let invalid_combo = match image_type.dimension {
-                    ImageDimension::D2 => {
-                        if *basic_type == ImageBasicType::Float
-                            && image_type.is_sampled
-                            && image_type.is_ms
-                            && image_type.is_shadow
-                        {
-                            Some("float 2D multisampled shadow sampler")
-                        } else if (*basic_type == ImageBasicType::Int
-                            || *basic_type == ImageBasicType::Uint)
-                            && image_type.is_sampled
-                            && image_type.is_shadow
-                        {
-                            Some("int 2D shadow sampler or uint 2D shadow sampler")
-                        } else if !image_type.is_sampled
-                            && (image_type.is_ms || image_type.is_shadow)
-                        {
-                            Some("2D multisampled storage image or 2D shadow storage image")
-                        } else {
-                            None
-                        }
-                    }
-                    ImageDimension::D3 => {
-                        if image_type.is_array || image_type.is_ms || image_type.is_shadow {
-                            Some("3D array, 3D multisampled or 3D shadow image types")
-                        } else {
-                            None
-                        }
-                    }
-                    ImageDimension::Cube => {
-                        if image_type.is_ms {
-                            Some("multisampled cube image types")
-                        } else if (*basic_type == ImageBasicType::Int
-                            || *basic_type == ImageBasicType::Uint)
-                            && image_type.is_sampled
-                            && image_type.is_shadow
-                        {
-                            Some("int or uint cube shadow sampler")
-                        } else if !image_type.is_sampled && image_type.is_shadow {
-                            Some("cube shadow storage image")
-                        } else {
-                            None
-                        }
-                    }
-                    ImageDimension::External => {
-                        if *basic_type == ImageBasicType::Int
-                            || *basic_type == ImageBasicType::Uint
-                            || !image_type.is_sampled
-                            || image_type.is_array
-                            || image_type.is_ms
-                            || image_type.is_shadow
-                        {
-                            Some(
-                                "int external image, uint external image, storage external image, \
-                                 array external image, multismpled external image, shadow \
-                                 external image",
-                            )
-                        } else {
-                            None
-                        }
-                    }
-                    ImageDimension::ExternalY2Y => {
-                        if *basic_type == ImageBasicType::Int
-                            || *basic_type == ImageBasicType::Uint
-                            || !image_type.is_sampled
-                            || image_type.is_array
-                            || image_type.is_ms
-                            || image_type.is_shadow
-                        {
-                            Some(
-                                "int external y2y image, uint external y2y image, storage \
-                                 external y2y image, array external y2y image, multismpled \
-                                 external y2y image, shadow external y2y image",
-                            )
-                        } else {
-                            None
-                        }
-                    }
-                    ImageDimension::Rect => {
-                        if !image_type.is_sampled
-                            || image_type.is_array
-                            || image_type.is_ms
-                            || image_type.is_shadow
-                        {
-                            Some(
-                                "storage rect image, array rect image, multisampled rect image, \
-                                 shadow rect image",
-                            )
-                        } else {
-                            None
-                        }
-                    }
-                    ImageDimension::Buffer => {
-                        if image_type.is_array || image_type.is_ms || image_type.is_shadow {
-                            Some(
-                                "array buffer image, multisampled buffer image, shadow buffer \
-                                 image",
-                            )
-                        } else {
-                            None
-                        }
-                    }
-                    ImageDimension::PixelLocal => {
-                        if image_type.is_sampled
-                            || image_type.is_array
-                            || image_type.is_ms
-                            || image_type.is_shadow
-                        {
-                            Some(
-                                "pixel local image sampler, array pixel local image, multisample \
-                                 pixel local image, shadow pixel local image",
-                            )
-                        } else {
-                            None
-                        }
-                    }
-                    ImageDimension::Subpass => {
-                        if image_type.is_sampled
-                            || image_type.is_array
-                            || image_type.is_ms
-                            || image_type.is_shadow
-                        {
-                            Some(
-                                "subpass image sampler, array subpass image, multisample subpass \
-                                 image, shadow subpass image",
-                            )
-                        } else {
-                            None
-                        }
-                    }
-                };
-                if let Some(invalid_combo) = invalid_combo {
+                // 1. Shadow: float only, sampled only, 2D/Cube only
+                if image_type.is_shadow
+                    && (*basic_type != ImageBasicType::Float
+                        || !image_type.is_sampled
+                        || !matches!(
+                            image_type.dimension,
+                            ImageDimension::D2 | ImageDimension::Cube
+                        ))
+                {
                     self.on_error(format_args!(
-                        "invalid image type {:?}, {} is not supported in GLSL",
-                        ir_type, invalid_combo
+                        "invalid image type {:?}, if is_shadow is true, then the image_type must \
+                         be float and 2D/Cube sampler",
+                        ir_type
+                    ));
+                }
+
+                // 2. Multisample: 2D only, sampled only, non-shadow
+                if image_type.is_ms
+                    && (image_type.dimension != ImageDimension::D2
+                        || !image_type.is_sampled
+                        || image_type.is_shadow)
+                {
+                    self.on_error(format_args!(
+                        "invalid image type {:?}, if is_ms is true, then the image_type must be \
+                         2D sampler or 2D array sampler",
+                        ir_type
+                    ));
+                }
+                // 3. Array: 2D and Cube only
+                if image_type.is_array
+                    && !matches!(image_type.dimension, ImageDimension::D2 | ImageDimension::Cube)
+                {
+                    self.on_error(format_args!(
+                        "invalid image type {:?}, if is_array is true, then the dimension must be \
+                         2D or Cube",
+                        ir_type
+                    ));
+                }
+                // 4. Texture: not PixelLocal or Subpass
+                if image_type.is_sampled {
+                    if matches!(
+                        image_type.dimension,
+                        ImageDimension::PixelLocal | ImageDimension::Subpass
+                    ) {
+                        self.on_error(format_args!(
+                            "invalid image type {:?}, if is_sampled is true, then the dimension \
+                             must not be PixelLocal or Subpass",
+                            ir_type
+                        ));
+                    }
+                } else if matches!(
+                    // 5. Image: not Rect, External, or ExternalY2Y
+                    image_type.dimension,
+                    ImageDimension::Rect | ImageDimension::External | ImageDimension::ExternalY2Y
+                ) {
+                    self.on_error(format_args!(
+                        "invalid image type {:?}, if is_sampled is false, then the dimension must \
+                         not be Rect, External, ExternalY2Y",
+                        ir_type
+                    ));
+                }
+                // 6. Basic type restrictions for special dimensions (Rect and External are
+                //    Float-only)
+                if matches!(
+                    image_type.dimension,
+                    ImageDimension::External | ImageDimension::ExternalY2Y
+                ) && *basic_type != ImageBasicType::Float
+                {
+                    self.on_error(format_args!(
+                        "invalid image type {:?}, and External and ExternalY2Y samplers must have \
+                         Float basic type",
+                        ir_type
                     ));
                 }
             }
+        }
+    }
+
+    // TODO:(http://anglebug.com/349994211): add the validation that checks the result type is correct
+    fn validate_sampler_operand_is_compatible_with_textureop(&self, opcode: &OpCode) {
+        match opcode {
+            OpCode::Texture(texture_opcode, sampler, _) => {
+                let sampler_type = self.ir.meta.get_type(sampler.type_id);
+                // Validate the first typedid operand must be Image Type
+                let (basic_type, image_type) = match *sampler_type {
+                    Type::Image(basic, image_type) => (basic, image_type),
+                    _ => {
+                        self.on_error(format_args!(
+                            "sampler operand {:?} in texture instruction {:?} must be Image type, \
+                             got {:?}",
+                            sampler, opcode, sampler_type
+                        ));
+                    }
+                };
+
+                // Validate the first typedId operand must be a singlesampled sampler
+                if !image_type.is_sampled || image_type.is_ms {
+                    self.on_error(format_args!(
+                        "sampler operand {:?} in texture instruction {:?} must be sampled and not \
+                         multisampled",
+                        sampler, opcode
+                    ));
+                }
+
+                match texture_opcode {
+                    // gvec4 texture(gsampler2D, vec2);
+                    // float texture(sampler2DShadow, vec3);
+                    // gvec4 texture(gsampler2DArray, vec3);
+                    // float texture(sampler2DArrayShadow, vec4);
+                    // gvec4 texture(gsampler3D, vec3);
+                    // gvec4 texture(gsamplerCube, vec3);
+                    // float texture(samplerCubeShadow, vec4);
+                    // gvec4 texture(gsamplerCubeArray, vec4);
+                    // vec4 texture(sampler2DRect, vec2);
+                    // vec4 texture(samplerExternalOES, vec2);
+                    // vec4 texture(samplerExternal2DY2YEXT, vec2);
+                    TextureOpCode::Implicit { is_proj: false, offset: None } => {
+                        if !matches!(
+                            image_type.dimension,
+                            ImageDimension::D2
+                                | ImageDimension::D3
+                                | ImageDimension::Cube
+                                | ImageDimension::Rect
+                                | ImageDimension::External
+                                | ImageDimension::ExternalY2Y
+                        ) {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, only D2, D3,
+                                 Cube, Rect, External, ExternalY2Y dimentions are allowed",
+                                sampler, texture_opcode
+                            ));
+                        }
+                        if image_type.dimension == ImageDimension::Rect
+                            && basic_type != ImageBasicType::Float
+                        {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, for rect
+                                 dimension only Float basic type is allowed",
+                                sampler, texture_opcode
+                            ));
+                        }
+                        if image_type.is_shadow
+                            && image_type.is_array
+                            && image_type.dimension == ImageDimension::Cube
+                        {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, \
+                                 SamplerCubeArrayShadow is not allowed",
+                                sampler, texture_opcode
+                            ));
+                        }
+                    }
+                    // float texture(samplerCubeArrayShadow, vec4, float);
+                    // float texture(samplerCubeArrayShadow, vec4, float, float);
+                    // float textureLod(samplerCubeArrayShadow, vec4, float, float);
+                    TextureOpCode::Compare { .. }
+                    | TextureOpCode::CompareBias { .. }
+                    | TextureOpCode::CompareLod { .. } => {
+                        if !(image_type.dimension == ImageDimension::Cube
+                            && image_type.is_array
+                            && image_type.is_shadow)
+                        {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, only \
+                                 SamplerCubeArrayShadow is allowed",
+                                sampler, texture_opcode
+                            ));
+                        }
+                    }
+                    // gvec4 textureProj(gsampler2D, vec3);
+                    // gvec4 textureProj(gsampler2D, vec4);
+                    // float textureProj(sampler2DShadow, vec4);
+                    // gvec4 textureProj(gsampler3D, vec4);
+                    // vec4 textureProj(sampler2DRect, vec3);
+                    // vec4 textureProj(sampler2DRect, vec4);
+                    // vec4 textureProj(samplerExternalOES, vec3);
+                    // vec4 textureProj(samplerExternalOES, vec4);
+                    // vec4 textureProj(samplerExternal2DY2YEXT, vec3);
+                    // vec4 textureProj(samplerExternal2DY2YEXT, vec4);
+                    TextureOpCode::Implicit { is_proj: true, offset: None } => {
+                        if !matches!(
+                            image_type.dimension,
+                            ImageDimension::D2
+                                | ImageDimension::D3
+                                | ImageDimension::Rect
+                                | ImageDimension::External
+                                | ImageDimension::ExternalY2Y
+                        ) {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, dimension \
+                                 must be 2D, 3D, Rect, External, or ExternalY2Y",
+                                sampler, texture_opcode
+                            ));
+                        }
+                        if image_type.dimension == ImageDimension::Rect
+                            && basic_type != ImageBasicType::Float
+                        {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, for rect
+                                 dimension only Float basic type is allowed",
+                                sampler, texture_opcode
+                            ));
+                        }
+                        if image_type.is_array {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, array sampler \
+                                 is not allowed",
+                                sampler, texture_opcode
+                            ));
+                        }
+                        if image_type.is_shadow && image_type.dimension != ImageDimension::D2 {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, shadow is \
+                                 only allowed for 2D float sampler",
+                                sampler, texture_opcode
+                            ));
+                        }
+                    }
+                    // gvec4 textureLod(gsampler2D, vec2, float);
+                    // gvec4 textureLod(gsampler2DArray, vec3, float);
+                    // float textureLod(sampler2DShadow, vec3, float);
+                    // gvec4 textureLod(gsampler3D, vec3, float);
+                    // gvec4 textureLod(gsamplerCube, vec3, float);
+                    // gvec4 textureLod(gsamplerCubeArray, vec4, float);
+                    // float textureLod(samplerCubeShadow, vec4, float);
+                    // float textureLod(sampler2DArrayShadow, vec4, float);
+                    // gvec4 textureGrad(gsampler2D, vec2, vec2, vec2);
+                    // gvec4 textureGrad(gsampler2DArray, vec3, vec2, vec2);
+                    // float textureGrad(sampler2DShadow, vec3, vec2, vec2);
+                    // gvec4 textureGrad(gsampler3D, vec3, vec3, vec3);
+                    // gvec4 textureGrad(gsamplerCube, vec3, vec3, vec3);
+                    // gvec4 textureGrad(gsamplerCubeArray, vec4, vec3, vec3);
+                    // float textureGrad(samplerCubeShadow, vec4, vec3, vec3);
+                    // float textureGrad(sampler2DArrayShadow, vec4, vec2, vec2);
+                    TextureOpCode::Lod { is_proj: false, offset: None, .. }
+                    | TextureOpCode::Grad { is_proj: false, offset: None, .. } => {
+                        if !matches!(
+                            image_type.dimension,
+                            ImageDimension::D2 | ImageDimension::D3 | ImageDimension::Cube
+                        ) {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, dimension \
+                                 must be 2D, 3D, or Cube",
+                                sampler, texture_opcode
+                            ));
+                        }
+                        if image_type.is_shadow
+                            && image_type.dimension == ImageDimension::Cube
+                            && image_type.is_array
+                        {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, \
+                                 SamplerCubeArrayShadow is not allowed",
+                                sampler, texture_opcode
+                            ));
+                        }
+                    }
+                    // gvec4 textureProjLod(gsampler2D, vec3, float);
+                    // gvec4 textureProjLod(gsampler2D, vec4, float);
+                    // float textureProjLod(sampler2DShadow, vec4, float);
+                    // gvec4 textureProjLod(gsampler3D, vec4, float);
+                    // gvec4 textureProjGrad(gsampler2D, vec3, vec2, vec2);
+                    // gvec4 textureProjGrad(gsampler2D, vec4, vec2, vec2);
+                    // float textureProjGrad(sampler2DShadow, vec4, vec2, vec2);
+                    // gvec4 textureProjGrad(gsampler3D, vec4, vec3, vec3);
+                    // gvec4 textureProjOffset(gsampler2D, vec3, ivec2);
+                    // gvec4 textureProjOffset(gsampler2D, vec4, ivec2);
+                    // float textureProjOffset(sampler2DShadow, vec4, ivec2);
+                    // gvec4 textureProjOffset(gsampler3D, vec4, ivec3);
+                    // gvec4 textureProjLodOffset(gsampler2D, vec3, float, ivec2);
+                    // gvec4 textureProjLodOffset(gsampler2D, vec4, float, ivec2);
+                    // float textureProjLodOffset(sampler2DShadow, vec4, float, ivec2);
+                    // gvec4 textureProjLodOffset(gsampler3D, vec4, float, ivec3);
+                    // gvec4 textureProjGradOffset(gsampler2D, vec3, vec2, vec2, ivec2);
+                    // gvec4 textureProjGradOffset(gsampler2D, vec4, vec2, vec2, ivec2);
+                    // float textureProjGradOffset(sampler2DShadow, vec4, vec2, vec2, ivec2);
+                    // gvec4 textureProjGradOffset(gsampler3D, vec4, vec3, vec3, ivec3);
+                    // gvec4 textureProjOffset(gsampler2D, vec3, ivec2, float);
+                    // gvec4 textureProjOffset(gsampler2D, vec4, ivec2, float);
+                    // float textureProjOffset(sampler2DShadow, vec4, ivec2, float);
+                    // gvec4 textureProjOffset(gsampler3D, vec4, ivec3, float);
+                    TextureOpCode::Lod { is_proj: true, offset: None, .. }
+                    | TextureOpCode::Grad { is_proj: true, offset: None, .. }
+                    | TextureOpCode::Implicit { is_proj: true, offset: Some(_) }
+                    | TextureOpCode::Lod { is_proj: true, offset: Some(_), .. }
+                    | TextureOpCode::Grad { is_proj: true, offset: Some(_), .. }
+                    | TextureOpCode::Bias { is_proj: true, offset: Some(_), .. } => {
+                        if !(matches!(
+                            image_type.dimension,
+                            ImageDimension::D2 | ImageDimension::D3
+                        )) {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, dimension \
+                                 must be 2D or 3D",
+                                sampler, texture_opcode
+                            ));
+                        }
+                        if image_type.is_array {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, array is not \
+                                 allowed",
+                                sampler, texture_opcode
+                            ));
+                        }
+                        if image_type.is_shadow && image_type.dimension != ImageDimension::D2 {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, shadow is \
+                                 only allowed for 2D float sampler",
+                                sampler, texture_opcode
+                            ));
+                        }
+                    }
+                    // gvec4 texture(gsampler2D, vec2, float);
+                    // float texture(sampler2DShadow, vec3, float);
+                    // gvec4 texture(gsampler2DArray, vec3, float);
+                    // float texture(sampler2DArrayShadow, vec4, float);
+                    // gvec4 texture(gsampler3D, vec3, float);
+                    // gvec4 texture(gsamplerCube, vec3, float);
+                    // float texture(samplerCubeShadow, vec4, float);
+                    // gvec4 texture(gsamplerCubeArray, vec4, float);
+                    // vec4 texture(samplerExternalOES, vec2, float);
+                    // vec4 texture(samplerExternal2DY2YEXT, vec2, float);
+                    TextureOpCode::Bias { is_proj: false, offset: None, .. } => {
+                        if !(matches!(
+                            image_type.dimension,
+                            ImageDimension::D2
+                                | ImageDimension::D3
+                                | ImageDimension::Cube
+                                | ImageDimension::External
+                                | ImageDimension::ExternalY2Y
+                        )) {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, dimension \
+                                 must be 2D, 3D, Cube, External, or ExternalY2Y",
+                                sampler, texture_opcode
+                            ));
+                        }
+                        if image_type.is_shadow
+                            && image_type.dimension == ImageDimension::Cube
+                            && image_type.is_array
+                        {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, \
+                                 SamplerCubeArrayShadow is not allowed",
+                                sampler, texture_opcode
+                            ));
+                        }
+                    }
+                    // gvec4 textureProj(gsampler2D, vec3, float);
+                    // gvec4 textureProj(gsampler2D, vec4, float);
+                    // float textureProj(sampler2DShadow, vec4, float);
+                    // gvec4 textureProj(gsampler3D, vec4, float);
+                    // vec4 textureProj(samplerExternalOES, vec3, float);
+                    // vec4 textureProj(samplerExternalOES, vec4, float);
+                    // vec4 textureProj(samplerExternal2DY2YEXT, vec3, float);
+                    // vec4 textureProj(samplerExternal2DY2YEXT, vec4, float);
+                    TextureOpCode::Bias { is_proj: true, offset: None, .. } => {
+                        if !(matches!(
+                            image_type.dimension,
+                            ImageDimension::D2
+                                | ImageDimension::D3
+                                | ImageDimension::External
+                                | ImageDimension::ExternalY2Y
+                        )) {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, only 2D, 3D, \
+                                 External, or ExternalY2Y dimension is allowed",
+                                sampler, texture_opcode
+                            ));
+                        };
+                        if image_type.is_array {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, array not \
+                                 allowed",
+                                sampler, texture_opcode
+                            ));
+                        }
+                        if image_type.is_shadow && image_type.dimension != ImageDimension::D2 {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, shadow is \
+                                 only allowed for 2D float dimension",
+                                sampler, texture_opcode
+                            ));
+                        }
+                    }
+                    // gvec4 textureOffset(gsampler2D, vec2, ivec2);
+                    // float textureOffset(sampler2DShadow, vec3, ivec2);
+                    // gvec4 textureOffset(gsampler2DArray, vec3, ivec2);
+                    // float textureOffset(sampler2DArrayShadow, vec4, ivec2);
+                    // gvec4 textureOffset(gsampler3D, vec3, ivec3);
+                    // gvec4 textureLodOffset(gsampler2D, vec2, float, ivec2);
+                    // float textureLodOffset(sampler2DShadow, vec3, float, ivec2);
+                    // gvec4 textureLodOffset(gsampler2DArray, vec3, float, ivec2);
+                    // float textureLodOffset(sampler2DArrayShadow, vec4, float, ivec2);
+                    // gvec4 textureLodOffset(gsampler3D, vec3, float, ivec3);
+                    // gvec4 textureGradOffset(gsampler2D, vec2, vec2, vec2, ivec2);
+                    // float textureGradOffset(sampler2DShadow, vec3, vec2, vec2, ivec2);
+                    // gvec4 textureGradOffset(gsampler2DArray, vec3, vec2, vec2, ivec2);
+                    // float textureGradOffset(sampler2DArrayShadow, vec4, vec2, vec2, ivec2);
+                    // gvec4 textureGradOffset(gsampler3D, vec3, vec3, vec3, ivec3);
+                    // gvec4 textureOffset(gsampler2D, vec2, ivec2, float);
+                    // float textureOffset(sampler2DShadow, vec3, ivec2, float);
+                    // gvec4 textureOffset(gsampler2DArray, vec3, ivec2, float);
+                    // float textureOffset(sampler2DArrayShadow, vec4, ivec2, float);
+                    // gvec4 textureOffset(gsampler3D, vec3, ivec3, float);
+                    TextureOpCode::Implicit { is_proj: false, offset: Some(_) }
+                    | TextureOpCode::Lod { is_proj: false, offset: Some(_), .. }
+                    | TextureOpCode::Grad { is_proj: false, offset: Some(_), .. }
+                    | TextureOpCode::Bias { is_proj: false, offset: Some(_), .. } => {
+                        if !(matches!(
+                            image_type.dimension,
+                            ImageDimension::D2 | ImageDimension::D3
+                        )) {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, dimension \
+                                 must be 2D or 3D",
+                                sampler, texture_opcode
+                            ));
+                        }
+                        if image_type.is_array && image_type.dimension != ImageDimension::D2 {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, array is only \
+                                 allowed for 2D dimension",
+                                sampler, texture_opcode
+                            ));
+                        }
+                        if image_type.is_shadow && image_type.dimension != ImageDimension::D2 {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, shadow is \
+                                 only allowed for 2D float sampler and 2D array float sampler",
+                                sampler, texture_opcode
+                            ));
+                        }
+                    }
+                    // gvec4 textureGather(gsampler2D, vec2);
+                    // gvec4 textureGather(gsampler2DArray, vec3);
+                    // gvec4 textureGather(gsamplerCube, vec3);
+                    // gvec4 textureGather(gsamplerCubeArray, vec4);
+                    // gvec4 textureGather(gsampler2D, vec2, int);
+                    // gvec4 textureGather(gsampler2DArray, vec3, int);
+                    // gvec4 textureGather(gsamplerCube, vec3, int);
+                    // gvec4 textureGather(gsamplerCubeArray, vec4, int);
+                    TextureOpCode::Gather { offset: None }
+                    | TextureOpCode::GatherComponent { offset: None, .. } => {
+                        if !(matches!(
+                            image_type.dimension,
+                            ImageDimension::D2 | ImageDimension::Cube
+                        )) {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, dimension \
+                                 must be 2D or Cube",
+                                sampler, texture_opcode
+                            ));
+                        }
+                        if image_type.is_shadow {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, shadow \
+                                 sampler is not allowed",
+                                sampler, texture_opcode
+                            ));
+                        }
+                    }
+                    // vec4 textureGather(sampler2DShadow, vec2, float);
+                    // vec4 textureGather(sampler2DArrayShadow, vec3, float);
+                    // vec4 textureGather(samplerCubeShadow, vec3, float);
+                    // vec4 textureGather(samplerCubeArrayShadow, vec4, float);
+                    TextureOpCode::GatherRef { offset: None, .. } => {
+                        if !(matches!(
+                            image_type.dimension,
+                            ImageDimension::D2 | ImageDimension::Cube
+                        )) {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, dimension \
+                                 must be 2D or Cube",
+                                sampler, texture_opcode
+                            ));
+                        }
+                        if !image_type.is_shadow {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, shadow \
+                                 sampler type must be used",
+                                sampler, texture_opcode
+                            ));
+                        }
+                    }
+                    // gvec4 textureGatherOffset(gsampler2D, vec2, ivec2);
+                    // gvec4 textureGatherOffset(gsampler2DArray, vec3, ivec2);
+                    // gvec4 textureGatherOffsets(gsampler2D, vec2, ivec2[4]);
+                    // gvec4 textureGatherOffsets(gsampler2DArray, vec3, ivec2[4]);
+                    // gvec4 textureGatherOffset(gsampler2D, vec2, ivec2, int);
+                    // gvec4 textureGatherOffset(gsampler2DArray, vec3, ivec2, int);
+                    // gvec4 textureGatherOffsets(gsampler2D, vec2, ivec2[4], int);
+                    // gvec4 textureGatherOffsets(gsampler2DArray, vec3, ivec2[4], int);
+                    TextureOpCode::Gather { offset: Some(_) }
+                    | TextureOpCode::GatherComponent { offset: Some(_), .. } => {
+                        if image_type.dimension != ImageDimension::D2 {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, dimension \
+                                 must be 2D",
+                                sampler, texture_opcode
+                            ));
+                        }
+                        if image_type.is_shadow {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, shadow is not \
+                                 allowed",
+                                sampler, texture_opcode
+                            ));
+                        }
+                    }
+                    // vec4 textureGatherOffset(sampler2DShadow, vec2, float, ivec2);
+                    // vec4 textureGatherOffset(sampler2DArrayShadow, vec3, float, ivec2);
+                    // vec4 textureGatherOffsets(sampler2DShadow, vec2, float, ivec2[4]);
+                    // vec4 textureGatherOffsets(sampler2DArrayShadow, vec3, float, ivec2[4]);
+                    TextureOpCode::GatherRef { offset: Some(_), .. } => {
+                        if image_type.dimension != ImageDimension::D2 {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, dimension \
+                                 must be 2D",
+                                sampler, texture_opcode
+                            ));
+                        }
+                        if !image_type.is_shadow {
+                            self.on_error(format_args!(
+                                "Incompatible sampler {:?} for texture opcode {:?}, shadow \
+                                 sampler type must be used",
+                                sampler, texture_opcode
+                            ));
+                        }
+                    }
+                }
+            }
+            // gvec4 texelFetch(gsampler2D, ivec2, int)
+            // gvec4 texelFetch(gsampler3D, ivec3, int)
+            // gvec4 texelFetch(gsampler2DArray, ivec3, int)
+            // gvec4 texelFetch(gsamplerBuffer, int)
+            // gvec4 texelFetch(gsampler2DMS, ivec2, int)
+            // gvec4 texelFetch(gsampler2DMSArray, ivec3, int)
+            // vec4 texelFetch(samplerExternalOES sampler, ivec2, int)
+            // vec4 texelFetch(samplerExternal2DY2YEXT sampler, ivec2, int)
+            OpCode::BuiltIn(BuiltInOpCode::TexelFetch, args) => {
+                let sampler_type = self.ir.meta.get_type(args[0].type_id);
+                let image_type = match *sampler_type {
+                    Type::Image(_, image_type) => image_type,
+                    _ => {
+                        self.on_error(format_args!(
+                            "first operand in {:?} must be Image type",
+                            opcode
+                        ));
+                    }
+                };
+
+                if !image_type.is_sampled {
+                    self.on_error(format_args!("first operand in {:?} must be sampler", opcode));
+                }
+
+                if image_type.is_shadow {
+                    self.on_error(format_args!(
+                        "first operand in {:?} must NOT be shadow sampler",
+                        opcode
+                    ));
+                }
+
+                if !(matches!(
+                    image_type.dimension,
+                    ImageDimension::D2
+                        | ImageDimension::D3
+                        | ImageDimension::Buffer
+                        | ImageDimension::External
+                        | ImageDimension::ExternalY2Y
+                )) {
+                    self.on_error(format_args!(
+                        "first operand in {:?} must be 2D, 3D, Buffer, External or ExternalY2Y \
+                         sampler",
+                        opcode
+                    ));
+                }
+            }
+            // gvec4 texelFetchOffset(gsampler2D, ivec2, int, ivec2)
+            // gvec4 texelFetchOffset(gsampler3D, ivec3, int, ivec3)
+            // gvec4 texelFetchOffset(gsampler2DArray, ivec3, int, ivec2)
+            OpCode::BuiltIn(BuiltInOpCode::TexelFetchOffset, args) => {
+                let sampler_type = self.ir.meta.get_type(args[0].type_id);
+                let image_type = match *sampler_type {
+                    Type::Image(_, image_type) => image_type,
+                    _ => {
+                        self.on_error(format_args!(
+                            "first operand in {:?} must be Image type",
+                            opcode
+                        ));
+                    }
+                };
+
+                if !image_type.is_sampled {
+                    self.on_error(format_args!("first operand in {:?} must be sampler", opcode));
+                }
+
+                if image_type.is_shadow {
+                    self.on_error(format_args!(
+                        "first operand in {:?} must NOT be shadow sampler",
+                        opcode
+                    ));
+                }
+
+                if image_type.is_ms {
+                    self.on_error(format_args!(
+                        "first operand in {:?} must NOT be multisampled sampler",
+                        opcode
+                    ));
+                }
+
+                if !(matches!(image_type.dimension, ImageDimension::D2 | ImageDimension::D3)) {
+                    self.on_error(format_args!(
+                        "first operand in {:?} must be 2D or 3D sampler",
+                        opcode
+                    ));
+                }
+            }
+            // ivec2 textureSize(gsampler2D, int)
+            // ivec3 textureSize(gsampler3D, int)
+            // ivec2 textureSize(gsamplerCube, int)
+            // ivec2 textureSize(sampler2DShadow, int)
+            // ivec2 textureSize(samplerCubeShadow, int)
+            // ivec3 textureSize(gsamplerCubeArray, int)
+            // ivec3 textureSize(samplerCubeArrayShadow, int)
+            // ivec3 textureSize(gsampler2DArray, int)
+            // ivec3 textureSize(sampler2DArrayShadow, int)
+            // int textureSize(gsamplerBuffer)
+            // ivec2 textureSize(gsampler2DMS)
+            // ivec3 textureSize(gsampler2DMSArray)
+            // ivec2 textureSize(samplerExternalOES, int)
+            // ivec2 textureSize(samplerExternal2DY2YEXT, int)
+            OpCode::BuiltIn(BuiltInOpCode::TextureSize, args) => {
+                let sampler_type = self.ir.meta.get_type(args[0].type_id);
+                let image_type = match *sampler_type {
+                    Type::Image(_, image_type) => image_type,
+                    _ => {
+                        self.on_error(format_args!(
+                            "first operand in {:?} must be Image type",
+                            opcode
+                        ));
+                    }
+                };
+
+                if !image_type.is_sampled {
+                    self.on_error(format_args!("first operand in {:?} must be sampler", opcode));
+                }
+
+                if !(matches!(
+                    image_type.dimension,
+                    ImageDimension::D2
+                        | ImageDimension::D3
+                        | ImageDimension::Cube
+                        | ImageDimension::Buffer
+                        | ImageDimension::External
+                        | ImageDimension::ExternalY2Y
+                )) {
+                    self.on_error(format_args!(
+                        "first operand in {:?} must be 2D, 3D, Cube, Buffer, External or \
+                         ExternalY2Y sampler",
+                        opcode
+                    ));
+                }
+            }
+            OpCode::BuiltIn(BuiltInOpCode::PixelLocalStoreANGLE, args) => {
+                let sampler_type = self.ir.meta.get_type(args[0].type_id);
+                let image_type = match *sampler_type {
+                    Type::Image(_, image_type) => image_type,
+                    _ => {
+                        self.on_error(format_args!(
+                            "first operand in {:?} must be Image type",
+                            opcode
+                        ));
+                    }
+                };
+                if image_type.dimension != ImageDimension::PixelLocal {
+                    self.on_error(format_args!(
+                        "first operand in {:?} must be PixelLocal image",
+                        opcode
+                    ));
+                }
+            }
+            // vec2 textureQueryLOD(gsampler2D, vec2);
+            // vec2 textureQueryLOD(gsampler3D, vec3);
+            // vec2 textureQueryLOD(gsamplerCube, vec3);
+            // vec2 textureQueryLOD(gsampler2DArray, vec2);
+            // vec2 textureQueryLOD(sampler2DShadow, vec2);
+            // vec2 textureQueryLOD(samplerCubeShadow, vec3);
+            // vec2 textureQueryLOD(sampler2DArrayShadow, vec2);
+            // vec2 textureQueryLOD(gsamplerCubeArray, vec3);
+            // vec2 textureQueryLOD(samplerCubeArrayShadow, vec3);
+            OpCode::BuiltIn(BuiltInOpCode::TextureQueryLod, args) => {
+                let sampler_type = self.ir.meta.get_type(args[0].type_id);
+                let image_type = match *sampler_type {
+                    Type::Image(_, image_type) => image_type,
+                    _ => {
+                        self.on_error(format_args!(
+                            "first operand in {:?} must be Image type",
+                            opcode
+                        ));
+                    }
+                };
+                if !image_type.is_sampled {
+                    self.on_error(format_args!("first operand in {:?} must be sampler", opcode));
+                }
+                if image_type.is_ms {
+                    self.on_error(format_args!(
+                        "first operand in {:?} must NOT be multisampled sampler",
+                        opcode
+                    ));
+                }
+                if !(matches!(
+                    image_type.dimension,
+                    ImageDimension::D2 | ImageDimension::Cube | ImageDimension::D3
+                )) {
+                    self.on_error(format_args!(
+                        "first operand in {:?} must be 2D, 3D or Cube sampler",
+                        opcode
+                    ));
+                }
+            }
+            // gvec4 subpassLoad(gsubpassInput);
+            OpCode::BuiltIn(BuiltInOpCode::SubpassLoad, args) => {
+                let image_type = match *self.ir.meta.get_type(args[0].type_id) {
+                    Type::Image(_, image_type) => image_type,
+                    _ => {
+                        self.on_error(format_args!(
+                            "first operand in {:?} must be Image type",
+                            opcode
+                        ));
+                    }
+                };
+
+                if image_type.dimension != ImageDimension::Subpass {
+                    self.on_error(format_args!(
+                        "first operand in {:?} must be Subpass image",
+                        opcode
+                    ));
+                }
+            }
+            // ivec2 imageSize(gimage2D);
+            // ivec3 imageSize(gimage3D);
+            // ivec3 imageSize(gimage2DArray);
+            // ivec2 imageSize(gimageCube);
+            // ivec3 imageSize(gimageCubeArray);
+            // int imageSize(gimageBuffer);
+            OpCode::Unary(UnaryOpCode::ImageSize, arg) => {
+                let image_type = match *self.ir.meta.get_type(arg.type_id) {
+                    Type::Image(_, image_type) => image_type,
+                    _ => {
+                        self.on_error(format_args!(
+                            "first operand in {:?} must be Image type",
+                            opcode
+                        ));
+                    }
+                };
+                if image_type.is_sampled {
+                    self.on_error(format_args!(
+                        "first operand in {:?} must be image, not sampler",
+                        opcode
+                    ));
+                }
+                if !(matches!(
+                    image_type.dimension,
+                    ImageDimension::D2
+                        | ImageDimension::Cube
+                        | ImageDimension::D3
+                        | ImageDimension::Buffer
+                )) {
+                    self.on_error(format_args!(
+                        "first operand in {:?} must be 2D, 3D, Cube or Buffer image",
+                        opcode
+                    ));
+                }
+            }
+
+            // void imageStore(writeonly IMAGE_PARAMS, gvec4)
+            // gvec4 imageLoad(readonly IMAGE_PARAMS)
+            // uint/int imageAtomicAdd(IMAGE_PARAMS, uint/int)
+            // uint/int imageAtomicAnd(IMAGE_PARAMS, uint/int)
+            // uint/int imageAtomicOr(IMAGE_PARAMS, uint/int)
+            // uint/int imageAtomicXor(IMAGE_PARAMS, uint/int)
+            // uint/int imageAtomicMin(IMAGE_PARAMS, uint/int)
+            // uint/int imageAtomicMax(IMAGE_PARAMS, uint/int)
+            // uint/int imageAtomicCompSwap(IMAGE_PARAMS, uint/int, uint/int)
+            // uint/int/float imageAtomicExchange(IMAGE_PARAMS, uint/int/float)
+            // where IMAGE_PARAMS is one of the followings:
+            // gimage2D image, ivec2 P
+            // gimage3D image, ivec3 P
+            // gimageCube image, ivec3 P
+            // gimageBuffer image, int P
+            // gimage2DArray image, ivec3 P
+            // gimageCubeArray image, ivec3 P
+            OpCode::BuiltIn(BuiltInOpCode::ImageStore, args)
+            | OpCode::BuiltIn(BuiltInOpCode::ImageLoad, args)
+            | OpCode::BuiltIn(BuiltInOpCode::ImageAtomicAdd, args)
+            | OpCode::BuiltIn(BuiltInOpCode::ImageAtomicAnd, args)
+            | OpCode::BuiltIn(BuiltInOpCode::ImageAtomicOr, args)
+            | OpCode::BuiltIn(BuiltInOpCode::ImageAtomicXor, args)
+            | OpCode::BuiltIn(BuiltInOpCode::ImageAtomicMin, args)
+            | OpCode::BuiltIn(BuiltInOpCode::ImageAtomicMax, args)
+            | OpCode::BuiltIn(BuiltInOpCode::ImageAtomicExchange, args)
+            | OpCode::BuiltIn(BuiltInOpCode::ImageAtomicCompSwap, args) => {
+                let image_operand_type = self.ir.meta.get_type(args[0].type_id);
+                let image_type = match *image_operand_type {
+                    Type::Image(_, image_type) => image_type,
+                    _ => {
+                        self.on_error(format_args!(
+                            "first operand in {:?} must be Image type",
+                            opcode
+                        ));
+                    }
+                };
+                if image_type.is_sampled {
+                    self.on_error(format_args!(
+                        "first operand in {:?} must be image, not sampler",
+                        opcode
+                    ));
+                }
+                if !matches!(
+                    image_type.dimension,
+                    ImageDimension::D2
+                        | ImageDimension::D3
+                        | ImageDimension::Cube
+                        | ImageDimension::Buffer
+                ) {
+                    self.on_error(format_args!(
+                        "first operand in {:?} must be 2D, 3D, Cube or Buffer image",
+                        opcode
+                    ));
+                }
+            }
+            _ => return,
         }
     }
 
@@ -1477,20 +2187,22 @@ impl<'a> Validator<'a> {
                         opcode
                     ));
                 }
-
-                if let Id::Constant(switch_condition_constant_id) = switch_condition.id {
-                    for case_value_id in case_values.iter().flatten() {
-                        if switch_condition_constant_id != *case_value_id {
-                            self.on_error(format_args!(
-                                "operation {:?} could be constant folded. Case value does not \
-                                 match with switch condition constant, case should be removed",
-                                opcode
-                            ));
-                        }
-                    }
+                if matches!(switch_condition.id, Id::Constant(_)) {
+                    self.on_error(format_args!(
+                        "invalid instruction {:?}. switch(constant) should be folded",
+                        opcode
+                    ));
                 }
             }
-            // Other instructions can't be constant folded.
+            OpCode::If(condition) => {
+                if matches!(condition.id, Id::Constant(_)) {
+                    self.on_error(format_args!(
+                        "invalid instruction {:?}, if(constant) should be folded",
+                        opcode
+                    ));
+                }
+            }
+            // Other instructions can't be constant folded or are not checked.
             OpCode::MergeInput
             | OpCode::Discard
             | OpCode::Return(_)
@@ -1499,10 +2211,9 @@ impl<'a> Validator<'a> {
             | OpCode::Passthrough
             | OpCode::NextBlock
             | OpCode::Merge(_)
-            // OpCode::If and OpCode::LoopIf condition can be Constant(ConstantId), as long as the
-            // condition.type_id is TYPE_ID_BOOL. See function
-            // validate_if_condition_is_bool(), and test GLSLTestLoops.ForNoCondition.
-            | OpCode::If(_)
+            // OpCode::LoopIf condition can be Constant(ConstantId),
+            // Loop + LoopIf(true) and DoLoop + LoopIf(constant) are valid.
+            // Loop + LoopIf(false) must be constant folded, which is checked by validate_no_foldable_loop().
             | OpCode::LoopIf(_)
             | OpCode::Loop
             | OpCode::DoLoop
@@ -1519,6 +2230,33 @@ impl<'a> Validator<'a> {
             | OpCode::BuiltIn(_, _)
             | OpCode::Texture(_, _, _) => {}
         };
+    }
+
+    fn validate_no_foldable_loop(&self) {
+        traverser::visitor::for_each_function(
+            &mut (),
+            &self.ir.function_entries,
+            |_, _| {},
+            |_, block, _, _| {
+                // reject loop + loopIf(false),
+                // allow:
+                //  loop + loopif(true)
+                //  doloop + loopif(constant)
+                if matches!(block.get_terminating_op(), OpCode::Loop) {
+                    let condition_block = block.get_loop_condition_block();
+                    let last_op = condition_block.get_merge_chain_terminating_op();
+                    if let &OpCode::LoopIf(condition) = last_op
+                        && condition.id == Id::Constant(CONSTANT_ID_FALSE)
+                    {
+                        self.on_error(format_args!(
+                            "loop + loopif false should be constant folded"
+                        ));
+                    }
+                }
+                traverser::visitor::VISIT_SUB_BLOCKS
+            },
+            |_, _| {},
+        );
     }
 
     fn validate_not_all_args_are_constant(&self, opcode: &OpCode, instruction_args: &[TypedId]) {
@@ -1869,7 +2607,9 @@ impl<'a> Validator<'a> {
                 ));
             }
         });
-        if block.merge_block.as_ref().and_then(|merge_block| merge_block.input).is_some() {
+        if let Some(merge_block_input) =
+            block.merge_block.as_ref().and_then(|merge_block| merge_block.input)
+        {
             // merge_block with input is only allowed when current block ends with OpCode::If, and
             // both the "true" and "false" blocks exist
             if !matches!(block.get_terminating_op(), OpCode::If(_)) {
@@ -1890,7 +2630,14 @@ impl<'a> Validator<'a> {
             // Branch instruction in block1 that jumps to the merge block should have an output
             let block1 = block.block1.as_ref().expect("block1 can't be none");
             let block1_last_op = block1.get_merge_chain_terminating_op();
-            if !matches!(block1_last_op, OpCode::Merge(Some(_))) {
+            if let OpCode::Merge(Some(merge_output)) = block1_last_op {
+                if merge_output.type_id != merge_block_input.type_id {
+                    self.on_error(format_args!(
+                        "merge_block input data type does not match with the block1 merge \
+                         instruction output"
+                    ));
+                }
+            } else {
                 self.on_error(format_args!(
                     "current {:?} block contains a merge block with input, but the branch \
                      instruction in block1 that jumps to the merge block does not have an output",
@@ -1901,7 +2648,14 @@ impl<'a> Validator<'a> {
             // Branch instruction in block2 that jumps to the merge block should have an output
             let block2 = block.block2.as_ref().expect("block2 can't be none");
             let block2_last_op = block2.get_merge_chain_terminating_op();
-            if !matches!(block2_last_op, OpCode::Merge(Some(_))) {
+            if let OpCode::Merge(Some(merge_output)) = block2_last_op {
+                if merge_output.type_id != merge_block_input.type_id {
+                    self.on_error(format_args!(
+                        "merge_block input data type does not match with the block2 merge \
+                         instruction output"
+                    ));
+                }
+            } else {
                 self.on_error(format_args!(
                     "current {:?} block contains a merge block with input, but the branch \
                      instruction in block2 that jumps to the merge block does not have an output",
@@ -1909,6 +2663,48 @@ impl<'a> Validator<'a> {
                 ));
             }
         }
+    }
+
+    fn validate_loop_block_ends_in_appropriate_instruction(&self) {
+        traverser::visitor::for_each_function(
+            &mut (),
+            &self.ir.function_entries,
+            |_, _| {},
+            |_, block, block_kind, _| {
+                let loop_end_op = block.get_merge_chain_terminating_op();
+                match block_kind {
+                    BlockKind::LoopCondition if !matches!(*loop_end_op, OpCode::LoopIf(_)) => {
+                        self.on_error(format_args!(
+                            "invalid instruction {:?}, loop condition block must ends with LoopIf \
+                             instruction",
+                            *loop_end_op
+                        ));
+                    }
+                    BlockKind::Continue if !matches!(*loop_end_op, OpCode::Continue) => {
+                        self.on_error(format_args!(
+                            "invalid instruction {:?}, loop continue block must ends with \
+                             Continue instruction",
+                            *loop_end_op
+                        ));
+                    }
+                    BlockKind::LoopBody
+                        if !matches!(
+                            *loop_end_op,
+                            OpCode::Continue | OpCode::Break | OpCode::Discard | OpCode::Return(_)
+                        ) =>
+                    {
+                        self.on_error(format_args!(
+                            "invalid instruction {:?}, loop body block must ends with Continue, \
+                             Break, Discard or Return instruction",
+                            *loop_end_op
+                        ));
+                    }
+                    _ => {}
+                }
+                traverser::visitor::VISIT_SUB_BLOCKS
+            },
+            |_, _| {},
+        );
     }
 
     fn validate_function_parameter_variables(&self) {
@@ -1993,6 +2789,67 @@ impl<'a> Validator<'a> {
         );
     }
 
+    fn validate_internal_interface_block_and_struct_variable_names(&self) {
+        for variable in self.ir.meta.all_variables().iter().filter(|variable| {
+            !variable.is_dead_code_eliminated
+                && variable.name.source == NameSource::Internal
+                && variable.name.name.is_empty()
+                && !variable.is_built_in()
+        }) {
+            let type_id = self.ir.meta.get_pointee_type(variable.type_id);
+            if matches!(self.ir.meta.get_type(type_id), Type::Struct(..)) {
+                self.on_error(format_args!(
+                    "invalid variable {:?}: internal interface block or struct variable name must \
+                     not be empty",
+                    variable
+                ));
+            }
+        }
+    }
+
+    fn validate_internal_name_prefixes(&self) {
+        let validate_name_prefix = |name: Name, user_prefix: &str, temp_prefix: &str| {
+            if name.source != NameSource::Internal {
+                return;
+            }
+            if name.name.starts_with(user_prefix) {
+                self.on_error(format_args!(
+                    "invalid name {:?} internal name should not starts with user name prefix",
+                    name
+                ));
+            }
+            if name.name.starts_with(temp_prefix) {
+                self.on_error(format_args!(
+                    "invalid name {:?} internal name should not starts with temporary name prefix",
+                    name
+                ));
+            }
+        };
+        // Check all variable names
+        for variable in
+            self.ir.meta.all_variables().iter().filter(|variable| !variable.is_dead_code_eliminated)
+        {
+            validate_name_prefix(variable.name, USER_VARIABLE_PREFIX, TEMP_VARIABLE_PREFIX);
+        }
+        // Check all struct names.  Struct fields are unrestricted as they do cannot collide with
+        // user defined variables, given ANGLE internal structs and interface blocks are always
+        // given a variable name themselves (so the field is accessed as something.field, not just
+        // field alone).
+        for ir_type in self.ir.meta.all_types().iter().filter(|t| !t.is_dead_code_eliminated()) {
+            if let &Type::Struct(struct_name, _, specialization) = ir_type {
+                let user_prefix = match specialization {
+                    StructSpecialization::Struct => USER_VARIABLE_PREFIX,
+                    StructSpecialization::InterfaceBlock => USER_BLOCK_PREFIX,
+                };
+                validate_name_prefix(struct_name, user_prefix, TEMP_STRUCT_PREFIX);
+            }
+        }
+        // Check all function names
+        for function in self.ir.meta.all_functions() {
+            validate_name_prefix(function.name, USER_VARIABLE_PREFIX, TEMP_FUNCTION_PREFIX);
+        }
+    }
+
     fn validate_all_instructions(&self) {
         // All validation that can be done on an instruction in isolation is done in one pass.
         traverser::visitor::for_each_instruction(
@@ -2001,7 +2858,6 @@ impl<'a> Validator<'a> {
             &|_, instruction| {
                 let (opcode, result) = instruction.get_op_and_result(&self.ir.meta);
                 self.validate_struct_field_in_bounds(opcode);
-                self.validate_if_condition_is_bool(opcode);
                 self.validate_case_values_are_int_or_uint_constants(opcode);
                 self.validate_switch_has_unique_case_values(opcode);
                 self.validate_no_constant_foldable_instruction(opcode);
@@ -2009,6 +2865,8 @@ impl<'a> Validator<'a> {
                 self.validate_pointer_types_for_operands(opcode);
                 self.validate_pointer_types_for_result(opcode, result);
                 self.validate_no_identity_swizzles(opcode);
+                self.validate_sampler_operand_is_compatible_with_textureop(opcode);
+                self.validate_instruction_operand_and_result_type(opcode, result);
             },
         );
     }
@@ -2033,20 +2891,6 @@ impl<'a> Validator<'a> {
                 struct_type, field_index
             ));
         }
-    }
-
-    fn validate_if_condition_is_bool(&self, opcode: &OpCode) {
-        match *opcode {
-            OpCode::If(condition) | OpCode::LoopIf(condition)
-                if condition.type_id != TYPE_ID_BOOL =>
-            {
-                self.on_error(format_args!(
-                    "invalid If/LoopIf instruction: {:?}, consition is not a boolean: {:?}",
-                    opcode, condition.type_id
-                ));
-            }
-            _ => (),
-        };
     }
 
     fn validate_case_values_are_int_or_uint_constants(&self, opcode: &OpCode) {
@@ -2390,6 +3234,1409 @@ impl<'a> Validator<'a> {
         ));
     }
 
+    fn validate_instruction_operand_and_result_type(
+        &self,
+        opcode: &OpCode,
+        result: Option<TypedRegisterId>,
+    ) {
+        let get_base_type_id = |type_id: TypeId| -> TypeId {
+            if self.ir.meta.get_type(type_id).is_pointer() {
+                self.ir.meta.get_pointee_type(type_id)
+            } else {
+                type_id
+            }
+        };
+
+        let are_base_type_ids_equal = |type_ids: &[TypeId]| -> bool {
+            type_ids
+                .windows(2)
+                .all(|window| get_base_type_id(window[0]) == get_base_type_id(window[1]))
+        };
+
+        let is_scalar = |type_id: TypeId| -> bool {
+            self.ir.meta.get_type(get_base_type_id(type_id)).is_scalar()
+        };
+
+        let is_vec = |type_id: TypeId| -> bool {
+            self.ir.meta.get_type(get_base_type_id(type_id)).is_vector()
+        };
+        let is_int_or_ivec = |type_id: TypeId| -> bool {
+            matches!(
+                get_base_type_id(type_id),
+                TYPE_ID_INT | TYPE_ID_IVEC2 | TYPE_ID_IVEC3 | TYPE_ID_IVEC4
+            )
+        };
+
+        let is_uint_or_uvec = |type_id: TypeId| -> bool {
+            matches!(
+                get_base_type_id(type_id),
+                TYPE_ID_UINT | TYPE_ID_UVEC2 | TYPE_ID_UVEC3 | TYPE_ID_UVEC4
+            )
+        };
+
+        let is_bvec = |type_id: TypeId| -> bool {
+            matches!(get_base_type_id(type_id), TYPE_ID_BVEC2 | TYPE_ID_BVEC3 | TYPE_ID_BVEC4)
+        };
+
+        let is_bool_or_bvec = |type_id: TypeId| -> bool {
+            matches!(
+                get_base_type_id(type_id),
+                TYPE_ID_BOOL | TYPE_ID_BVEC2 | TYPE_ID_BVEC3 | TYPE_ID_BVEC4
+            )
+        };
+
+        let is_float_or_fvec = |type_id: TypeId| -> bool {
+            matches!(
+                get_base_type_id(type_id),
+                TYPE_ID_FLOAT | TYPE_ID_VEC2 | TYPE_ID_VEC3 | TYPE_ID_VEC4
+            )
+        };
+
+        let get_vec_scalar_type = |type_id: TypeId| -> TypeId {
+            let type_id = get_base_type_id(type_id);
+            if !self.ir.meta.get_type(type_id).is_scalar() && !is_vec(type_id) {
+                panic!(
+                    "invalid TypeId passed for get_vec_scalar_type: {:?}, expecting a pointer or \
+                     pointee TypeId that is either scalar or vec",
+                    type_id
+                );
+            }
+            self.ir.meta.get_scalar_type(type_id)
+        };
+
+        let get_vec_size = |type_id: TypeId| -> u32 {
+            let type_id = get_base_type_id(type_id);
+            if !self.ir.meta.get_type(type_id).is_scalar() && !is_vec(type_id) {
+                panic!(
+                    "invalid TypeId passed for get_vec_size: {:?}, expecting a pointer or pointee \
+                     TypeId that is either scalar or vec",
+                    type_id
+                );
+            }
+            if self.ir.meta.get_type(type_id).is_scalar() {
+                1
+            } else {
+                self.ir.meta.get_type(type_id).get_vector_size().unwrap()
+            }
+        };
+
+        let is_int_or_uint = |type_id: TypeId| -> bool {
+            let type_id = get_base_type_id(type_id);
+            type_id == TYPE_ID_INT || type_id == TYPE_ID_UINT
+        };
+
+        let is_matrix = |type_id: TypeId| -> bool {
+            self.ir.meta.get_type(get_base_type_id(type_id)).is_matrix()
+        };
+
+        let get_matrix_column_type = |type_id: TypeId| -> TypeId {
+            let type_id = get_base_type_id(type_id);
+            if !is_matrix(type_id) {
+                panic!(
+                    "invalid TypeId passed for get_matrix_column_type: {:?}, expecting a pointer \
+                     or pointee TypeId that is a matrix",
+                    type_id
+                );
+            }
+            self.ir.meta.get_type(type_id).get_element_type_id().unwrap()
+        };
+
+        let is_struct_type = |type_id: TypeId| -> bool {
+            self.ir.meta.get_type(get_base_type_id(type_id)).is_struct()
+        };
+
+        let get_struct_field_type = |type_id: TypeId, field_index: u32| -> TypeId {
+            let type_id = get_base_type_id(type_id);
+            if !is_struct_type(type_id) {
+                panic!(
+                    "invalid TypeId passed for get_struct_field_type: {:?}, expecting a pointer \
+                     or pointee TypeId that is a struct",
+                    type_id
+                );
+            }
+            self.ir.meta.get_type(type_id).get_struct_field(field_index).type_id
+        };
+
+        let is_sized_array = |type_id: TypeId| -> bool {
+            self.ir.meta.get_type(get_base_type_id(type_id)).is_array()
+        };
+
+        let is_unsized_array = |type_id: TypeId| -> bool {
+            self.ir.meta.get_type(get_base_type_id(type_id)).is_unsized_array()
+        };
+
+        let is_sized_array_or_unsized_array = |type_id: TypeId| -> bool {
+            let type_id = get_base_type_id(type_id);
+            self.ir.meta.get_type(type_id).is_array()
+                || self.ir.meta.get_type(type_id).is_unsized_array()
+        };
+
+        let get_array_element_type = |type_id: TypeId| -> TypeId {
+            let type_id = get_base_type_id(type_id);
+            if !is_sized_array_or_unsized_array(type_id) {
+                panic!(
+                    "invalid TypeId passed for get_array_element_type: {:?}, expecting a pointer \
+                     or pointee TypeId that is an array",
+                    type_id
+                );
+            }
+            self.ir.meta.get_type(type_id).get_element_type_id().unwrap()
+        };
+
+        let require_result =
+            |opcode: &OpCode, result: Option<TypedRegisterId>| -> TypedRegisterId {
+                match result {
+                    Some(result) => result,
+                    None => self.on_error(format_args!(
+                        "invalid instruction: {:?}, instruction must produce a result",
+                        opcode
+                    )),
+                }
+            };
+
+        match opcode {
+            &OpCode::If(operand) | &OpCode::LoopIf(operand) => {
+                if operand.type_id != TYPE_ID_BOOL {
+                    self.on_error(format_args!(
+                        "invalid instruction: {:?}, operand type must be bool",
+                        opcode
+                    ));
+                }
+            }
+            &OpCode::ExtractVectorComponent(first_operand, _)
+            | &OpCode::AccessVectorComponent(first_operand, _) => {
+                let result = require_result(opcode, result);
+                if !is_vec(first_operand.type_id)
+                    || !are_base_type_ids_equal(&[
+                        result.type_id,
+                        get_vec_scalar_type(first_operand.type_id),
+                    ])
+                {
+                    self.on_error(format_args!(
+                        "invalid instruction: {:?} = {:?}, the first operand must be a vector, \
+                         and result type must be the same as the element type of the first operand",
+                        result, opcode
+                    ));
+                }
+            }
+            &OpCode::ExtractVectorComponentMulti(first_operand, ref second_operand)
+            | &OpCode::AccessVectorComponentMulti(first_operand, ref second_operand) => {
+                let result = require_result(opcode, result);
+                if !is_vec(first_operand.type_id)
+                    || !is_vec(result.type_id)
+                    || get_vec_scalar_type(first_operand.type_id)
+                        != get_vec_scalar_type(result.type_id)
+                    || get_vec_size(result.type_id) != second_operand.len() as u32
+                {
+                    self.on_error(format_args!(
+                        "invalid instruction: {:?} = {:?}, the first operand must be a vector, \
+                         and result and first operand must share the same element type, and
+                         result vec size must be the same as the element count of the second \
+                         operand",
+                        result, opcode
+                    ));
+                }
+            }
+            &OpCode::ExtractVectorComponentDynamic(first_operand, second_operand)
+            | &OpCode::AccessVectorComponentDynamic(first_operand, second_operand) => {
+                let result = require_result(opcode, result);
+                if !is_vec(first_operand.type_id)
+                    || !are_base_type_ids_equal(&[
+                        result.type_id,
+                        get_vec_scalar_type(first_operand.type_id),
+                    ])
+                    || !is_int_or_uint(second_operand.type_id)
+                {
+                    self.on_error(format_args!(
+                        "invalid instruction: {:?} = {:?}, the first operand must be a vector, \
+                         and result type must be the same as the element type of the first \
+                         operand, and the second operand must be uint or int",
+                        result, opcode
+                    ));
+                }
+            }
+            &OpCode::ExtractMatrixColumn(first_operand, second_operand)
+            | &OpCode::AccessMatrixColumn(first_operand, second_operand) => {
+                let result = require_result(opcode, result);
+                if !is_matrix(first_operand.type_id)
+                    || !are_base_type_ids_equal(&[
+                        result.type_id,
+                        get_matrix_column_type(first_operand.type_id),
+                    ])
+                    || !is_int_or_uint(second_operand.type_id)
+                {
+                    self.on_error(format_args!(
+                        "invalid instruction: {:?} = {:?}, the first operand must be a matrix, \
+                         and result type must be the same as the column type of the first \
+                         operand, and the second operand must be uint or int",
+                        result, opcode
+                    ));
+                }
+            }
+            &OpCode::ExtractStructField(first_operand, second_operand)
+            | &OpCode::AccessStructField(first_operand, second_operand) => {
+                let result = require_result(opcode, result);
+                if !is_struct_type(first_operand.type_id)
+                    || !are_base_type_ids_equal(&[
+                        result.type_id,
+                        get_struct_field_type(first_operand.type_id, second_operand),
+                    ])
+                {
+                    self.on_error(format_args!(
+                        "invalid instruction: {:?} = {:?}, the first operand must be a struct, \
+                         and result type must be the same as the type of the struct field indexed \
+                         by the second operand",
+                        result, opcode
+                    ));
+                }
+            }
+            &OpCode::ExtractArrayElement(first_operand, second_operand)
+            | &OpCode::AccessArrayElement(first_operand, second_operand) => {
+                let result = require_result(opcode, result);
+                if !is_sized_array_or_unsized_array(first_operand.type_id)
+                    || !are_base_type_ids_equal(&[
+                        result.type_id,
+                        get_array_element_type(first_operand.type_id),
+                    ])
+                    || !is_int_or_uint(second_operand.type_id)
+                {
+                    self.on_error(format_args!(
+                        "invalid instruction: {:?} = {:?}, the first operand must be an array, \
+                         and result type must be the same as the array element type, and the \
+                         second operand must be uint or int",
+                        result, opcode
+                    ));
+                }
+            }
+            &OpCode::ConstructScalarFromScalar(operand) => {
+                let result = require_result(opcode, result);
+                if are_base_type_ids_equal(&[result.type_id, operand.type_id]) {
+                    self.on_error(format_args!(
+                        "invalid instruction: {:?} = {:?}, the result base type must be different \
+                         from the operand base type",
+                        result, opcode
+                    ));
+                }
+            }
+            &OpCode::ConstructVectorFromScalar(operand) => {
+                let result = require_result(opcode, result);
+                if !is_vec(result.type_id) || !is_scalar(operand.type_id) {
+                    self.on_error(format_args!(
+                        "invalid instruction: {:?} = {:?}, the result type must be vec, and the \
+                         operand type must be scalar",
+                        result, opcode
+                    ));
+                }
+            }
+            &OpCode::ConstructMatrixFromScalar(operand) => {
+                let result = require_result(opcode, result);
+                if !is_matrix(result.type_id) || !is_scalar(operand.type_id) {
+                    self.on_error(format_args!(
+                        "invalid instruction: {:?} = {:?}, the result must be matrix, and the \
+                         operand must be scalar",
+                        result, opcode
+                    ));
+                }
+            }
+            &OpCode::ConstructMatrixFromMatrix(operand) => {
+                let result = require_result(opcode, result);
+                if !is_matrix(result.type_id) || !is_matrix(operand.type_id) {
+                    self.on_error(format_args!(
+                        "invalid instruction: {:?} = {:?}, both the result and operand must be \
+                         matrix",
+                        result, opcode
+                    ));
+                }
+            }
+            OpCode::ConstructVectorFromMultiple(_) => {
+                let result = require_result(opcode, result);
+                if !is_vec(result.type_id) {
+                    self.on_error(format_args!(
+                        "invalid instruction: {:?} = {:?}, result must be vec",
+                        result, opcode
+                    ));
+                }
+            }
+            OpCode::ConstructMatrixFromMultiple(_) => {
+                let result = require_result(opcode, result);
+                if !is_matrix(result.type_id) {
+                    self.on_error(format_args!(
+                        "invalid instruction: {:?} = {:?}, result must be matrix",
+                        result, opcode
+                    ));
+                }
+            }
+            &OpCode::ConstructStruct(_) => {
+                let result = require_result(opcode, result);
+                if !is_struct_type(result.type_id) {
+                    self.on_error(format_args!(
+                        "invalid instruction: {:?} = {:?}, result must be struct",
+                        result, opcode
+                    ));
+                }
+            }
+            &OpCode::ConstructArray(_) => {
+                let result = require_result(opcode, result);
+                if !is_sized_array(result.type_id) {
+                    self.on_error(format_args!(
+                        "invalid instruction: {:?} = {:?}, result must be sized array",
+                        result, opcode
+                    ));
+                }
+            }
+            &OpCode::Load(operand) => {
+                let result = require_result(opcode, result);
+                if !are_base_type_ids_equal(&[result.type_id, operand.type_id]) {
+                    self.on_error(format_args!(
+                        "invalid instruction: {:?} = {:?}, result base type must be the same as \
+                         the operand base type",
+                        result, opcode
+                    ));
+                }
+            }
+            &OpCode::Alias(operand) => {
+                let result = require_result(opcode, result);
+                if result.type_id != operand.type_id {
+                    self.on_error(format_args!(
+                        "invalid instruction: {:?} = {:?}, result type must be the same as the \
+                         operand type",
+                        result, opcode
+                    ));
+                }
+            }
+            &OpCode::Store(first_operand, second_operand) => {
+                if !are_base_type_ids_equal(&[first_operand.type_id, second_operand.type_id]) {
+                    self.on_error(format_args!(
+                        "invalid instruction: {:?}, first operand and second operand base type \
+                         must be the same",
+                        opcode
+                    ));
+                }
+            }
+            &OpCode::Call(first_operand, ref second_operand) => {
+                let func = self.ir.meta.get_function(first_operand);
+                if func.return_type_id != TYPE_ID_VOID {
+                    let Some(result) = result else {
+                        self.on_error(format_args!(
+                            "invalid instruction: {:?}, expecting a result for function call {}",
+                            opcode, func.name.name
+                        ));
+                    };
+                    if !are_base_type_ids_equal(&[result.type_id, func.return_type_id]) {
+                        self.on_error(format_args!(
+                            "invalid instruction: {:?} = {:?}, expecting the function call {} to \
+                             return a result of type {:?}, actual returned result type is {:?}",
+                            result, opcode, func.name.name, func.return_type_id, result.type_id
+                        ));
+                    }
+                }
+                // For test GLSLTest.FragDataPassedToFunctionOutNoDrawBuffers:
+                //     void f(out vec4 fragData[gl_MaxDrawBuffers])
+                //     {
+                //         fragData[0] = vec4(1, 0, 0, 1);
+                //     }
+                //     void main()
+                //     {
+                //         f(gl_FragData);
+                //     })
+                // gl_FragData in main() ends up with a base type vec4[1], whereas the function f()
+                // takes a base type vec4[8]. This will fail the following function parameter type
+                // check.
+                // GLSLTest.FragDataPassedToFunctionNoDrawBuffers has similar issue
+                // These tests are thus skipped in IR build until the bug is fixed.
+                second_operand.iter().zip(&func.params).for_each(
+                    |(actual_param, expected_param)| {
+                        let actual_param_type_id = get_base_type_id(actual_param.type_id);
+                        let expected_param_type_id = get_base_type_id(
+                            self.ir.meta.get_variable(expected_param.variable_id).type_id,
+                        );
+                        if actual_param_type_id != expected_param_type_id {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?}, expecting function parameter {} to \
+                                 have base type {:?}, actual parameter base type {:?}",
+                                opcode,
+                                self.ir.meta.get_variable(expected_param.variable_id).name.name,
+                                expected_param_type_id,
+                                actual_param_type_id
+                            ));
+                        }
+                    },
+                );
+            }
+            &OpCode::Return(_) => {
+                // validation done in validate_function_return_types()
+            }
+            &OpCode::Merge(_) => {
+                // validation done in validate_merge_block_input_prerequisites()
+            }
+            &OpCode::Switch(first_operand, _) => {
+                if !is_int_or_uint(first_operand.type_id) {
+                    self.on_error(format_args!(
+                        "invalid instruction: {:?}, first operand must be uint or int",
+                        opcode
+                    ));
+                }
+            }
+            &OpCode::MergeInput
+            | &OpCode::Discard
+            | &OpCode::Break
+            | &OpCode::Continue
+            | &OpCode::Passthrough
+            | &OpCode::NextBlock
+            | &OpCode::Loop
+            | &OpCode::DoLoop => {
+                // These OpCode do not take operands or return result, no operand or result type
+                // validation is needed
+            }
+            &OpCode::Unary(unary_opcode, operand) => {
+                let result = require_result(opcode, result);
+                match unary_opcode {
+                    UnaryOpCode::ArrayLength => {
+                        if get_base_type_id(result.type_id) != TYPE_ID_INT
+                            || !is_unsized_array(operand.type_id)
+                        {
+                            self.on_error(format_args!(
+                                "invalid ArrayLength instruction: {:?} = {:?}, result type must \
+                                 be int and operand type must be an unsized array",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    UnaryOpCode::Negate
+                    | UnaryOpCode::LogicalNot
+                    | UnaryOpCode::BitwiseNot
+                    | UnaryOpCode::Radians
+                    | UnaryOpCode::Degrees
+                    | UnaryOpCode::Sin
+                    | UnaryOpCode::Cos
+                    | UnaryOpCode::Tan
+                    | UnaryOpCode::Asin
+                    | UnaryOpCode::Acos
+                    | UnaryOpCode::Atan
+                    | UnaryOpCode::Sinh
+                    | UnaryOpCode::Cosh
+                    | UnaryOpCode::Tanh
+                    | UnaryOpCode::Asinh
+                    | UnaryOpCode::Acosh
+                    | UnaryOpCode::Atanh
+                    | UnaryOpCode::Exp
+                    | UnaryOpCode::Log
+                    | UnaryOpCode::Exp2
+                    | UnaryOpCode::Log2
+                    | UnaryOpCode::Sqrt
+                    | UnaryOpCode::Inversesqrt
+                    | UnaryOpCode::Abs
+                    | UnaryOpCode::Sign
+                    | UnaryOpCode::Floor
+                    | UnaryOpCode::Trunc
+                    | UnaryOpCode::Round
+                    | UnaryOpCode::RoundEven
+                    | UnaryOpCode::Ceil
+                    | UnaryOpCode::Fract
+                    | UnaryOpCode::DFdx
+                    | UnaryOpCode::DFdy
+                    | UnaryOpCode::Fwidth
+                    | UnaryOpCode::InterpolateAtCentroid
+                    | UnaryOpCode::PrefixIncrement
+                    | UnaryOpCode::PrefixDecrement
+                    | UnaryOpCode::PostfixIncrement
+                    | UnaryOpCode::PostfixDecrement => {
+                        if !are_base_type_ids_equal(&[result.type_id, operand.type_id]) {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result base type must be the \
+                                 same as the operand base type",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    UnaryOpCode::Isnan | UnaryOpCode::Isinf => {
+                        if !is_bool_or_bvec(result.type_id) {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result must be bool or bvec",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    UnaryOpCode::FloatBitsToInt => {
+                        if !is_int_or_ivec(result.type_id) || !is_float_or_fvec(operand.type_id) {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result element must be int and \
+                                 operand element must be float",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    UnaryOpCode::FloatBitsToUint => {
+                        if !is_uint_or_uvec(result.type_id) || !is_float_or_fvec(operand.type_id) {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result element must be uint \
+                                 and operand element must be float",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    UnaryOpCode::IntBitsToFloat => {
+                        if !is_float_or_fvec(result.type_id) || !is_int_or_ivec(operand.type_id) {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result element must be float \
+                                 and operand element must be int",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    UnaryOpCode::UintBitsToFloat => {
+                        if !is_float_or_fvec(result.type_id) || !is_uint_or_uvec(operand.type_id) {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result element must be float \
+                                 and operand element must be uint",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    UnaryOpCode::PackSnorm2x16
+                    | UnaryOpCode::PackHalf2x16
+                    | UnaryOpCode::PackUnorm2x16 => {
+                        if get_base_type_id(operand.type_id) != TYPE_ID_VEC2
+                            || get_base_type_id(result.type_id) != TYPE_ID_UINT
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, operand must be vec2 and \
+                                 result must be uint",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    UnaryOpCode::UnpackSnorm2x16
+                    | UnaryOpCode::UnpackHalf2x16
+                    | UnaryOpCode::UnpackUnorm2x16 => {
+                        if get_base_type_id(operand.type_id) != TYPE_ID_UINT
+                            || get_base_type_id(result.type_id) != TYPE_ID_VEC2
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, operand must be uint and \
+                                 result must be vec2",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    UnaryOpCode::PackUnorm4x8 | UnaryOpCode::PackSnorm4x8 => {
+                        if get_base_type_id(operand.type_id) != TYPE_ID_VEC4
+                            || get_base_type_id(result.type_id) != TYPE_ID_UINT
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, operand must be vec4 and \
+                                 result type must be uint",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    UnaryOpCode::UnpackUnorm4x8 | UnaryOpCode::UnpackSnorm4x8 => {
+                        if get_base_type_id(operand.type_id) != TYPE_ID_UINT
+                            || get_base_type_id(result.type_id) != TYPE_ID_VEC4
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, operand must be uint and \
+                                 result must be vec4",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    UnaryOpCode::Length => {
+                        if !is_float_or_fvec(operand.type_id)
+                            || get_base_type_id(result.type_id) != TYPE_ID_FLOAT
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, operand must be float vec and \
+                                 result must be float",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    UnaryOpCode::Normalize => {
+                        if !are_base_type_ids_equal(&[result.type_id, operand.type_id]) {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result base type must be the \
+                                 same as the operand base type",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    UnaryOpCode::Transpose => {
+                        if !is_matrix(result.type_id) || !is_matrix(operand.type_id) {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, operand and result must be \
+                                 matrix",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    UnaryOpCode::Determinant => {
+                        if !is_matrix(operand.type_id)
+                            || get_base_type_id(result.type_id) != TYPE_ID_FLOAT
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, operand must be matrix and \
+                                 result must be float",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    UnaryOpCode::Inverse => {
+                        let is_square_matrix = matches!(
+                            get_base_type_id(operand.type_id),
+                            TYPE_ID_MAT2 | TYPE_ID_MAT3 | TYPE_ID_MAT4
+                        );
+                        if !is_square_matrix
+                            || !are_base_type_ids_equal(&[result.type_id, operand.type_id])
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, operand must be mat2, mat3, or \
+                                 mat4, and result base type must be the same as operand base type",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    UnaryOpCode::Any | UnaryOpCode::All => {
+                        if !is_bool_or_bvec(operand.type_id) || result.type_id != TYPE_ID_BOOL {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, operand must be bool or bvec, \
+                                 result must be bool",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    UnaryOpCode::Not => {
+                        if !is_bool_or_bvec(operand.type_id)
+                            || !are_base_type_ids_equal(&[result.type_id, operand.type_id])
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, operand and result must be \
+                                 bool or bvec",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    UnaryOpCode::BitfieldReverse => {
+                        if (!is_int_or_ivec(operand.type_id) && !is_uint_or_uvec(operand.type_id))
+                            || !are_base_type_ids_equal(&[result.type_id, operand.type_id])
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, operand scalar type must be \
+                                 uint or int, and result type must be the same as operand type",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    UnaryOpCode::BitCount | UnaryOpCode::FindLSB | UnaryOpCode::FindMSB => {
+                        if (!is_int_or_ivec(operand.type_id) && !is_uint_or_uvec(operand.type_id))
+                            || !is_int_or_ivec(result.type_id)
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, operand scalar type must be \
+                                 int or uint, and result scalar type must be int",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    UnaryOpCode::AtomicCounter
+                    | UnaryOpCode::AtomicCounterIncrement
+                    | UnaryOpCode::AtomicCounterDecrement => {
+                        if get_base_type_id(operand.type_id) != TYPE_ID_ATOMIC_COUNTER
+                            || get_base_type_id(result.type_id) != TYPE_ID_UINT
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, operand must be atomic_uint \
+                                 and result must be uint",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    UnaryOpCode::ImageSize => {
+                        if !is_int_or_ivec(result.type_id) {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result must be int or ivec*",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    UnaryOpCode::PixelLocalLoadANGLE => {
+                        if !self
+                            .ir
+                            .meta
+                            .get_type(get_base_type_id(operand.type_id))
+                            .is_pixel_local_storage_plane()
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, operand must be PixelLocal \
+                                 Image",
+                                result, opcode
+                            ));
+                        }
+                        let (basic_type, _) = self
+                            .ir
+                            .meta
+                            .get_type(get_base_type_id(operand.type_id))
+                            .get_image_type();
+                        match basic_type {
+                            ImageBasicType::Float => {
+                                if !is_float_or_fvec(result.type_id) {
+                                    self.on_error(format_args!(
+                                        "invalid instruction: {:?} = {:?}, result scalar type \
+                                         does not match with operand ImageBasicType",
+                                        result, opcode
+                                    ));
+                                }
+                            }
+                            ImageBasicType::Int => {
+                                if !is_int_or_ivec(result.type_id) {
+                                    self.on_error(format_args!(
+                                        "invalid instruction: {:?} = {:?}, result scalar type \
+                                         does not match with operand ImageBasicType",
+                                        result, opcode
+                                    ));
+                                }
+                            }
+                            ImageBasicType::Uint => {
+                                if !is_uint_or_uvec(result.type_id) {
+                                    self.on_error(format_args!(
+                                        "invalid instruction: {:?} = {:?}, result scalar type \
+                                         does not match with operand ImageBasicType",
+                                        result, opcode
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            &OpCode::Binary(binary_opcode, operand1, operand2) => {
+                let result = require_result(opcode, result);
+                match binary_opcode {
+                    BinaryOpCode::Add
+                    | BinaryOpCode::Sub
+                    | BinaryOpCode::Mul
+                    | BinaryOpCode::Div
+                    | BinaryOpCode::Mod => {
+                        if !are_base_type_ids_equal(&[result.type_id, operand1.type_id])
+                            && !are_base_type_ids_equal(&[result.type_id, operand2.type_id])
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result base type must match \
+                                 with one of the operands' base type",
+                                result, opcode
+                            ));
+                        }
+                        if is_vec(operand1.type_id)
+                            && is_vec(operand2.type_id)
+                            && get_vec_size(operand1.type_id) != get_vec_size(operand2.type_id)
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, if both operands are vec \
+                                 types, they must have the
+                                 same number of components",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BinaryOpCode::BitShiftLeft
+                    | BinaryOpCode::BitShiftRight
+                    | BinaryOpCode::Frexp
+                    | BinaryOpCode::Ldexp
+                    | BinaryOpCode::Min
+                    | BinaryOpCode::Max => {
+                        if !are_base_type_ids_equal(&[result.type_id, operand1.type_id]) {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result base type must be the \
+                                 same as the first operand's base type",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BinaryOpCode::Step => {
+                        if !are_base_type_ids_equal(&[result.type_id, operand2.type_id]) {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result base type must be the \
+                                 same as the second operand's base type",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BinaryOpCode::BitwiseOr
+                    | BinaryOpCode::BitwiseXor
+                    | BinaryOpCode::BitwiseAnd => {
+                        if (!is_uint_or_uvec(operand1.type_id) && !is_int_or_ivec(operand1.type_id))
+                            || (!is_uint_or_uvec(operand2.type_id)
+                                && !is_int_or_ivec(operand2.type_id))
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, bitwise op is only supported \
+                                 on int or uint scalars and vectors",
+                                result, opcode
+                            ));
+                        }
+                        if is_vec(operand1.type_id)
+                            && is_vec(operand2.type_id)
+                            && get_vec_size(operand1.type_id) != get_vec_size(operand2.type_id)
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, the operands cannot be vectors \
+                                 of different sizes",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BinaryOpCode::LogicalXor => {
+                        if get_base_type_id(operand1.type_id) != TYPE_ID_BOOL
+                            || get_base_type_id(operand2.type_id) != TYPE_ID_BOOL
+                            || get_base_type_id(result.type_id) != TYPE_ID_BOOL
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, both operands and result base \
+                                 types must be bool",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BinaryOpCode::Atan
+                    | BinaryOpCode::Pow
+                    | BinaryOpCode::Reflect
+                    | BinaryOpCode::Modf => {
+                        if !are_base_type_ids_equal(&[
+                            result.type_id,
+                            operand1.type_id,
+                            operand2.type_id,
+                        ]) {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result base type and both \
+                                 operands base types must be the same",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BinaryOpCode::VectorTimesScalar => {
+                        if !are_base_type_ids_equal(&[result.type_id, operand1.type_id])
+                            || !is_vec(operand1.type_id)
+                            || !is_scalar(operand2.type_id)
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result and first operand must \
+                                 be the same vector types and second operand must be scalar type",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BinaryOpCode::MatrixTimesScalar => {
+                        if !are_base_type_ids_equal(&[result.type_id, operand1.type_id])
+                            || !is_matrix(operand1.type_id)
+                            || !is_scalar(operand2.type_id)
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result and first operand must \
+                                 be the same matrix types and second operand must be scalar type",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BinaryOpCode::VectorTimesMatrix => {
+                        if !is_vec(result.type_id)
+                            || !is_vec(operand1.type_id)
+                            || !is_matrix(operand2.type_id)
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result and first
+                                 operand must be vec, and second operand must be matrix",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BinaryOpCode::MatrixTimesVector => {
+                        if !is_vec(result.type_id)
+                            || !is_vec(operand2.type_id)
+                            || !is_matrix(operand1.type_id)
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result and second
+                                 operand must be vec, and first operand must be matrix",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BinaryOpCode::MatrixTimesMatrix | BinaryOpCode::MatrixCompMult => {
+                        if !is_matrix(operand1.type_id)
+                            || !is_matrix(operand2.type_id)
+                            || !is_matrix(result.type_id)
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result and both operands must \
+                                 be matrix",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BinaryOpCode::IMod => {
+                        if !is_int_or_ivec(result.type_id) && !is_uint_or_uvec(result.type_id) {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result scalar type must be int \
+                                 or uint",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BinaryOpCode::Equal
+                    | BinaryOpCode::NotEqual
+                    | BinaryOpCode::LessThan
+                    | BinaryOpCode::GreaterThan
+                    | BinaryOpCode::LessThanEqual
+                    | BinaryOpCode::GreaterThanEqual => {
+                        if get_base_type_id(result.type_id) != TYPE_ID_BOOL
+                            || !are_base_type_ids_equal(&[operand1.type_id, operand2.type_id])
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result must be bool, and both \
+                                 operands must have the same base type",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BinaryOpCode::Distance | BinaryOpCode::Dot => {
+                        if get_base_type_id(result.type_id) != TYPE_ID_FLOAT
+                            || !are_base_type_ids_equal(&[operand1.type_id, operand2.type_id])
+                            || !is_float_or_fvec(operand1.type_id)
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result base type must be float,
+                                both operands must be of the same float or vec type",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BinaryOpCode::Cross => {
+                        if get_base_type_id(result.type_id) != TYPE_ID_VEC3
+                            || get_base_type_id(operand1.type_id) != TYPE_ID_VEC3
+                            || get_base_type_id(operand2.type_id) != TYPE_ID_VEC3
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result base and operands must \
+                                 be vec3",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BinaryOpCode::OuterProduct => {
+                        let is_valid = matches!(
+                            (
+                                get_base_type_id(operand1.type_id),
+                                get_base_type_id(operand2.type_id),
+                                get_base_type_id(result.type_id)
+                            ),
+                            (TYPE_ID_VEC2, TYPE_ID_VEC2, TYPE_ID_MAT2)
+                                | (TYPE_ID_VEC3, TYPE_ID_VEC3, TYPE_ID_MAT3)
+                                | (TYPE_ID_VEC4, TYPE_ID_VEC4, TYPE_ID_MAT4)
+                                | (TYPE_ID_VEC3, TYPE_ID_VEC2, TYPE_ID_MAT2X3)
+                                | (TYPE_ID_VEC2, TYPE_ID_VEC3, TYPE_ID_MAT3X2)
+                                | (TYPE_ID_VEC4, TYPE_ID_VEC2, TYPE_ID_MAT2X4)
+                                | (TYPE_ID_VEC2, TYPE_ID_VEC4, TYPE_ID_MAT4X2)
+                                | (TYPE_ID_VEC4, TYPE_ID_VEC3, TYPE_ID_MAT3X4)
+                                | (TYPE_ID_VEC3, TYPE_ID_VEC4, TYPE_ID_MAT4X3)
+                        );
+                        if !is_valid {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result and operands base types \
+                                 do not match with the requirements in BinaryOpCode::OuterProduct",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BinaryOpCode::LessThanVec
+                    | BinaryOpCode::LessThanEqualVec
+                    | BinaryOpCode::GreaterThanVec
+                    | BinaryOpCode::GreaterThanEqualVec
+                    | BinaryOpCode::EqualVec
+                    | BinaryOpCode::NotEqualVec => {
+                        if !is_bvec(result.type_id)
+                            || !is_vec(operand1.type_id)
+                            || get_vec_size(result.type_id) != get_vec_size(operand1.type_id)
+                            || !are_base_type_ids_equal(&[operand1.type_id, operand2.type_id])
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result must be bvec, result \
+                                 vec size must match with operands vec size, and operands must be \
+                                 the same vec type",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BinaryOpCode::InterpolateAtSample => {
+                        if !are_base_type_ids_equal(&[result.type_id, operand1.type_id])
+                            || get_base_type_id(operand2.type_id) != TYPE_ID_INT
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result base type must be the \
+                                 same as thefirst operand's base type, and second operand must be \
+                                 int",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BinaryOpCode::InterpolateAtOffset => {
+                        if !are_base_type_ids_equal(&[result.type_id, operand1.type_id])
+                            || get_base_type_id(operand2.type_id) != TYPE_ID_VEC2
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result base type must be the \
+                                 same as thefirst operand's base type, and second operand must be \
+                                 vec2",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BinaryOpCode::AtomicAdd
+                    | BinaryOpCode::AtomicMin
+                    | BinaryOpCode::AtomicMax
+                    | BinaryOpCode::AtomicAnd
+                    | BinaryOpCode::AtomicOr
+                    | BinaryOpCode::AtomicXor
+                    | BinaryOpCode::AtomicExchange => {
+                        if !are_base_type_ids_equal(&[
+                            result.type_id,
+                            operand1.type_id,
+                            operand2.type_id,
+                        ]) || !is_int_or_uint(result.type_id)
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result and operands base types \
+                                 must be the same and must be int or uint",
+                                result, opcode
+                            ));
+                        }
+                    }
+                }
+            }
+            &OpCode::BuiltIn(builtin_opcode, ref args) => {
+                match builtin_opcode {
+                    BuiltInOpCode::Clamp => {
+                        let result = require_result(opcode, result);
+                        if !are_base_type_ids_equal(&[result.type_id, args[0].type_id])
+                            || !are_base_type_ids_equal(&[args[1].type_id, args[2].type_id])
+                            || self.ir.meta.get_scalar_type(args[0].type_id)
+                                != self.ir.meta.get_scalar_type(args[1].type_id)
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result base type must be the \
+                                 same as the first operand's base type. The second and third \
+                                 operand's base types must be the same. The first operand and the \
+                                 other two operand must have the same scalar type",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BuiltInOpCode::Mix => {
+                        let result = require_result(opcode, result);
+                        if !are_base_type_ids_equal(&[
+                            result.type_id,
+                            args[0].type_id,
+                            args[1].type_id,
+                        ]) || (!is_float_or_fvec(args[2].type_id)
+                            && !is_bool_or_bvec(args[2].type_id))
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result and first two operands \
+                                 must have the same base type, and third operand must be float, \
+                                 fvec or bvec",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BuiltInOpCode::Smoothstep => {
+                        let result = require_result(opcode, result);
+                        if !are_base_type_ids_equal(&[result.type_id, args[2].type_id])
+                            || !are_base_type_ids_equal(&[args[0].type_id, args[1].type_id])
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result type must be the same \
+                                 as the third operand's type, and the first two operands must \
+                                 have the same type",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BuiltInOpCode::Fma => {
+                        let result = require_result(opcode, result);
+                        if !are_base_type_ids_equal(&[
+                            result.type_id,
+                            args[0].type_id,
+                            args[1].type_id,
+                            args[2].type_id,
+                        ]) {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result and all operands base \
+                                 types must be the same",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BuiltInOpCode::Faceforward => {
+                        let result = require_result(opcode, result);
+                        if !are_base_type_ids_equal(&[result.type_id, args[0].type_id])
+                            || !are_base_type_ids_equal(&[args[1].type_id, args[2].type_id])
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result base type must be the \
+                                 same as the first operand base type, and second and third \
+                                 operand base types must match",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BuiltInOpCode::Refract => {
+                        let result = require_result(opcode, result);
+                        if !are_base_type_ids_equal(&[
+                            result.type_id,
+                            args[0].type_id,
+                            args[1].type_id,
+                        ]) || get_base_type_id(args[2].type_id) != TYPE_ID_FLOAT
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result and first two operands \
+                                 must have the same base type, and third operand base type must \
+                                 be float",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BuiltInOpCode::BitfieldExtract => {
+                        let result = require_result(opcode, result);
+                        if (!is_int_or_ivec(result.type_id) && !is_uint_or_uvec(result.type_id))
+                            || !are_base_type_ids_equal(&[result.type_id, args[0].type_id])
+                            || get_base_type_id(args[1].type_id) != TYPE_ID_INT
+                            || get_base_type_id(args[2].type_id) != TYPE_ID_INT
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result must be int or uint \
+                                 scalar or vec, result and first operand must have the same base \
+                                 type, and second and third operand types must be int",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BuiltInOpCode::BitfieldInsert => {
+                        let result = require_result(opcode, result);
+                        if (!is_int_or_ivec(result.type_id) && !is_uint_or_uvec(result.type_id))
+                            || !are_base_type_ids_equal(&[
+                                result.type_id,
+                                args[0].type_id,
+                                args[1].type_id,
+                            ])
+                            || get_base_type_id(args[2].type_id) != TYPE_ID_INT
+                            || get_base_type_id(args[3].type_id) != TYPE_ID_INT
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result must be int or uint \
+                                 scalar or vec, result and first two operands must have the same \
+                                 type, and third and fourth operand must be int",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BuiltInOpCode::UaddCarry | BuiltInOpCode::UsubBorrow => {
+                        let result = require_result(opcode, result);
+                        if !are_base_type_ids_equal(&[
+                            result.type_id,
+                            args[0].type_id,
+                            args[1].type_id,
+                            args[2].type_id,
+                        ]) || !is_uint_or_uvec(result.type_id)
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result must be uint scalar or \
+                                 vec, result and all operands must have the same type",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BuiltInOpCode::UmulExtended => {
+                        if !are_base_type_ids_equal(&[
+                            args[0].type_id,
+                            args[1].type_id,
+                            args[2].type_id,
+                            args[3].type_id,
+                        ]) || !is_uint_or_uvec(args[0].type_id)
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?}, all operands must have the same uint \
+                                 scalar or vec type",
+                                opcode
+                            ));
+                        }
+                    }
+                    BuiltInOpCode::ImulExtended => {
+                        if !are_base_type_ids_equal(&[
+                            args[0].type_id,
+                            args[1].type_id,
+                            args[2].type_id,
+                            args[3].type_id,
+                        ]) || !is_int_or_ivec(args[0].type_id)
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?}, all operands must have the same int \
+                                 scalar or vec type",
+                                opcode
+                            ));
+                        }
+                    }
+                    BuiltInOpCode::AtomicCompSwap => {
+                        let result = require_result(opcode, result);
+                        if !are_base_type_ids_equal(&[
+                            result.type_id,
+                            args[0].type_id,
+                            args[1].type_id,
+                            args[2].type_id,
+                        ]) || !is_int_or_uint(result.type_id)
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result and all operands must \
+                                 have the same int or uint base type",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BuiltInOpCode::ImageLoad | BuiltInOpCode::SubpassLoad => {
+                        let result = require_result(opcode, result);
+                        if !matches!(result.type_id, TYPE_ID_VEC4 | TYPE_ID_IVEC4 | TYPE_ID_UVEC4) {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result base type must be vec4, \
+                                 ivec4, or uvec4",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BuiltInOpCode::ImageAtomicAdd
+                    | BuiltInOpCode::ImageAtomicMin
+                    | BuiltInOpCode::ImageAtomicMax
+                    | BuiltInOpCode::ImageAtomicAnd
+                    | BuiltInOpCode::ImageAtomicOr
+                    | BuiltInOpCode::ImageAtomicXor
+                    | BuiltInOpCode::ImageAtomicCompSwap => {
+                        let result = require_result(opcode, result);
+                        if !is_int_or_uint(result.type_id) {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result base type must be int \
+                                 or uint",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BuiltInOpCode::ImageAtomicExchange => {
+                        let result = require_result(opcode, result);
+                        if !is_int_or_uint(result.type_id)
+                            && get_base_type_id(result.type_id) != TYPE_ID_FLOAT
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result must be int, uint, or \
+                                 float",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BuiltInOpCode::TextureQueryLod => {
+                        let result = require_result(opcode, result);
+                        if get_base_type_id(result.type_id) != TYPE_ID_VEC2 {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result must be vec2",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BuiltInOpCode::Rgb2Yuv | BuiltInOpCode::Yuv2Rgb => {
+                        let result = require_result(opcode, result);
+                        if get_base_type_id(result.type_id) != TYPE_ID_VEC3
+                            || get_base_type_id(args[0].type_id) != TYPE_ID_VEC3
+                            || get_base_type_id(args[1].type_id) != TYPE_ID_YUV_CSC_STANDARD
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result and first operand must \
+                                 be vec3, and second operand must be yuvCscStandardEXT",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BuiltInOpCode::NumSamples => {
+                        let result = require_result(opcode, result);
+                        if get_base_type_id(result.type_id) != TYPE_ID_UINT {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result must be uint",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BuiltInOpCode::SamplePosition => {
+                        let result = require_result(opcode, result);
+                        if get_base_type_id(result.type_id) != TYPE_ID_VEC2
+                            || get_base_type_id(args[0].type_id) != TYPE_ID_UINT
+                        {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result must be vec2 and \
+                                 operand must be uint",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BuiltInOpCode::Saturate | BuiltInOpCode::InterpolateAtCenter => {
+                        let result = require_result(opcode, result);
+                        if !are_base_type_ids_equal(&[result.type_id, args[0].type_id]) {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result and operand must have \
+                                 the same base type",
+                                result, opcode
+                            ));
+                        }
+                    }
+                    BuiltInOpCode::TextureSize
+                    | BuiltInOpCode::ImageStore
+                    | BuiltInOpCode::TexelFetch
+                    | BuiltInOpCode::TexelFetchOffset
+                    | BuiltInOpCode::PixelLocalStoreANGLE => {
+                        // validate in sampler_operand_is_compatible_with_textureop()
+                    }
+                    BuiltInOpCode::MemoryBarrier
+                    | BuiltInOpCode::MemoryBarrierAtomicCounter
+                    | BuiltInOpCode::MemoryBarrierBuffer
+                    | BuiltInOpCode::MemoryBarrierImage
+                    | BuiltInOpCode::Barrier
+                    | BuiltInOpCode::MemoryBarrierShared
+                    | BuiltInOpCode::GroupMemoryBarrier
+                    | BuiltInOpCode::EmitVertex
+                    | BuiltInOpCode::EndPrimitive
+                    | BuiltInOpCode::BeginInvocationInterlockNV
+                    | BuiltInOpCode::EndInvocationInterlockNV
+                    | BuiltInOpCode::BeginFragmentShaderOrderingINTEL
+                    | BuiltInOpCode::BeginInvocationInterlockARB
+                    | BuiltInOpCode::EndInvocationInterlockARB
+                    | BuiltInOpCode::LoopForwardProgress => {
+                        // These opcodes take 0 operands and return void; no operand or
+                        // result type validation is required
+                    }
+                    BuiltInOpCode::ConvertFromUniformLayout => {
+                        let result = require_result(opcode, result);
+                        if !matches!(
+                            self.ir.meta.get_type(result.type_id),
+                            Type::Array(..) | Type::Struct(..)
+                        ) {
+                            self.on_error(format_args!(
+                                "invalid instruction: {:?} = {:?}, result must be an array or \
+                                 struct",
+                                result, opcode
+                            ));
+                        }
+                    }
+                }
+            }
+            &OpCode::Texture(_, _, _) => {
+                // Validation done in sampler_operand_is_compatible_with_textureop()
+            }
+        }
+    }
+
     fn validate_precisions(&self) {
         let mut precision_state = PrecisionState {
             ir_meta: &self.ir.meta,
@@ -2693,7 +4940,8 @@ impl<'a> Validator<'a> {
             | OpCode::BuiltIn(BuiltInOpCode::BeginFragmentShaderOrderingINTEL, args)
             | OpCode::BuiltIn(BuiltInOpCode::BeginInvocationInterlockARB, args)
             | OpCode::BuiltIn(BuiltInOpCode::EndInvocationInterlockARB, args)
-            | OpCode::BuiltIn(BuiltInOpCode::LoopForwardProgress, args) => {
+            | OpCode::BuiltIn(BuiltInOpCode::LoopForwardProgress, args)
+            | OpCode::BuiltIn(BuiltInOpCode::ConvertFromUniformLayout, args) => {
                 for arg in args {
                     validate_typedid_operand_precision_applicability(arg);
                 }

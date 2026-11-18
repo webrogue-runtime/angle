@@ -254,26 +254,26 @@ struct FeaturesGL : FeatureSetBase
         &members,
     };
 
-    FeatureInfo resetBaseLevelForASTCImage = {
-        "resetBaseLevelForASTCImage",
+    FeatureInfo virtualizeBaseLevelAndMipchain = {
+        "virtualizeBaseLevelAndMipchain",
         FeatureCategory::OpenGLWorkarounds,
         &members,
     };
 
-    FeatureInfo recreateImmutableTextureOnBaseLevelIncrease = {
-        "recreateImmutableTextureOnBaseLevelIncrease",
+    FeatureInfo copyImageSubData3DFailsOnTailMipLevels = {
+        "copyImageSubData3DFailsOnTailMipLevels",
         FeatureCategory::OpenGLWorkarounds,
         &members,
     };
 
-    FeatureInfo resetTexStorage2DBaseLevel = {
-        "resetTexStorage2DBaseLevel",
+    FeatureInfo readback3DDepthStencilPbosDuringUpload = {
+        "readback3DDepthStencilPbosDuringUpload",
         FeatureCategory::OpenGLWorkarounds,
         &members,
     };
 
-    FeatureInfo useTempForNonZeroBaseLevelGenMipmapUsingCopyImageSubData = {
-        "useTempForNonZeroBaseLevelGenMipmapUsingCopyImageSubData",
+    FeatureInfo useScratchTextureForConvertingCopySubImage = {
+        "useScratchTextureForConvertingCopySubImage",
         FeatureCategory::OpenGLWorkarounds,
         &members,
     };
@@ -286,6 +286,12 @@ struct FeaturesGL : FeatureSetBase
 
     FeatureInfo limitMax3dArrayTextureSizeTo1024 = {
         "limitMax3dArrayTextureSizeTo1024",
+        FeatureCategory::OpenGLWorkarounds,
+        &members,
+    };
+
+    FeatureInfo roundUp3dTextureSizeToPOTForLimit = {
+        "roundUp3dTextureSizeToPOTForLimit",
         FeatureCategory::OpenGLWorkarounds,
         &members,
     };
@@ -710,12 +716,6 @@ struct FeaturesGL : FeatureSetBase
         &members,
     };
 
-    FeatureInfo expandFragmentOutputsToVec4 = {
-        "expandFragmentOutputsToVec4",
-        FeatureCategory::OpenGLWorkarounds,
-        &members,
-    };
-
     FeatureInfo recreateMipmapLevelsBeforeGenerate = {
         "recreateMipmapLevelsBeforeGenerate",
         FeatureCategory::OpenGLWorkarounds,
@@ -752,8 +752,14 @@ struct FeaturesGL : FeatureSetBase
         &members,
     };
 
-    FeatureInfo limitOutputVaryingsTo256AtCompileTime = {
-        "limitOutputVaryingsTo256AtCompileTime",
+    FeatureInfo limitVaryingsAtCompileTime = {
+        "limitVaryingsAtCompileTime",
+        FeatureCategory::OpenGLWorkarounds,
+        &members,
+    };
+
+    FeatureInfo limitShaderVariableFieldsAtCompileTime = {
+        "limitShaderVariableFieldsAtCompileTime",
         FeatureCategory::OpenGLWorkarounds,
         &members,
     };
@@ -776,12 +782,6 @@ struct FeaturesGL : FeatureSetBase
         &members,
     };
 
-    FeatureInfo uploadOversizedMipLevelsViaUnpackBuffer = {
-        "uploadOversizedMipLevelsViaUnpackBuffer",
-        FeatureCategory::OpenGLWorkarounds,
-        &members,
-    };
-
     FeatureInfo validateState = {
         "validateState",
         FeatureCategory::OpenGLFeatures,
@@ -796,6 +796,66 @@ struct FeaturesGL : FeatureSetBase
 
     FeatureInfo useTexSubImageForClientDataNpotUploads = {
         "useTexSubImageForClientDataNpotUploads",
+        FeatureCategory::OpenGLWorkarounds,
+        &members,
+    };
+
+    FeatureInfo doubleClearForRobustInit = {
+        "doubleClearForRobustInit",
+        FeatureCategory::OpenGLWorkarounds,
+        &members,
+    };
+
+    FeatureInfo deferGlDeleteBuffers = {
+        "deferGlDeleteBuffers",
+        FeatureCategory::OpenGLWorkarounds,
+        &members,
+    };
+
+    FeatureInfo recreateFboOnAttachmentRespecification = {
+        "recreateFboOnAttachmentRespecification",
+        FeatureCategory::OpenGLWorkarounds,
+        &members,
+    };
+
+    FeatureInfo finishBeforeSameTextureCopy = {
+        "finishBeforeSameTextureCopy",
+        FeatureCategory::OpenGLWorkarounds,
+        &members,
+    };
+
+    FeatureInfo disablePixelLocalStorage = {
+        "disablePixelLocalStorage",
+        FeatureCategory::OpenGLWorkarounds,
+        &members,
+    };
+
+    FeatureInfo readPixelsViaSingleAttachmentFramebuffer = {
+        "readPixelsViaSingleAttachmentFramebuffer",
+        FeatureCategory::OpenGLWorkarounds,
+        &members,
+    };
+
+    FeatureInfo rejectRenderbufferStorageWrappingDriverSize = {
+        "rejectRenderbufferStorageWrappingDriverSize",
+        FeatureCategory::OpenGLWorkarounds,
+        &members,
+    };
+
+    FeatureInfo limitMaxTextureImageUnitsTo13 = {
+        "limitMaxTextureImageUnitsTo13",
+        FeatureCategory::OpenGLWorkarounds,
+        &members,
+    };
+
+    FeatureInfo flushBeforeDrawFramebufferChange = {
+        "flushBeforeDrawFramebufferChange",
+        FeatureCategory::OpenGLWorkarounds,
+        &members,
+    };
+
+    FeatureInfo ensurePreviousFramebufferNotDeleted = {
+        "ensurePreviousFramebufferNotDeleted",
         FeatureCategory::OpenGLWorkarounds,
         &members,
     };

@@ -939,8 +939,7 @@ gl::VertexArray::DirtyBits VertexArrayVk::checkBufferForDirtyBits(
 {
     gl::VertexArray::DirtyBits dirtyBits;
 
-    const std::vector<gl::VertexAttribute> &attribs = mState.getVertexAttributes();
-    const std::vector<gl::VertexBinding> &bindings  = mState.getVertexBindings();
+    const std::vector<gl::VertexBinding> &bindings = mState.getVertexBindings();
 
     // Element buffer is not in bindings yet, has to handle separately.
     dirtyBits.set(gl::VertexArray::DIRTY_BIT_ELEMENT_ARRAY_BUFFER);
@@ -952,11 +951,14 @@ gl::VertexArray::DirtyBits VertexArrayVk::checkBufferForDirtyBits(
     {
         const gl::Buffer *bufferGL    = getVertexArrayBuffer(bindingIndex);
         vk::BufferSerial bufferSerial = vk::GetImpl(bufferGL)->getBufferSerial();
-        gl::AttributesMask enabledAttributeMask =
-            bindings[bindingIndex].getBoundAttributesMask() & mState.getEnabledAttributesMask();
-        for (size_t attribIndex : enabledAttributeMask)
+
+        // If the buffer for a disabled attribute is respecified when the VAO is unbound and then it
+        // gets re-enabled, the enable-attribute dirty bit is cleared. Without checking the disabled
+        // attributes here, a stale buffer may be bound and used for the next draw in such cases.
+        const gl::AttributesMask boundAttributeMask =
+            bindings[bindingIndex].getBoundAttributesMask();
+        for (size_t attribIndex : boundAttributeMask)
         {
-            ASSERT(attribs[attribIndex].enabled);
             if (!bufferSerial.valid() || bufferSerial != mCurrentArrayBufferSerial[attribIndex])
             {
                 dirtyBits.set(gl::VertexArray::DIRTY_BIT_BINDING_0 + bindingIndex);
@@ -1115,11 +1117,8 @@ angle::Result VertexArrayVk::syncState(const gl::Context *context,
            prevEnabledNowDisabledAttribBits);
     if (prevEnabledNowDisabledAttribBits.any())
     {
-        // disabled attributes maybe active or inactive. We only need to set to empty buffer for
-        // inactive ones.
-        const gl::AttributesMask disabledInactiveAttribBits =
-            prevEnabledNowDisabledAttribBits & ~context->getActiveDefaultAttribsMask();
-        syncDirtyDisabledAttribs(contextVk, disabledInactiveAttribBits);
+        // Sync the disabled attributes, active or inactive.
+        syncDirtyDisabledAttribs(contextVk, prevEnabledNowDisabledAttribBits);
 
         // default attributes handler will update active attributes.
         const gl::AttributesMask defaultAttribBits =
@@ -1378,6 +1377,16 @@ angle::Result VertexArrayVk::syncNeedsConversionAttrib(ContextVk *contextVk,
     size_t numberOfVerticesToSkip = srcRelativeOffset / srcStride;
     size_t dstRelativeOffset      = numberOfVerticesToSkip * dstStride;
 
+    if (!bufferVk->hasValidData() && conversion->dirty())
+    {
+        // In case of uninitialized buffer or redefined buffer with no input data, conversion should
+        // not occur, even though a conversion buffer may still be allocated to be used for drawing.
+        size_t maxNumVertices;
+        ANGLE_TRY(CalculateMaxVertexCountForConversion(contextVk, bufferVk, conversion, srcFormat,
+                                                       dstFormat, &maxNumVertices));
+        conversion->clearDirty();
+    }
+
     if (conversion->dirty())
     {
         if (bindingIsAligned)
@@ -1398,6 +1407,31 @@ angle::Result VertexArrayVk::syncNeedsConversionAttrib(ContextVk *contextVk,
         // therefore an attribute change needs to be called. Note that it may trigger
         // unnecessary vulkan PSO update when the destination buffer stride does not
         // change, but for simplicity just make it conservative
+    }
+
+    // CalculateMaxVertexCountForConversion has two early returns that allocate nothing: the
+    // source buffer can be smaller than the conversion's offset, and what is left can hold no
+    // whole vertex. On either path it returns before calling initBufferForVertexConversion, so
+    // the conversion has no buffer. The code below would otherwise install that buffer as this
+    // attribute's current array buffer and read its handle. This also covers a conversion that
+    // stays invalid while the source buffer already holds valid data, which the block above does
+    // not reach. Use the empty buffer for the attribute instead, which is what the
+    // enabled-attribute path does when a binding has no vertex in range.
+    if (!conversion->valid())
+    {
+        vk::BufferHelper &emptyBuffer           = contextVk->getEmptyBuffer();
+        mCurrentArrayBuffers[attribIndex]       = &emptyBuffer;
+        mCurrentArrayBufferSerial[attribIndex]  = emptyBuffer.getBufferSerial();
+        mCurrentArrayBufferHandles[attribIndex] = emptyBuffer.getBuffer().getHandle();
+        mCurrentArrayBufferOffsets[attribIndex] = emptyBuffer.getOffset();
+        mCurrentArrayBufferSizes[attribIndex]   = emptyBuffer.getSize();
+        mCurrentEmptyBufferMask.set(attribIndex);
+        mVertexInputAttribDescs[attribIndex].offset  = 0;
+        mVertexInputBindingDescs[attribIndex].stride = 0;
+        setVertexInputAttribDescFormat(renderer, attribIndex, attrib.format->id);
+        setVertexInputBindingDescDivisor(renderer, attribIndex, binding.getDivisor());
+        mCurrentDefaultAttribsMask.reset(attribIndex);
+        return angle::Result::Continue;
     }
 
     vk::BufferHelper *bufferHelper         = conversion->getBuffer();
@@ -1761,6 +1795,9 @@ angle::Result VertexArrayVk::updateDefaultAttribs(ContextVk *contextVk,
 
         setDefaultPackedInput(contextVk, attribIndex, &mDefaultAttribFormatIDs[attribIndex]);
         setVertexInputAttribDescFormat(renderer, attribIndex, mDefaultAttribFormatIDs[attribIndex]);
+
+        // Ensure the offset is set to 0 for default attributes
+        mVertexInputAttribDescs[attribIndex].offset = 0;
     }
     mCurrentDefaultAttribsMask |= dirtyDefaultAttribsMask;
     mCurrentEmptyBufferMask &= ~dirtyDefaultAttribsMask;

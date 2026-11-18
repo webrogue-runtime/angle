@@ -59,7 +59,7 @@ static constexpr size_t kMaxSyncValExtraProperties = 9;
 struct SkippedSyncvalMessage
 {
     const char *messageId;
-    bool isDueToNonConformantCoherentColorFramebufferFetch  = false;
+    bool isDueToNonConformantCoherentColorFramebufferFetch               = false;
     std::array<const char *, kMaxSyncValExtraProperties> extraProperties = {};
 };
 
@@ -69,7 +69,7 @@ class ImageMemorySuballocator : angle::NonCopyable
     ImageMemorySuballocator();
     ~ImageMemorySuballocator();
 
-    void destroy(vk::Renderer *renderer);
+    void destroy(Renderer *renderer);
 
     // Allocates memory for the image and binds it.
     VkResult allocateAndBindMemory(ErrorContext *context,
@@ -86,14 +86,35 @@ class ImageMemorySuballocator : angle::NonCopyable
                                    VkDeviceSize *sizeOut);
 
     // Maps the memory to initialize with non-zero value.
-    VkResult mapMemoryAndInitWithNonZeroValue(vk::Renderer *renderer,
+    VkResult mapMemoryAndInitWithNonZeroValue(Renderer *renderer,
                                               Allocation *allocation,
                                               VkDeviceSize size,
                                               int value,
                                               VkMemoryPropertyFlags flags);
 
     // Determines if dedicated memory is required for the allocation.
-    bool needsDedicatedMemory(VkDeviceSize size) const;
+    bool needsDedicatedMemory(Renderer *renderer, VkDeviceSize size) const;
+
+    // Initializes a custom memory pool with a specific type index (if needed) and returns it.
+    VkResult getInitMemoryPool(Renderer *renderer, uint32_t poolMemoryTypeIndex, Pool **poolOut);
+    VkResult getDefaultMemoryPool(Renderer *renderer, uint32_t poolMemoryTypeIndex, Pool **poolOut);
+
+  private:
+    VkResult getMemoryPoolImpl(Renderer *renderer,
+                               std::array<Pool, VK_MAX_MEMORY_TYPES> &poolGroup,
+                               size_t maxBlockCount,
+                               VkDeviceSize blockSize,
+                               uint32_t poolMemoryTypeIndex,
+                               Pool **poolOut);
+
+    // Gets the block size for a specific memory pool.
+    VkDeviceSize getInitialPoolBlockSize(Renderer *renderer, uint32_t poolMemoryTypeIndex);
+    VkDeviceSize getDefaultPoolBlockSize(Renderer *renderer) const;
+
+    // Initial memory pools are smaller and have a max block count. If allocation fails on them, the
+    // allocator moves to the default memory pools.
+    std::array<Pool, VK_MAX_MEMORY_TYPES> mInitMemoryPools;
+    std::array<Pool, VK_MAX_MEMORY_TYPES> mDefaultMemoryPools;
 };
 
 // Supports one semaphore from current surface, and one semaphore passed to
@@ -192,6 +213,11 @@ class Renderer : angle::NonCopyable
     {
         return mHostImageCopyProperties;
     }
+    const VkPhysicalDeviceExtendedDynamicState3PropertiesEXT &
+    getPhysicalDeviceExtendedDynamicState3Properties() const
+    {
+        return mExtendedDynamicState3Properties;
+    }
     const VkPhysicalDeviceShaderIntegerDotProductProperties &
     getPhysicalDeviceShaderIntegerDotProductProperties() const
     {
@@ -215,6 +241,7 @@ class Renderer : angle::NonCopyable
 
     const vk::Allocator &getAllocator() const { return mAllocator; }
     vk::ImageMemorySuballocator &getImageMemorySuballocator() { return mImageMemorySuballocator; }
+    VkDeviceSize getPreferredLargeHeapBlockSize() const { return mPreferredLargeHeapBlockSize; }
 
     angle::Result checkQueueForSurfacePresent(vk::ErrorContext *context,
                                               VkSurfaceKHR surface,
@@ -268,6 +295,7 @@ class Renderer : angle::NonCopyable
     const angle::FeaturesVk &getFeatures() const { return mFeatures; }
     uint32_t getMaxVertexAttribDivisor() const { return mMaxVertexAttribDivisor; }
     VkDeviceSize padVertexAttribBufferSizeIfNeeded(VkDeviceSize bufferSize);
+    gl::DrawBufferMask getValidDrawBuffers() const { return mValidDrawBuffers; }
     uint32_t getMaxColorInputAttachmentCount() const { return mMaxColorInputAttachmentCount; }
     ANGLE_INLINE bool isInFlightCommandsEmpty() const
     {
@@ -386,6 +414,14 @@ class Renderer : angle::NonCopyable
     angle::Result mergeIntoPipelineCache(vk::ErrorContext *context,
                                          const vk::PipelineCache &pipelineCache);
 
+    // Whether it is allowed to use program's pipeline cache, otherwise need to use mPipelineCache.
+    bool allowProgramPipelineCache() const
+    {
+        return !mFeatures.preferGlobalPipelineCache.enabled &&
+               mFeatures.warmUpPipelineCacheAtLink.enabled &&
+               !mFeatures.skipPipelineCacheSerialization.enabled;
+    }
+
     const std::vector<const char *> &getSkippedValidationMessages() const
     {
         return mSkippedValidationMessages;
@@ -393,6 +429,13 @@ class Renderer : angle::NonCopyable
     const std::vector<vk::SkippedSyncvalMessage> &getSkippedSyncvalMessages() const
     {
         return mSkippedSyncvalMessages;
+    }
+
+    bool supportsStippledLines() const
+    {
+        return mLineRasterizationFeatures.stippledRectangularLines ||
+               mLineRasterizationFeatures.stippledBresenhamLines ||
+               mLineRasterizationFeatures.stippledSmoothLines;
     }
 
     bool isCoherentColorFramebufferFetchEmulated() const
@@ -547,6 +590,7 @@ class Renderer : angle::NonCopyable
     }
 
     VkDeviceSize getPreferredInitialBufferBlockSize(uint32_t memoryTypeIndex) const;
+    VkDeviceSize getPreferredInitialImageBlockSize(uint32_t memoryTypeIndex) const;
     VkDeviceSize getPreferredLargeBufferBlockSize(uint32_t memoryTypeIndex) const;
 
     size_t getDefaultBufferAlignment() const { return mDefaultBufferAlignment; }
@@ -708,11 +752,6 @@ class Renderer : angle::NonCopyable
 
     bool supportsAstcHdr() const;
 
-    uint32_t getNativeVectorWidthDouble() const { return mNativeVectorWidthDouble; }
-    uint32_t getNativeVectorWidthHalf() const { return mNativeVectorWidthHalf; }
-    uint32_t getPreferredVectorWidthDouble() const { return mPreferredVectorWidthDouble; }
-    uint32_t getPreferredVectorWidthHalf() const { return mPreferredVectorWidthHalf; }
-
     angle::Result onFrameBoundary(const gl::Context *contextGL);
 
     uint32_t getMinRenderPassWriteCommandCountToEarlySubmit() const
@@ -721,6 +760,22 @@ class Renderer : angle::NonCopyable
     }
 
     void logFeatures() const;
+
+    bool useTessellationDomainOriginDynamicState() const
+    {
+        return mPhysicalDeviceFeatures.tessellationShader &&
+               mFeatures.supportsFixedStateDynamicState.enabled;
+    }
+    bool useProvokingVertexModeDynamicState() const
+    {
+        return mFeatures.provokingVertex.enabled &&
+               mFeatures.supportsFixedStateDynamicState.enabled;
+    }
+    bool useRasterizationStreamDynamicState() const
+    {
+        return mFeatures.supportsGeometryStreamsCapability.enabled &&
+               mFeatures.supportsFixedStateDynamicState.enabled;
+    }
 
   private:
     angle::Result setupDevice(vk::ErrorContext *context,
@@ -864,6 +919,7 @@ class Renderer : angle::NonCopyable
     VkPhysicalDeviceProvokingVertexFeaturesEXT mProvokingVertexFeatures;
     VkPhysicalDeviceVertexAttributeDivisorFeatures mVertexAttributeDivisorFeatures;
     VkPhysicalDeviceVertexAttributeDivisorProperties mVertexAttributeDivisorProperties;
+    VkPhysicalDeviceVertexAttributeDivisorPropertiesEXT mVertexAttributeDivisorPropertiesEXT;
     VkPhysicalDeviceTransformFeedbackFeaturesEXT mTransformFeedbackFeatures;
     VkPhysicalDeviceIndexTypeUint8Features mIndexTypeUint8Features;
     VkPhysicalDeviceSubgroupProperties mSubgroupProperties;
@@ -890,6 +946,8 @@ class Renderer : angle::NonCopyable
     VkPhysicalDeviceSamplerYcbcrConversionFeatures mSamplerYcbcrConversionFeatures;
     VkPhysicalDeviceExtendedDynamicStateFeaturesEXT mExtendedDynamicStateFeatures;
     VkPhysicalDeviceExtendedDynamicState2FeaturesEXT mExtendedDynamicState2Features;
+    VkPhysicalDeviceExtendedDynamicState3FeaturesEXT mExtendedDynamicState3Features;
+    VkPhysicalDeviceExtendedDynamicState3PropertiesEXT mExtendedDynamicState3Properties;
     VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT mGraphicsPipelineLibraryFeatures;
     VkPhysicalDeviceGraphicsPipelineLibraryPropertiesEXT mGraphicsPipelineLibraryProperties;
     VkPhysicalDeviceVertexInputDynamicStateFeaturesEXT mVertexInputDynamicStateFeatures;
@@ -942,6 +1000,7 @@ class Renderer : angle::NonCopyable
     VkPhysicalDeviceTileMemoryHeapPropertiesQCOM mTileMemoryHeapProperties;
     VkPhysicalDeviceTextureCompressionASTC3DFeaturesEXT mTextureCompressionASTC3DFeatures;
     VkPhysicalDeviceShaderCorePropertiesAMD mShaderCorePropertiesAMD;
+    VkPhysicalDevicePipelineBinaryFeaturesKHR mPipelineBinaryFeatures;
 
     uint32_t mLegacyDitheringVersion = 0;
 
@@ -953,12 +1012,17 @@ class Renderer : angle::NonCopyable
     uint32_t mCurrentQueueFamilyIndex;
     uint32_t mMaxVertexAttribDivisor;
     VkDeviceSize mMaxVertexAttribStride;
+    mutable gl::DrawBufferMask mValidDrawBuffers;
     mutable uint32_t mMaxColorInputAttachmentCount;
     uint32_t mDefaultUniformBufferSize;
     VkDevice mDevice;
     VkDeviceSize mMaxCopyBytesUsingCPUWhenPreservingBufferData;
 
-    bool mDeviceLost;
+    // Written by the thread that detects the loss and read by any thread calling
+    // ThreadSafeDisplayImpl::testDeviceLost(), which runs without the display lock.  Relaxed
+    // ordering is sufficient: the flag only ever goes false -> true for the lifetime of the
+    // Renderer, so a stale read is always a stale false and the loss is observed on a later call.
+    std::atomic<bool> mDeviceLost;
 
     vk::SharedGarbageList<vk::SharedGarbage> mSharedGarbageList;
     // Suballocations have its own dedicated garbage list for performance optimization since they
@@ -986,6 +1050,7 @@ class Renderer : angle::NonCopyable
     vk::MemoryProperties mMemoryProperties;
     uint32_t mTileMemoyTypeIndex;
     VkDeviceSize mPreferredInitialBufferBlockSize;
+    VkDeviceSize mPreferredInitialImageBlockSize;
     VkDeviceSize mPreferredLargeHeapBlockSize;
 
     // The default alignment for BufferVk object
@@ -1098,6 +1163,8 @@ class Renderer : angle::NonCopyable
 
     // Use thread pool to compress cache data.
     std::shared_ptr<angle::WaitableEvent> mCompressEvent;
+    // The platform blob cache's total size limit, which bounds the pipeline cache that is stored.
+    size_t mBlobCacheSizeLimit = 0;
 
     VulkanLayerVector mEnabledInstanceLayerNames;
     vk::ExtensionNameList mEnabledInstanceExtensions;
@@ -1125,12 +1192,6 @@ class Renderer : angle::NonCopyable
 
     // Record submitted queue serials not belongs to any context.
     vk::ResourceUse mSubmittedResourceUse;
-
-    // Potentially vendor & feature-specific device info.
-    uint32_t mNativeVectorWidthDouble;
-    uint32_t mNativeVectorWidthHalf;
-    uint32_t mPreferredVectorWidthDouble;
-    uint32_t mPreferredVectorWidthHalf;
 
     // The number of minimum write commands in the command buffer to trigger one submission of
     // pending commands at draw call time

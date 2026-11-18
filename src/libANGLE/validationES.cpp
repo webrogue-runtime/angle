@@ -1228,6 +1228,7 @@ bool ValidImageDataSize(const Context *context,
                         GLsizei width,
                         GLsizei height,
                         GLsizei depth,
+                        bool isSubImage,
                         GLenum format,
                         GLenum type,
                         const void *pixels,
@@ -1273,13 +1274,97 @@ bool ValidImageDataSize(const Context *context,
             ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kParamOverflow);
             return false;
         }
+
+        if (context->isHardenedContext() && pixelUnpackBuffer->hasTFBBindingConflict())
+        {
+            ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION,
+                                   kPixelUnpackBufferBoundForTransformFeedback);
+            return false;
+        }
+
+        // ...data is not evenly divisible into the number of bytes needed to store in memory a
+        // datum indicated by type.
+        {
+            size_t offset            = reinterpret_cast<size_t>(pixels);
+            size_t dataBytesPerPixel = static_cast<size_t>(GetTypeInfo(type).bytes);
+
+            if ((offset % dataBytesPerPixel) != 0)
+            {
+                ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kDataTypeNotAligned);
+                return false;
+            }
+        }
+
+        // ...the buffer object's data store is currently mapped but not persistently.
+        if (pixelUnpackBuffer->isMapped() && !pixelUnpackBuffer->isPersistentlyMapped())
+        {
+            ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kBufferMapped);
+            return false;
+        }
     }
     else if (outImageSize != nullptr)
     {
         *outImageSize = endByte;
     }
 
+    if (context->isHardenedContext())
+    {
+        // Define:
+        //   DataStoreWidth  = (GL_UNPACK_ROW_LENGTH ? GL_UNPACK_ROW_LENGTH : width)
+        //   DataStoreHeight = (GL_UNPACK_IMAGE_HEIGHT ? GL_UNPACK_IMAGE_HEIGHT : height)
+        //
+        // WebGL 2.0 / hardened contexts impose the following additional constraints:
+        //
+        // 1) texImage2D and texSubImage2D generate INVALID_OPERATION if:
+        //      GL_UNPACK_SKIP_PIXELS + width > DataStoreWidth
+        //    except for texImage2D if no GL_PIXEL_UNPACK_BUFFER is
+        //    bound and _pixels_ is null.
+        //
+        // 2) texImage3D and texSubImage3D generate INVALID_OPERATION if:
+        //      GL_UNPACK_SKIP_PIXELS + width > DataStoreWidth
+        //      GL_UNPACK_SKIP_ROWS + height > DataStoreHeight
+        //    except for texImage3D if no GL_PIXEL_UNPACK_BUFFER is
+        //    bound and _pixels_ is null.
+        if (!pixelUnpackBuffer && !pixels && !isSubImage)
+        {
+            // Exception case for texImage2D or texImage3D, above.
+        }
+        else
+        {
+            GLint dataStoreWidth = unpack.rowLength ? unpack.rowLength : width;
+            if (unpack.skipPixels + width > dataStoreWidth)
+            {
+                ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kInvalidUnpackParametersForWebGL);
+                return false;
+            }
+            if (texType == TextureType::_3D || texType == TextureType::_2DArray)
+            {
+                // Note that CubeMapArray is not supported as a texture target in WebGL.
+                GLint dataStoreHeight = unpack.imageHeight ? unpack.imageHeight : height;
+                if (unpack.skipRows + height > dataStoreHeight)
+                {
+                    ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kInvalidUnpackParametersForWebGL);
+                    return false;
+                }
+            }
+        }
+    }
+
     return true;
+}
+
+Extents RoundImageAllocationExtentIfNeeded(const Context *context,
+                                           GLsizei width,
+                                           GLsizei height,
+                                           GLsizei depth)
+{
+    if (context->getLimitations().roundUp3DTextureSizeToPOTForLimit && depth > 1)
+    {
+        return Extents(gl::clampCast<GLsizei>(gl::ceilPow2(width)),
+                       gl::clampCast<GLsizei>(gl::ceilPow2(height)),
+                       gl::clampCast<GLsizei>(gl::ceilPow2(depth)));
+    }
+    return Extents(width, height, depth);
 }
 
 bool ValidImageAllocationSize(const Context *context,
@@ -1292,7 +1377,8 @@ bool ValidImageAllocationSize(const Context *context,
 {
     const InternalFormat &formatInfo = GetSizedInternalFormatInfo(sizedInternalFormat);
     GLuint allocationSize            = 0;
-    if (!formatInfo.computeImageSize(Extents(width, height, depth), samples, &allocationSize) ||
+    Extents extents = RoundImageAllocationExtentIfNeeded(context, width, height, depth);
+    if (!formatInfo.computeImageSize(extents, samples, &allocationSize) ||
         allocationSize > context->getLimitations().maxTextureBytes)
     {
         ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kTextureSizeLimitation);
@@ -1385,7 +1471,7 @@ bool ValidateDrawArraysTransformFeedbackBufferSize(const Context *context,
             executable && (executable->hasLinkedShaderStage(ShaderType::Geometry) ||
                            executable->hasLinkedShaderStage(ShaderType::TessEvaluation));
         TransformFeedback *curTransformFeedback = state.getCurrentTransformFeedback();
-        if (!hasGSorTS &&
+        if (!hasGSorTS && context->getClientVersion() < ES_3_2 &&
             !curTransformFeedback->checkBufferSpaceForDraw(context, counts, primcounts, drawcount))
         {
             ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, err::kTransformFeedbackBufferTooSmall);
@@ -3816,8 +3902,49 @@ bool ValidateCopyTexImageParametersBase(const Context *context,
             ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kFeedbackLoop);
             return false;
         }
+
+        if (!isSubImage && !ValidateHardenedContextTextureLevelRedefine(
+                               context, entryPoint, texture, level, width, height, 1, formatInfo))
+        {
+            // Error already generated
+            return false;
+        }
     }
 
+    return true;
+}
+
+bool ValidateHardenedContextTextureLevelRedefine(const Context *context,
+                                                 angle::EntryPoint entryPoint,
+                                                 const Texture *texture,
+                                                 GLint level,
+                                                 GLsizei width,
+                                                 GLsizei height,
+                                                 GLsizei depth,
+                                                 const InternalFormat &format)
+{
+    ASSERT(context->isHardenedContext());
+
+    // Disallow incompatible redefinition of levels when base level is not zero on hardened contexts
+    // due to widespread bugs.
+    if (texture->getState().getEffectiveBaseLevel() != 0 &&
+        !texture->getState().isCompatibleWithLevelZero(level, width, height, depth, format))
+    {
+        // Warn the application about the problematic usage.
+        context->getState().getDebug().insertMessage(
+            GL_DEBUG_SOURCE_OTHER, GL_DEBUG_TYPE_PORTABILITY, 0xBADDEF, GL_DEBUG_SEVERITY_HIGH,
+            std::string(GetEntryPointName(entryPoint)) +
+                ": Attempting to incompatibly redefine a mutable texture while base level is not "
+                "zero",
+            gl::LOG_WARN);
+        if (context->getFrontendFeatures()
+                .disallowNonZeroBaseLevelAndIncompatibleLevelsOnHardenedContexts.enabled)
+        {
+            ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION,
+                                   kIncompatibleLevelWithNonZeroBaseLevelForbidden);
+            return false;
+        }
+    }
     return true;
 }
 
@@ -7327,6 +7454,34 @@ bool ValidateTexParameterBase(const Context *context,
                 ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kBaseLevelNonZero);
                 return false;
             }
+            // Disallow base level changes if the texture has incompatible levels on hardened
+            // contexts due to widespread bugs.
+            if (context->isHardenedContext() && static_cast<GLuint>(params[0]) != 0)
+            {
+                bool anyIncompatibleLevel = false;
+                const GLuint maxLevel =
+                    texture->getState().getMaxPossibleMipmapLevelsFromLevelZero();
+                const uint32_t compatibleLevels =
+                    texture->getState().getCompatibleLevelCount(0, maxLevel, &anyIncompatibleLevel);
+                if (anyIncompatibleLevel || static_cast<GLuint>(params[0]) >= compatibleLevels ||
+                    texture->getState().anyLevelsDefinedAtOrAbove(compatibleLevels, maxLevel))
+                {
+                    context->getState().getDebug().insertMessage(
+                        GL_DEBUG_SOURCE_OTHER, GL_DEBUG_TYPE_PORTABILITY, 0xBADBA5E,
+                        GL_DEBUG_SEVERITY_HIGH,
+                        std::string(GetEntryPointName(entryPoint)) +
+                            ": Attempting to change base level while the mutable texture is "
+                            "inconsistently defined",
+                        gl::LOG_WARN);
+                    if (context->getFrontendFeatures()
+                            .disallowNonZeroBaseLevelAndIncompatibleLevelsOnHardenedContexts
+                            .enabled)
+                    {
+                        ANGLE_VALIDATION_ERROR(GL_INVALID_OPERATION, kBaseLevelNonZeroForbidden);
+                        return false;
+                    }
+                }
+            }
             break;
 
         case GL_TEXTURE_MAX_LEVEL:
@@ -8233,8 +8388,9 @@ bool ValidateTexStorage(const Context *context,
     // Make sure computeImageSize sets expectedImageSize.
     GLuint expectedImageSize = std::numeric_limits<GLuint>::max();
     {
-        const bool isSizeValid = internalFormatInfo.computeImageSize(Extents(width, height, depth),
-                                                                     0, &expectedImageSize);
+        Extents extents = RoundImageAllocationExtentIfNeeded(context, width, height, depth);
+        const bool isSizeValid =
+            internalFormatInfo.computeImageSize(extents, 0, &expectedImageSize);
         if (ANGLE_UNLIKELY(!isSizeValid ||
                            expectedImageSize > context->getLimitations().maxTextureBytes))
         {

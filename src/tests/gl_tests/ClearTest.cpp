@@ -4465,6 +4465,35 @@ TEST_P(ClearTestES3, RepeatedColorClearWithDrawInBetween)
     ASSERT_GL_NO_ERROR();
 }
 
+// Test that reclearing color to the same value works after draw, clear, and invalidate.
+TEST_P(ClearTestES3, DrawClearInvalidateClear)
+{
+    GLTexture texture;
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, getWindowWidth(), getWindowHeight());
+
+    GLFramebuffer fbo;
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    ASSERT_GL_FRAMEBUFFER_COMPLETE(GL_FRAMEBUFFER);
+
+    ANGLE_GL_PROGRAM(drawRed, essl1_shaders::vs::Simple(), essl1_shaders::fs::Red());
+    drawQuad(drawRed, essl1_shaders::PositionAttrib(), 0.5f);
+
+    glClearColor(0.0f, 0.0f, 1.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    const GLenum discard = GL_COLOR_ATTACHMENT0;
+    glInvalidateFramebuffer(GL_FRAMEBUFFER, 1, &discard);
+
+    glClearColor(0.0f, 0.0f, 1.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::blue);
+
+    ASSERT_GL_NO_ERROR();
+}
+
 // Test that reclearing depth to the same value works if depth was written to in between with a draw
 // call.
 TEST_P(ClearTestES3, RepeatedDepthClearWithDrawInBetween)
@@ -5494,6 +5523,37 @@ TEST_P(ClearTextureEXTTest, Clear3DLayers)
         glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, 0, z);
         EXPECT_PIXEL_RECT_EQ(0, 0, kWidth, kHeight, clearColors[z]);
     }
+}
+
+// Test that clearing a non-zero slice of a 3D texture and blending into it works.
+TEST_P(ClearTextureEXTTest, Clear3DLayerThenBlend)
+{
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_clear_texture"));
+    constexpr uint32_t kWidth  = 51;
+    constexpr uint32_t kHeight = 71;
+    constexpr uint32_t kDepth  = 7;
+    constexpr uint32_t kSlice  = 3;
+
+    GLTexture texture;
+    glBindTexture(GL_TEXTURE_3D, texture);
+    glTexStorage3D(GL_TEXTURE_3D, 1, GL_RGBA8, kWidth, kHeight, kDepth);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAX_LEVEL, 0);
+
+    glClearTexSubImageEXT(texture, 0, 0, 0, kSlice, kWidth, kHeight, 1, GL_RGBA, GL_UNSIGNED_BYTE,
+                          &GLColor::red);
+
+    GLFramebuffer fbo;
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, 0, kSlice);
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE);
+
+    ANGLE_GL_PROGRAM(drawGreen, essl1_shaders::vs::Simple(), essl1_shaders::fs::Green());
+    drawQuad(drawGreen, essl1_shaders::PositionAttrib(), 0.95f);
+
+    EXPECT_PIXEL_RECT_EQ(0, 0, kWidth, kHeight, GLColor::yellow);
+    ASSERT_GL_NO_ERROR();
 }
 
 // Test that clearing slices of a 3D texture with dimensions of zero does not change it.
@@ -6592,6 +6652,49 @@ TEST_P(ClearTextureEXTTestES31Renderable, ClearMultisample)
             ASSERT(false);
     }
     testMS();
+}
+
+TEST_P(ClearTest, ClearThenSubImageUploadBeforeDraw)
+{
+    constexpr GLsizei kSize = 64;
+
+    GLTexture tex;
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, kSize, kSize, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+    GLFramebuffer fbo;
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    ASSERT_GL_FRAMEBUFFER_COMPLETE(GL_FRAMEBUFFER);
+
+    glViewport(0, 0, kSize, kSize);
+    glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    // Upload green into a sub-region in the top half so that it partially overlaps with the
+    // subsequent draw in the top-right quadrant.
+    constexpr GLint kSubX        = kSize / 4;
+    constexpr GLint kSubY        = kSize / 2;
+    constexpr GLsizei kSubWidth  = kSize / 2;
+    constexpr GLsizei kSubHeight = kSize / 2;
+    std::vector<GLColor> greenSubRegion(kSubWidth * kSubHeight, GLColor::green);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, kSubX, kSubY, kSubWidth, kSubHeight, GL_RGBA,
+                    GL_UNSIGNED_BYTE, greenSubRegion.data());
+
+    ANGLE_GL_PROGRAM(drawBlue, essl1_shaders::vs::Simple(), essl1_shaders::fs::Blue());
+    glViewport(kSize / 2, kSize / 2, kSize / 2, kSize / 2);
+    drawQuad(drawBlue, essl1_shaders::PositionAttrib(), 0.5f);
+    ASSERT_GL_NO_ERROR();
+
+    // Bottom half and top-left strip outside both the sub-image and the draw remain red.
+    EXPECT_PIXEL_RECT_EQ(0, 0, kSize, kSubY, GLColor::red);
+    EXPECT_PIXEL_RECT_EQ(0, kSubY, kSubX, kSubHeight, GLColor::red);
+    // Non-overlapping left half of the sub-image upload remains green.
+    EXPECT_PIXEL_RECT_EQ(kSubX, kSubY, kSize / 2 - kSubX, kSubHeight, GLColor::green);
+    // Top-right quadrant (including the right half of the sub-image upload) is overwritten by blue.
+    EXPECT_PIXEL_RECT_EQ(kSize / 2, kSubY, kSize / 2, kSubHeight, GLColor::blue);
 }
 
 ANGLE_INSTANTIATE_TEST_ES2_AND_ES3_AND(

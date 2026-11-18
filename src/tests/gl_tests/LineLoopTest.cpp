@@ -4,7 +4,9 @@
 // found in the LICENSE file.
 //
 
-#include "common/unsafe_buffers.h"
+#include <array>
+
+#include "common/span.h"
 #include "test_utils/ANGLETest.h"
 
 #include "test_utils/gl_raii.h"
@@ -46,7 +48,7 @@ class LineLoopTest : public ANGLETest<>
 
     void checkPixels()
     {
-        std::vector<GLubyte> pixels(getWindowWidth() * getWindowHeight() * 4);
+        std::vector<GLColor> pixels(getWindowWidth() * getWindowHeight());
         glReadPixels(0, 0, getWindowWidth(), getWindowHeight(), GL_RGBA, GL_UNSIGNED_BYTE,
                      &pixels[0]);
 
@@ -56,14 +58,11 @@ class LineLoopTest : public ANGLETest<>
         {
             for (int x = 0; x < getWindowWidth(); x++)
             {
-                const GLubyte *pixel =
-                    ANGLE_UNSAFE_TODO(&pixels[0] + ((y * getWindowWidth() + x) * 4));
+                const GLColor &pixel = pixels[y * getWindowWidth() + x];
 
-                EXPECT_EQ(pixel[0], 0) << "Failed at " << x << ", " << y << std::endl;
-                ANGLE_UNSAFE_TODO(EXPECT_EQ(pixel[1], pixel[2]))
-                    << "Failed at " << x << ", " << y << std::endl;
-                ANGLE_UNSAFE_TODO(ASSERT_EQ(pixel[3], 255))
-                    << "Failed at " << x << ", " << y << std::endl;
+                EXPECT_EQ(pixel.R, 0) << "Failed at " << x << ", " << y << std::endl;
+                EXPECT_EQ(pixel.G, pixel.B) << "Failed at " << x << ", " << y << std::endl;
+                ASSERT_EQ(pixel.A, 255) << "Failed at " << x << ", " << y << std::endl;
             }
         }
     }
@@ -198,8 +197,8 @@ TEST_P(LineLoopTest, LineLoopUByteIndicesBlend)
     // This doesn't occur on Windows 10 (Version 1511) though.
     ignoreD3D11SDKLayersWarnings();
 
-    static const GLubyte indices[] = {0, 7, 6, 9, 8, 0};
-    runTestBlend(GL_UNSIGNED_BYTE, 0, ANGLE_UNSAFE_TODO(indices + 1));
+    static const std::array<GLubyte, 6> indices = {0, 7, 6, 9, 8, 0};
+    runTestBlend(GL_UNSIGNED_BYTE, 0, &indices[1]);
 }
 
 // Line loop test that draws a loop and a strip, blends the colors, and checks they're correct. No
@@ -209,8 +208,8 @@ TEST_P(LineLoopTest, LineLoopUShortIndicesBlend)
     // http://anglebug.com/42265165: Disable D3D11 SDK Layers warnings checks.
     ignoreD3D11SDKLayersWarnings();
 
-    static const GLushort indices[] = {0, 7, 6, 9, 8, 0};
-    runTestBlend(GL_UNSIGNED_SHORT, 0, ANGLE_UNSAFE_TODO(indices + 1));
+    static const std::array<GLushort, 6> indices = {0, 7, 6, 9, 8, 0};
+    runTestBlend(GL_UNSIGNED_SHORT, 0, &indices[1]);
 }
 
 // Line loop test that draws a loop and a strip, blends the colors, and checks they're correct. No
@@ -225,8 +224,8 @@ TEST_P(LineLoopTest, LineLoopUIntIndicesBlend)
     // http://anglebug.com/42265165: Disable D3D11 SDK Layers warnings checks.
     ignoreD3D11SDKLayersWarnings();
 
-    static const GLuint indices[] = {0, 7, 6, 9, 8, 0};
-    runTestBlend(GL_UNSIGNED_INT, 0, ANGLE_UNSAFE_TODO(indices + 1));
+    static const std::array<GLuint, 6> indices = {0, 7, 6, 9, 8, 0};
+    runTestBlend(GL_UNSIGNED_INT, 0, &indices[1]);
 }
 
 // Line loop test that draws a loop and a strip, blends the colors, and checks they're correct.
@@ -291,8 +290,8 @@ TEST_P(LineLoopTest, LineLoopUByteIndicesNoBlend)
     // This doesn't occur on Windows 10 (Version 1511) though.
     ignoreD3D11SDKLayersWarnings();
 
-    static const GLubyte indices[] = {0, 7, 6, 9, 8, 0};
-    runTestNoBlend(GL_UNSIGNED_BYTE, 0, ANGLE_UNSAFE_TODO(indices + 1));
+    static const std::array<GLubyte, 6> indices = {0, 7, 6, 9, 8, 0};
+    runTestNoBlend(GL_UNSIGNED_BYTE, 0, &indices[1]);
 }
 
 // Line loop test that draws a loop, reads it, then a strip, reads it, and confirms the pixels are
@@ -302,8 +301,8 @@ TEST_P(LineLoopTest, LineLoopUShortIndicesNoBlend)
     // http://anglebug.com/42265165: Disable D3D11 SDK Layers warnings checks.
     ignoreD3D11SDKLayersWarnings();
 
-    static const GLushort indices[] = {0, 7, 6, 9, 8, 0};
-    runTestNoBlend(GL_UNSIGNED_SHORT, 0, ANGLE_UNSAFE_TODO(indices + 1));
+    static const std::array<GLushort, 6> indices = {0, 7, 6, 9, 8, 0};
+    runTestNoBlend(GL_UNSIGNED_SHORT, 0, &indices[1]);
 }
 
 // Line loop test that draws a loop, reads it, then a strip, reads it, and confirms the pixels are
@@ -318,8 +317,8 @@ TEST_P(LineLoopTest, LineLoopUIntIndicesNoBlend)
     // http://anglebug.com/42265165: Disable D3D11 SDK Layers warnings checks.
     ignoreD3D11SDKLayersWarnings();
 
-    static const GLuint indices[] = {0, 7, 6, 9, 8, 0};
-    runTestNoBlend(GL_UNSIGNED_INT, 0, ANGLE_UNSAFE_TODO(indices + 1));
+    static const std::array<GLuint, 6> indices = {0, 7, 6, 9, 8, 0};
+    runTestNoBlend(GL_UNSIGNED_INT, 0, &indices[1]);
 }
 
 // Line loop test that draws a loop, reads it, then a strip, reads it, and confirms the pixels are
@@ -962,14 +961,14 @@ void main()
     ASSERT_GL_NO_ERROR();
 
     // clang-format off
-    constexpr GLfloat vertices[] = {
+    constexpr auto vertices = std::to_array<GLfloat>({
         0.1, 0.1, -0.1, 0.1, -0.1, -0.1, 0.1, -0.1,
         0.1, 0.1, -0.1, 0.1, -0.1, -0.1, 0.1, -0.1,
         0.1, 0.1, -0.1, 0.1, -0.1, -0.1, 0.1, -0.1,
         0.1, 0.1, -0.1, 0.1, -0.1, -0.1, 0.1, -0.1,
-    };
+    });
 
-    constexpr GLfloat transform[] = {
+    constexpr auto transform = std::to_array<GLfloat>({
         // first loop transform
         0, 0, 9,
         0, 0, 9,
@@ -990,7 +989,7 @@ void main()
         -0.8, -0.5, 1,
         -0.8, -0.5, 1,
         -0.8, -0.5, 1,
-    };
+    });
 
     constexpr GLushort lineloopAsStripIndices[] = {
         // first strip
@@ -1028,9 +1027,8 @@ void main()
 
     for (int loop = 0; loop < 4; ++loop)
     {
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, ANGLE_UNSAFE_TODO(vertices + 8 * loop));
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0,
-                              ANGLE_UNSAFE_TODO(transform + 12 * loop));
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, &vertices[8 * loop]);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, &transform[12 * loop]);
 
         glDrawElements(GL_LINE_STRIP, 5, GL_UNSIGNED_SHORT, lineloopAsStripIndices);
     }
@@ -1050,12 +1048,12 @@ void main()
                  lineloopWithRestartIndices, GL_STATIC_DRAW);
 
     glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer[0]);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices.data(), GL_STATIC_DRAW);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
 
     glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer[1]);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(transform), transform, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(transform), transform.data(), GL_STATIC_DRAW);
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, 0);
 
@@ -1147,14 +1145,14 @@ void main()
     ASSERT_GL_NO_ERROR();
 
     // clang-format off
-    constexpr GLfloat vertices[] = {
+    constexpr auto vertices = std::to_array<GLfloat>({
         0.1, 0.1, -0.1, 0.1, -0.1, -0.1, 0.1, -0.1,
         0.4, 0.1, -0.5, 0.1, -0.6, -0.1, 0.7, -0.1,
         0.8, 0.1, -0.9, 0.1, -1.0, -0.1, 1.1, -0.1,
         0.1, 0.1, -0.1, 0.1, -0.1, -0.1, 0.1, -0.1,
-    };
+    });
 
-    constexpr GLfloat transform[] = {
+    constexpr auto transform = std::to_array<GLfloat>({
         // first loop transform
         0, 0, 9,
         0, 0, 9,
@@ -1175,7 +1173,7 @@ void main()
         -0.8, -0.5, 1,
         -0.8, -0.5, 1,
         -0.8, -0.5, 1,
-    };
+    });
 
     constexpr GLushort lineloopAsStripIndices[] = {
         // first strip
@@ -1210,9 +1208,8 @@ void main()
 
     for (int loop = 1; loop < 3; ++loop)
     {
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, ANGLE_UNSAFE_TODO(vertices + 8 * loop));
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0,
-                              ANGLE_UNSAFE_TODO(transform + 12 * loop));
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, &vertices[8 * loop]);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, &transform[12 * loop]);
 
         glDrawElements(GL_LINE_STRIP, 5, GL_UNSIGNED_SHORT, lineloopAsStripIndices);
     }
@@ -1232,19 +1229,18 @@ void main()
                  lineloopWithRestartIndices, GL_STATIC_DRAW);
 
     glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer[0]);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices.data(), GL_STATIC_DRAW);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
 
     glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer[1]);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(transform), transform, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(transform), transform.data(), GL_STATIC_DRAW);
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, 0);
 
     // For xfb
-    const GLfloat expected[16] = {0.4, -0.5, -0.5, -0.6, -0.6, 0.7, 0.7, 0.4,
-                                  0.8, -0.9, -0.9, -1.0, -1.0, 1.1, 1.1, 0.8};
-    unsigned expected_count    = sizeof(expected) / sizeof(expected[0]);
+    const std::array<GLfloat, 16> expected = {0.4, -0.5, -0.5, -0.6, -0.6, 0.7, 0.7, 0.4,
+                                              0.8, -0.9, -0.9, -1.0, -1.0, 1.1, 1.1, 0.8};
     GLuint xfbBuffer;
     glGenBuffers(1, &xfbBuffer);
     glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER, xfbBuffer);
@@ -1273,19 +1269,10 @@ void main()
         }
     }
 
-    GLfloat *mappedBufferData = nullptr;
     glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER, xfbBuffer);
-    mappedBufferData = (GLfloat *)glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
-                                                   sizeof(expected), GL_MAP_READ_BIT);
-    if (mappedBufferData != nullptr)
-    {
-        for (unsigned j = 0; j < expected_count; j++)
-        {
-            ANGLE_UNSAFE_TODO(EXPECT_EQ(mappedBufferData[j], expected[j]))
-                << "Expected pixel at " << j << " to be " << ANGLE_UNSAFE_TODO(expected[j])
-                << std::endl;
-        }
-    }
+    auto mappedBufferData = MapBufferRange<const GLfloat>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                          sizeof(expected), GL_MAP_READ_BIT);
+    EXPECT_EQ(Span(expected), mappedBufferData);
 
     ASSERT_GL_NO_ERROR();
 }
@@ -1685,7 +1672,7 @@ TEST_P(LineLoopIndirectTest, IndirectAndElementDrawsShareIndexBuffer)
     glBindVertexArray(0);
 
     // Check pixels.
-    std::vector<GLubyte> pixels(getWindowWidth() * getWindowHeight() * 4);
+    std::vector<GLColor> pixels(getWindowWidth() * getWindowHeight());
     glReadPixels(0, 0, getWindowWidth(), getWindowHeight(), GL_RGBA, GL_UNSIGNED_BYTE, &pixels[0]);
     ASSERT_GL_NO_ERROR();
 
@@ -1693,24 +1680,19 @@ TEST_P(LineLoopIndirectTest, IndirectAndElementDrawsShareIndexBuffer)
     {
         for (int x = 0; x < getWindowWidth() / 2; x++)
         {
-            const GLubyte *pixel = ANGLE_UNSAFE_TODO(&pixels[0] + ((y * getWindowWidth() + x) * 4));
+            const GLColor &pixel = pixels[y * getWindowWidth() + x];
 
-            ANGLE_UNSAFE_TODO(EXPECT_TRUE(pixel[0] == pixel[2]))
-                << "Failed at " << x << ", " << y << std::endl;
-            ANGLE_UNSAFE_TODO(EXPECT_TRUE(pixel[1] == 0))
-                << "Failed at " << x << ", " << y << std::endl;
-            ANGLE_UNSAFE_TODO(ASSERT_EQ(pixel[3], 255))
-                << "Failed at " << x << ", " << y << std::endl;
+            EXPECT_TRUE(pixel.R == pixel.B) << "Failed at " << x << ", " << y << std::endl;
+            EXPECT_TRUE(pixel.G == 0) << "Failed at " << x << ", " << y << std::endl;
+            ASSERT_EQ(pixel.A, 255) << "Failed at " << x << ", " << y << std::endl;
         }
         for (int x = getWindowWidth() / 2; x < getWindowWidth(); x++)
         {
-            const GLubyte *pixel = ANGLE_UNSAFE_TODO(&pixels[0] + ((y * getWindowWidth() + x) * 4));
+            const GLColor &pixel = pixels[y * getWindowWidth() + x];
 
-            EXPECT_TRUE(pixel[0] == 0) << "Failed at " << x << ", " << y << std::endl;
-            ANGLE_UNSAFE_TODO(EXPECT_TRUE(pixel[1] == pixel[2]))
-                << "Failed at " << x << ", " << y << std::endl;
-            ANGLE_UNSAFE_TODO(ASSERT_EQ(pixel[3], 255))
-                << "Failed at " << x << ", " << y << std::endl;
+            EXPECT_TRUE(pixel.R == 0) << "Failed at " << x << ", " << y << std::endl;
+            EXPECT_TRUE(pixel.G == pixel.B) << "Failed at " << x << ", " << y << std::endl;
+            ASSERT_EQ(pixel.A, 255) << "Failed at " << x << ", " << y << std::endl;
         }
     }
 }
@@ -1773,8 +1755,8 @@ void main()
 
     std::vector<GLfloat> initialData(expected.size(), 0.0);
     glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER, xfbBuffer);
-    glBufferData(GL_TRANSFORM_FEEDBACK_BUFFER, expected.size() * sizeof(GLfloat),
-                 initialData.data(), GL_STATIC_READ);
+    glBufferData(GL_TRANSFORM_FEEDBACK_BUFFER, Span(expected).size_bytes(), initialData.data(),
+                 GL_STATIC_READ);
     glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, xfbBuffer);
     ASSERT_GL_NO_ERROR();
 
@@ -1805,13 +1787,10 @@ void main()
 
     glEndTransformFeedback();
     glBindBuffer(GL_TRANSFORM_FEEDBACK_BUFFER, xfbBuffer);
-    GLfloat *mapped = (GLfloat *)glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
-                                                  expected.size() * sizeof(float), GL_MAP_READ_BIT);
+    auto mapped = MapBufferRange<const GLfloat>(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
+                                                Span(expected).size_bytes(), GL_MAP_READ_BIT);
     ASSERT_GL_NO_ERROR();
-    for (size_t i = 0; i < expected.size(); i++)
-    {
-        ANGLE_UNSAFE_TODO(EXPECT_EQ(mapped[i], expected[i]));
-    }
+    EXPECT_EQ(Span(expected), mapped);
 }
 ANGLE_INSTANTIATE_TEST_ES2_AND(LineLoopTest,
                                ES2_OPENGLES().enable(Feature::ForcePassthroughShaders));

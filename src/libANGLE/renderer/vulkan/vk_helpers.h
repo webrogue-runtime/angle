@@ -969,6 +969,7 @@ class BufferHelper : public ReadWriteResource
                            VkAccessFlags readAccessType,
                            VkPipelineStageFlags readPipelineStageFlags,
                            PipelineStage stageIndex,
+                           const GLbitfield memoryBarrierBits,
                            PipelineBarrierArray *pipelineBarriers,
                            EventBarrierArray *eventBarriers,
                            RefCountedEventCollector *eventCollector);
@@ -978,6 +979,7 @@ class BufferHelper : public ReadWriteResource
                             VkPipelineStageFlags writeStage,
                             PipelineStage stageIndex,
                             const QueueSerial &queueSerial,
+                            const GLbitfield memoryBarrierBits,
                             PipelineBarrierArray *pipelineBarriers,
                             EventBarrierArray *eventBarriers,
                             RefCountedEventCollector *eventCollector);
@@ -1073,7 +1075,7 @@ class BufferHelper : public ReadWriteResource
         {
             mXFBOrComputeWriteHeuristicBits |= 1;
         }
-        else if ((writeStage == PipelineStage::ComputeShader) && hasVertexInputRead &&
+        else if (writeStage == PipelineStage::ComputeShader && hasVertexInputRead &&
                  context->getFeatures().isVertexSyncDeferred.enabled)
         {
             // When a buffer is written in compute after read in vertex stage, using vkEvent
@@ -1181,9 +1183,6 @@ class BufferPool : angle::NonCopyable
     // Tracks the number of new buffers needed for suballocation since last pruneEmptyBuffers call.
     // We will use this heuristic information to decide how many empty buffers to keep around.
     size_t mNumberOfNewBuffersNeededSinceLastPrune;
-    // max size to go down the suballocation code path. Any allocation greater or equal this size
-    // will call into vulkan directly to allocate a dedicated VkDeviceMemory.
-    static constexpr size_t kMaxBufferSizeForSuballocation = 8 * 1024 * 1024;
 };
 using BufferPoolPointerArray = std::array<std::unique_ptr<BufferPool>, VK_MAX_MEMORY_TYPES>;
 
@@ -1446,7 +1445,8 @@ class CommandBufferHelperCommon : angle::NonCopyable
     void bufferWrite(Context *context,
                      VkAccessFlags writeAccessType,
                      const gl::ShaderBitSet &writeShaderStages,
-                     BufferHelper *buffer);
+                     BufferHelper *buffer,
+                     const GLbitfield memoryBarrierBits);
 
     void bufferRead(Context *context,
                     VkAccessFlags readAccessType,
@@ -1456,7 +1456,8 @@ class CommandBufferHelperCommon : angle::NonCopyable
     void bufferRead(Context *context,
                     VkAccessFlags readAccessType,
                     const gl::ShaderBitSet &readShaderStages,
-                    BufferHelper *buffer);
+                    BufferHelper *buffer,
+                    const GLbitfield memoryBarrierBits);
 
     bool usesBuffer(const BufferHelper &buffer) const
     {
@@ -1546,13 +1547,15 @@ class CommandBufferHelperCommon : angle::NonCopyable
                          VkAccessFlags writeAccessType,
                          VkPipelineStageFlags writePipelineStageFlags,
                          PipelineStage writeStage,
-                         BufferHelper *buffer);
+                         BufferHelper *buffer,
+                         const GLbitfield memoryBarrierBits);
 
     void bufferReadImpl(Context *context,
                         VkAccessFlags readAccessType,
                         VkPipelineStageFlags readPipelineStageFlags,
                         PipelineStage readStage,
-                        BufferHelper *buffer);
+                        BufferHelper *buffer,
+                        const GLbitfield memoryBarrierBits);
 
     void imageReadImpl(Context *context,
                        VkImageAspectFlags aspectFlags,
@@ -1658,7 +1661,8 @@ class OutsideRenderPassCommandBufferHelper final : public CommandBufferHelperCom
                     uint32_t layerCount,
                     VkImageAspectFlags aspectFlags,
                     ImageAccess imageAccess,
-                    ImageHelper *image);
+                    ImageHelper *image,
+                    const GLbitfield memoryBarrierBits);
 
     // Update image with this command buffer's queueSerial.
     void retainImage(Renderer *renderer, ImageHelper *image);
@@ -1912,7 +1916,8 @@ class RenderPassCommandBufferHelper final : public CommandBufferHelperCommon
                     uint32_t layerCount,
                     VkImageAspectFlags aspectFlags,
                     ImageAccess imageAccess,
-                    ImageHelper *image);
+                    ImageHelper *image,
+                    const GLbitfield memoryBarrierBits);
 
     void colorImagesDraw(gl::OwnerLevel level,
                          gl::OwnerLayer layerStart,
@@ -2287,7 +2292,11 @@ class ImageViewHelper;
 class ImageHelper final : public Resource, public angle::Subject
 {
   public:
-    ImageHelper();
+    ImageHelper(VkImageType imageType);
+    // In some cases, a deeply embedded ImageHelper cannot be given the image type.  In all such
+    // cases in the codebase, the image type is 2D.  When initializing the image, the correctness of
+    // mImageType is asserted.
+    ImageHelper() : ImageHelper(VK_IMAGE_TYPE_2D) {}
     ~ImageHelper() override;
 
     angle::Result init(ErrorContext *context,
@@ -2420,7 +2429,6 @@ class ImageHelper final : public Resource, public angle::Subject
     //
     angle::Result initStaging(ErrorContext *context,
                               bool hasProtectedContent,
-                              VkImageType imageType,
                               const VkExtent3D &extents,
                               angle::FormatID intendedFormatID,
                               angle::FormatID actualFormatID,
@@ -2800,12 +2808,12 @@ class ImageHelper final : public Resource, public angle::Subject
     // This function can be used to prevent issuing redundant layout transition commands.
     bool isReadBarrierNecessary(Renderer *renderer, ImageAccess newAccess) const;
     bool isReadSubresourceBarrierNecessary(ImageAccess newAccess,
-                                           gl::OwnerLevel levelStart,
+                                           LevelIndex levelStart,
                                            uint32_t levelCount,
                                            gl::OwnerLayer layerStart,
                                            uint32_t layerCount) const;
     bool isWriteBarrierNecessary(ImageAccess newAccess,
-                                 gl::OwnerLevel levelStart,
+                                 LevelIndex levelStart,
                                  uint32_t levelCount,
                                  gl::OwnerLayer layerStart,
                                  uint32_t layerCount) const;
@@ -2826,7 +2834,6 @@ class ImageHelper final : public Resource, public angle::Subject
                               DeviceQueueIndex newDeviceQueueIndex,
                               OutsideRenderPassCommandBuffer *commandBuffer);
 
-    // Returns true if barrier has been generated
     void updateLayoutAndBarrier(Context *context,
                                 VkImageAspectFlags aspectMask,
                                 ImageAccess newAccess,
@@ -2881,14 +2888,14 @@ class ImageHelper final : public Resource, public angle::Subject
                                         BufferHelper *dstBuffer,
                                         uint8_t **outDataPtr);
 
-    angle::Result copySurfaceImageToBuffer(DisplayVk *displayVk,
+    angle::Result copySurfaceImageToBuffer(ErrorContext *context,
                                            gl::OwnerLevel sourceLevelGL,
                                            uint32_t layerCount,
                                            gl::OwnerLayer baseLayer,
                                            const gl::Box &sourceArea,
                                            vk::BufferHelper *bufferHelperOut);
 
-    angle::Result copyBufferToSurfaceImage(DisplayVk *displayVk,
+    angle::Result copyBufferToSurfaceImage(ErrorContext *context,
                                            gl::OwnerLevel destLevelGL,
                                            uint32_t layerCount,
                                            gl::OwnerLayer baseLayer,
@@ -2953,7 +2960,7 @@ class ImageHelper final : public Resource, public angle::Subject
 
     // Mark a given subresource as written to.  The subresource is identified by [levelStart,
     // levelStart + levelCount) and [layerStart, layerStart + layerCount).
-    void onWrite(gl::OwnerLevel levelStart,
+    void onWrite(LevelIndex levelStart,
                  uint32_t levelCount,
                  gl::OwnerLayer layerStart,
                  uint32_t layerCount,
@@ -3077,8 +3084,6 @@ class ImageHelper final : public Resource, public angle::Subject
         // For ClearEmulatedChannelsOnly, mask of which channels to clear.
         VkColorComponentFlags colorMaskFlags;
     };
-    ANGLE_DISABLE_STRUCT_PADDING_WARNINGS
-    ANGLE_ENABLE_STRUCT_PADDING_WARNINGS
     struct ClearPartialUpdate
     {
         bool operator==(const ClearPartialUpdate &rhs) const
@@ -3091,8 +3096,8 @@ class ImageHelper final : public Resource, public angle::Subject
         uint32_t levelIndex;
         uint32_t layerIndex;
         uint32_t layerCount;
-        VkOffset3D offset;
-        VkExtent3D extent;
+        VkOffset2D offset;
+        VkExtent2D extent;
     };
     ANGLE_DISABLE_STRUCT_PADDING_WARNINGS
     struct BufferUpdate
@@ -3128,7 +3133,7 @@ class ImageHelper final : public Resource, public angle::Subject
                           const gl::OwnerLevel levelIndex,
                           const gl::OwnerLayer layerIndex,
                           const uint32_t layerCount,
-                          const gl::Box &clearArea);
+                          const gl::Rectangle &clearArea);
         SubresourceUpdate(VkImageAspectFlags aspectFlags,
                           const VkClearValue &clearValue,
                           gl::OwnerLevel level,
@@ -3247,16 +3252,16 @@ class ImageHelper final : public Resource, public angle::Subject
                                  PrimaryCommandBuffer *commandBuffer,
                                  VkSemaphore *acquireNextImageSemaphoreOut);
 
-    void setSubresourcesWrittenSinceBarrier(gl::OwnerLevel levelStart,
+    void setSubresourcesWrittenSinceBarrier(LevelIndex levelStart,
                                             uint32_t levelCount,
                                             gl::OwnerLayer layerStart,
                                             uint32_t layerCount);
 
     void resetSubresourcesWrittenSinceBarrier();
-    bool areLevelSubresourcesWrittenWithinMaskRange(uint32_t level,
+    bool areLevelSubresourcesWrittenWithinMaskRange(LevelIndex level,
                                                     ImageLayerWriteMask &layerMask) const
     {
-        return (mSubresourcesWrittenSinceBarrier[level] & layerMask) != 0;
+        return (mSubresourcesWrittenSinceBarrier[level.get()] & layerMask) != 0;
     }
 
     bool verifyNoStagedUpdates() const;
@@ -3275,6 +3280,15 @@ class ImageHelper final : public Resource, public angle::Subject
                LayerIndex baseArrayLayer,
                uint32_t layerCount,
                OutsideRenderPassCommandBuffer *commandBuffer);
+
+    angle::Result clearPartial(ContextVk *contextVk,
+                               VkImageAspectFlags aspectFlags,
+                               const VkClearValue &value,
+                               LevelIndex mipLevel,
+                               LayerIndex baseArrayLayer,
+                               uint32_t layerCount,
+                               const gl::Rectangle &clearArea,
+                               OutsideRenderPassCommandBufferHelper **commandBuffer);
 
     void clearColor(Renderer *renderer,
                     const VkClearColorValue &color,
@@ -3458,21 +3472,31 @@ class ImageHelper final : public Resource, public angle::Subject
     }
 
     void adjustLayerRange(const SubresourceUpdates &levelUpdates,
+                          const gl::OwnerLevel levelIndex,
                           gl::OwnerLayer *layerStart,
                           gl::OwnerLayer *layerEnd);
 
     // Returns true if the update's layer range exactly matches [layerIndex, layerIndex+layerCount).
+    // For 3D images, layer indicates slice.
     bool matchesLayerRange(const SubresourceUpdate &update,
+                           const gl::OwnerLevel levelIndex,
                            gl::OwnerLayer layerIndex,
                            uint32_t layerCount) const;
     // Returns true if the update is to any layer within range of [layerIndex,
     // layerIndex+layerCount).
+    // For 3D images, layer indicates slice.
     bool intersectsLayerRange(const SubresourceUpdate &update,
+                              const gl::OwnerLevel levelIndex,
                               gl::OwnerLayer layerIndex,
                               uint32_t layerCount) const;
+    // Get the layer range modified by the update.  For 3D images, layer indicates slice.
     void getDestSubresource(const SubresourceUpdate &update,
+                            const gl::OwnerLevel levelIndex,
                             gl::OwnerLayer *baseLayerOut,
                             uint32_t *layerCountOut) const;
+
+    // Make an image index that covers the entire level
+    gl::OwnerImageIndex getImageIndexForLevel(gl::OwnerLevel level);
 
     // Copy most of state and move VkImage/VkDeviceMemory from other ImageHelper. This should not be
     // used for general usage. It is specifically for stageSelfUpdate and falling back from tile
@@ -3560,6 +3584,7 @@ class ImageHelper final : public Resource, public angle::Subject
     // Track whether each subresource of VkImage has defined contents. Up to 8 layers are tracked
     // per level, above which the contents are considered unconditionally defined. Note that this is
     // only tracking VkImage. Staged update will not set this bit until it is flushed.
+    // For 3D images, tracking is done per slice.
     gl::TexLevelArray<LevelContentDefinedMask> mVkImageContentDefined;
     gl::TexLevelArray<LevelContentDefinedMask> mVkImageStencilContentDefined;
 
@@ -3575,6 +3600,9 @@ class ImageHelper final : public Resource, public angle::Subject
     bool mTileMemoryCompatible;
     // True if it actually uses tile memory.
     bool mUseTileMemory;
+    // True if the tile memory image also supports VK_IMAGE_USAGE_TRANSFER_SRC_BIT, allowing
+    // vkCmdCopyImage to be used instead of a shader-based copy during fallback.
+    bool mTileMemorySupportsTransferSrc;
 
     // Only used for swapChain images. This is set when an image is acquired and is waited on
     // by the next submission (which uses this image), at which point it is released.
@@ -3583,6 +3611,7 @@ class ImageHelper final : public Resource, public angle::Subject
     // Used to track subresource writes per level/layer. This can help parallelize writes to
     // different levels or layers of the image, such as data uploads.
     // See comment on kMaxParallelLayerWrites.
+    // Indexed by vk::LevelIndex
     gl::TexLevelArray<ImageLayerWriteMask> mSubresourcesWrittenSinceBarrier;
 };
 
@@ -3772,14 +3801,15 @@ class ImageViewHelper final : angle::NonCopyable
     // Creates a fragment shading rate view.
     angle::Result initFragmentShadingRateView(ContextVk *contextVk, ImageHelper *image);
 
-    // Return unique Serial for an imageView.
-    ImageOrBufferViewSubresourceSerial getSubresourceSerial(gl::OwnerLevel levelGL,
-                                                            uint32_t levelCount,
-                                                            gl::OwnerLayer layer,
-                                                            LayerMode layerMode) const;
+    // Return unique Serial for a write imageView. Used for framebuffer draw attachments,
+    // storage image views, and fragment shading rate attachments.
+    ImageOrBufferViewSubresourceSerial getSubresourceWriteSerial(gl::OwnerLevel levelGL,
+                                                                 uint32_t levelCount,
+                                                                 gl::OwnerLayer layer,
+                                                                 LayerMode layerMode) const;
 
-    // Return unique Serial for an imageView for a specific colorspace.
-    ImageOrBufferViewSubresourceSerial getSubresourceSerialForColorspace(
+    // Return unique Serial for a read imageView for a specific colorspace.
+    ImageOrBufferViewSubresourceSerial getSubresourceReadSerialForColorspace(
         gl::OwnerLevel levelGL,
         uint32_t levelCount,
         gl::OwnerLayer layer,
@@ -3793,6 +3823,7 @@ class ImageViewHelper final : angle::NonCopyable
     bool isImageViewGarbageEmpty() const;
 
     void release(Renderer *renderer, const ResourceUse &use);
+    void releaseReadImageViews(Renderer *renderer, const ResourceUse &use);
 
     // Helpers for colorspace state
     ImageViewColorspace getColorspaceForRead() const { return mReadColorspace; }
@@ -3990,8 +4021,13 @@ class ImageViewHelper final : angle::NonCopyable
     // Fragment shading rate view
     ImageView mFragmentShadingRateImageView;
 
-    // Serial for the image view set. getSubresourceSerial combines it with subresource info.
-    ImageOrBufferViewSerial mImageViewSerial;
+    // Serial for write image views (used for framebuffer attachments, storage images, and FSR).
+    // It remains stable as long as the underlying VkImage does not change.
+    ImageOrBufferViewSerial mWriteImageViewSerial;
+
+    // Serial for the read (sampled) image views (used by TextureVk for descriptor set caching).
+    // It is updated whenever read image views are released/recreated (e.g., on swizzle changes).
+    ImageOrBufferViewSerial mReadImageViewSerial;
 };
 
 class BufferViewHelper final : public Resource
@@ -4254,6 +4290,7 @@ class CommandResources : angle::NonCopyable
     }
     void onExternalAcquireRelease(ImageHelper *image) { onResourceAccess(image); }
     void onQueryAccess(QueryHelper *query) { onResourceAccess(query); }
+    void onResourceManualBarrier(Resource *resource) { onResourceAccess(resource); }
     void onBufferExternalAcquireRelease(BufferHelper *buffer);
 
     // The limits reflect the current maximum concurrent usage of each resource type.  ASSERTs will

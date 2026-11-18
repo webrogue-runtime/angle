@@ -669,6 +669,39 @@ bool FramebufferState::colorAttachmentsAreUniqueImages() const
             {
                 return false;
             }
+
+            // Also check if two attachments on the same texture and mip level have overlapping
+            // layer ranges. For example, glFramebufferTextureMultiviewOVR can attach a range of
+            // layers [baseViewIndex, baseViewIndex + numViews) from a 2D array texture. Even if
+            // two attachments have different baseViewIndex values (so firstAttachment !=
+            // secondAttachment), their layer ranges can still overlap (e.g. layers [0, 2) and
+            // [1, 3) both include layer 1).
+            if (firstAttachment.type() == GL_TEXTURE && secondAttachment.type() == GL_TEXTURE &&
+                firstAttachment.getResource() == secondAttachment.getResource())
+            {
+                const ImageIndex &firstIndex  = firstAttachment.getTextureImageIndex();
+                const ImageIndex &secondIndex = secondAttachment.getTextureImageIndex();
+                if (firstIndex.getLevelIndex() == secondIndex.getLevelIndex())
+                {
+                    // If either attachment covers the entire mip level rather than specific
+                    // layer(s), they must overlap.
+                    if (!firstIndex.hasLayer() || !secondIndex.hasLayer())
+                    {
+                        return false;
+                    }
+
+                    // Check whether the half-open layer intervals [firstStart, firstEnd) and
+                    // [secondStart, secondEnd) overlap.
+                    const GLint firstStart  = firstIndex.getLayerIndex();
+                    const GLint firstEnd    = firstStart + firstIndex.getLayerCount();
+                    const GLint secondStart = secondIndex.getLayerIndex();
+                    const GLint secondEnd   = secondStart + secondIndex.getLayerCount();
+                    if (firstStart < secondEnd && secondStart < firstEnd)
+                    {
+                        return false;
+                    }
+                }
+            }
         }
     }
 
@@ -793,7 +826,7 @@ void Framebuffer::onDestroy(const Context *context)
 {
     if (isDefault())
     {
-        std::ignore = unsetSurfaces(context);
+        unsetSurfaces(context);
     }
 
     for (auto &attachment : mState.mColorAttachments)
@@ -819,9 +852,9 @@ void Framebuffer::onDestroy(const Context *context)
     mImpl->destroy(context);
 }
 
-egl::Error Framebuffer::setSurfaces(const Context *context,
-                                    egl::Surface *surface,
-                                    egl::Surface *readSurface)
+void Framebuffer::setSurfaces(const Context *context,
+                              egl::Surface *surface,
+                              egl::Surface *readSurface)
 {
     // This has to be a default framebuffer.
     ASSERT(isDefault());
@@ -878,10 +911,8 @@ egl::Error Framebuffer::setSurfaces(const Context *context,
     if (surface)
     {
         mCachedStatus = FramebufferStatus::Complete();
-        ANGLE_TRY(surface->getImplementation()->attachToFramebuffer(context, this));
+        surface->getImplementation()->attachToFramebuffer(context, this);
     }
-
-    return egl::NoError();
 }
 
 void Framebuffer::setReadSurface(const Context *context, egl::Surface *readSurface)
@@ -906,7 +937,7 @@ void Framebuffer::setReadSurface(const Context *context, egl::Surface *readSurfa
     }
 }
 
-egl::Error Framebuffer::unsetSurfaces(const Context *context)
+void Framebuffer::unsetSurfaces(const Context *context)
 {
     // This has to be a default framebuffer.
     ASSERT(isDefault());
@@ -931,7 +962,7 @@ egl::Error Framebuffer::unsetSurfaces(const Context *context)
             mDirtyBits.set(DIRTY_BIT_STENCIL_ATTACHMENT);
         }
 
-        ANGLE_TRY(surface->getImplementation()->detachFromFramebuffer(context, this));
+        surface->getImplementation()->detachFromFramebuffer(this);
 
         ASSERT(mCachedStatus.value().status == GL_FRAMEBUFFER_COMPLETE);
         mCachedStatus = FramebufferStatus::Incomplete(GL_FRAMEBUFFER_UNDEFINED_OES,
@@ -947,7 +978,6 @@ egl::Error Framebuffer::unsetSurfaces(const Context *context)
 
     mState.mDefaultFramebufferReadAttachment.detach(context, mState.mFramebufferSerial);
     mState.mDefaultFramebufferReadAttachmentInitialized = false;
-    return egl::NoError();
 }
 
 angle::Result Framebuffer::setLabel(const Context *context, const std::string &label)
@@ -980,10 +1010,9 @@ bool Framebuffer::detachResourceById(Context *context, GLenum resourceType, GLui
 {
     bool found = false;
 
-    for (size_t colorIndex = 0; colorIndex < mState.mColorAttachments.size(); ++colorIndex)
+    for (FramebufferAttachment &colorAttachment : mState.mColorAttachments)
     {
-        if (detachMatchingAttachment(context, &mState.mColorAttachments[colorIndex], resourceType,
-                                     resourceId))
+        if (detachMatchingAttachment(context, &colorAttachment, resourceType, resourceId))
         {
             found = true;
         }
@@ -2232,6 +2261,11 @@ void Framebuffer::updateAttachment(const Context *context,
     onDirtyBinding->bind(resource);
     mAttachmentChangedAfterEnablingFoveation = isFoveationEnabled();
 
+    if (resource == nullptr)
+    {
+        mImpl->onAttachmentDetached(context, dirtyBit);
+    }
+
     invalidateCompletenessCache();
 }
 
@@ -2317,13 +2351,12 @@ void Framebuffer::onSubjectStateChange(angle::SubjectIndex index, angle::Subject
             return;
         }
 
+        // A texture attachment's backing native texture ID or level can change when
+        // reattachFboDepthStencilOnReallocation or virtualizeBaseLevelAndMipchain is active.
         if (message == angle::SubjectMessage::ObjectReallocated)
         {
-            if (index == DIRTY_BIT_DEPTH_ATTACHMENT || index == DIRTY_BIT_STENCIL_ATTACHMENT)
-            {
-                mDirtyBits.set(index);
-                onStateChange(angle::SubjectMessage::DirtyBitsFlagged);
-            }
+            mDirtyBits.set(index);
+            onStateChange(angle::SubjectMessage::DirtyBitsFlagged);
             return;
         }
 

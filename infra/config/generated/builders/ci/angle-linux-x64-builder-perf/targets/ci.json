@@ -100,6 +100,7 @@
           "--trials-per-sample=3",
           "--show-test-stdout"
         ],
+        "ci_only": true,
         "merge": {
           "script": "//scripts/process_angle_perf_results.py"
         },
@@ -109,8 +110,8 @@
           "containment_type": "AUTO",
           "dimensions": {
             "display_server": "x11",
-            "gpu": "10de:2184-535.183.01",
-            "os": "Ubuntu-22.04",
+            "gpu": "10de:2184-595.104.02",
+            "os": "Ubuntu-24.04",
             "pool": "chromium.tests.gpu"
           },
           "hard_timeout": 7200,
@@ -130,6 +131,7 @@
           "--show-test-stdout",
           "--use-gl=native"
         ],
+        "ci_only": true,
         "merge": {
           "script": "//scripts/process_angle_perf_results.py"
         },
@@ -139,8 +141,8 @@
           "containment_type": "AUTO",
           "dimensions": {
             "display_server": "x11",
-            "gpu": "10de:2184-535.183.01",
-            "os": "Ubuntu-22.04",
+            "gpu": "10de:2184-595.104.02",
+            "os": "Ubuntu-24.04",
             "pool": "chromium.tests.gpu"
           },
           "hard_timeout": 7200,
@@ -160,6 +162,7 @@
           "--show-test-stdout",
           "--use-angle=vulkan"
         ],
+        "ci_only": true,
         "merge": {
           "script": "//scripts/process_angle_perf_results.py"
         },
@@ -169,8 +172,8 @@
           "containment_type": "AUTO",
           "dimensions": {
             "display_server": "x11",
-            "gpu": "10de:2184-535.183.01",
-            "os": "Ubuntu-22.04",
+            "gpu": "10de:2184-595.104.02",
+            "os": "Ubuntu-24.04",
             "pool": "chromium.tests.gpu"
           },
           "hard_timeout": 7200,

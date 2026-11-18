@@ -26,7 +26,7 @@
 
 // Version number for shader translation API.
 // It is incremented every time the API changes.
-#define ANGLE_SH_VERSION 424
+#define ANGLE_SH_VERSION 433
 
 enum ShShaderSpec
 {
@@ -83,11 +83,13 @@ struct ShCompileOptionsMetal
     // Binding index for UBO's argument buffer
     int UBOArgumentBufferBindingIndex = 0;
 
-    bool generateShareableShaders = false;
+    // Use sample_compare with explicit gradients for shadow textureGrad functions. When false,
+    // the gradients are converted to an explicit level of detail.
+    bool allowSamplerCompareGradient = false;
 
-    // Insert asm("") instructions into loop bodies, telling the compiler that all loops have side
-    // effects and cannot be optimized out.
-    bool injectAsmStatementIntoLoopBodies = false;
+    // Write an all-enabled sample mask even for single-sampled rendering when the fragment shader
+    // uses derivatives.
+    bool writeHelperSampleMask = false;
 };
 
 // For ANGLE_shader_pixel_local_storage.
@@ -179,8 +181,9 @@ struct ShCompileOptions
     // If requested, validates the AST after every transformation.  Useful for debugging.
     uint64_t validateAST : 1;
 
-    // Limit the number of output varyings allowed in vertex shaders to work around driver bugs.
-    uint64_t limitOutputVaryingsTo256 : 1;
+    // Limit the number of varying components allowed in vertex shader outputs and fragment shader
+    // inputs to work around driver bugs.
+    uint64_t limitVaryingsAtCompileTime : 1;
 
     // Emits #line directives in HLSL.
     uint64_t lineDirectives : 1;
@@ -348,11 +351,13 @@ struct ShCompileOptions
     // Workaround for a driver bug with nested switches.
     uint64_t wrapSwitchInIfTrue : 1;
 
-    uint64_t unused4 : 1;
+    // Workaround for a driver bug with RelaxedPrecision on integers.  Integer values are emitted
+    // without the RelaxedPrecision decoration.
+    uint64_t avoidRelaxedPrecisionOnIntegers : 1;
 
     // This flag works around a inconsistent behavior in Mac AMD driver where gl_VertexID doesn't
-    // include base vertex value. It replaces gl_VertexID with (gl_VertexID + angle_BaseVertex) when
-    // angle_BaseVertex is available.
+    // include base vertex value. It replaces gl_VertexID with (gl_VertexID +
+    // AngleInternal_BaseVertex) when AngleInternal_BaseVertex is available.
     uint64_t addBaseVertexToVertexID : 1;
 
     // This works around the dynamic lvalue indexing of swizzled vectors on various platforms.
@@ -467,7 +472,9 @@ struct ShCompileOptions
     // Ensure all loops execute side-effects or terminate.
     uint64_t ensureLoopForwardProgress : 1;
 
-    uint64_t unused2 : 1;
+    // Limit the total number of declared variables and expanded struct/interface-block fields per
+    // shader to work around driver bugs.
+    uint64_t limitShaderVariableFieldsAtCompileTime : 1;
 
     uint64_t transformFloatUniformTo16Bits : 1;
 
@@ -935,6 +942,8 @@ const std::set<std::string> *GetUsedImage2DFunctionNames(const ShHandle handle);
 
 uint8_t GetClipDistanceArraySize(const ShHandle handle);
 uint8_t GetCullDistanceArraySize(const ShHandle handle);
+uint8_t GetInputClipDistanceArraySize(const ShHandle handle);
+uint8_t GetInputCullDistanceArraySize(const ShHandle handle);
 GLenum GetGeometryShaderInputPrimitiveType(const ShHandle handle);
 GLenum GetGeometryShaderOutputPrimitiveType(const ShHandle handle);
 int GetGeometryShaderInvocations(const ShHandle handle);
@@ -1158,7 +1167,8 @@ enum ReservedIds
 // - 1 bit for whether depth should be transformed to Vulkan clip space
 // - 1 bit for whether alpha to coverage is enabled
 // - 1 bit for whether the framebuffer is layered
-// - 9 bits unused
+// - 2 bits for the last pre-rasterization shader stage
+// - 7 bits unused
 constexpr uint32_t kDriverUniformsMiscSwapXYMask                  = 0x1;
 constexpr uint32_t kDriverUniformsMiscAdvancedBlendEquationOffset = 1;
 constexpr uint32_t kDriverUniformsMiscAdvancedBlendEquationMask   = 0x1F;
@@ -1172,6 +1182,20 @@ constexpr uint32_t kDriverUniformsMiscAlphaToCoverageOffset       = 21;
 constexpr uint32_t kDriverUniformsMiscAlphaToCoverageMask         = 0x1;
 constexpr uint32_t kDriverUniformsMiscLayeredFramebufferOffset    = 22;
 constexpr uint32_t kDriverUniformsMiscLayeredFramebufferMask      = 0x1;
+constexpr uint32_t kDriverUniformsMiscLastPreRasterizationStageOffset = 23;
+constexpr uint32_t kDriverUniformsMiscLastPreRasterizationStageMask   = 0x3;
+
+// Values of the last pre-rasterization stage field of the driver uniform's misc field.  Only the
+// gl_ClipDistance output of the last pre-rasterization stage is clipped against; the values written
+// by the earlier stages are only observable by the following stages (through gl_in).  The vertex
+// and tessellation evaluation shaders use this to zero out the disabled clip distances only when
+// they are the last stage.
+enum class LastPreRasterizationStage : uint32_t
+{
+    Vertex                 = 0,
+    TessellationEvaluation = 1,
+    Geometry               = 2,
+};
 }  // namespace vk
 
 namespace mtl
@@ -1184,12 +1208,6 @@ extern const char kRasterizerDiscardEnabledConstName[];
 
 // Specialization constant to enable depth write in fragment shaders.
 extern const char kDepthWriteEnabledConstName[];
-
-// Specialization constant to enable alpha to coverage.
-extern const char kEmulateAlphaToCoverageConstName[];
-
-// Specialization constant to write helper sample mask output.
-extern const char kWriteHelperSampleMaskConstName[];
 
 // Specialization constant to enable sample mask output.
 extern const char kSampleMaskWriteEnabledConstName[];

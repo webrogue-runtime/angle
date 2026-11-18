@@ -23,7 +23,23 @@ class ShareGroupNULL : public ShareGroupImpl
 
 class AllocationTrackerNULL;
 
-class DisplayNULL : public DisplayImpl
+class ThreadSafeDisplayNULL : public ThreadSafeDisplayImpl
+{
+  public:
+    ThreadSafeDisplayNULL()           = default;
+    ~ThreadSafeDisplayNULL() override = default;
+
+    bool testDeviceLost() override;
+    egl::Error restoreLostDevice(const egl::ThreadSafeDisplay *display) override;
+
+    egl::Error makeCurrent(egl::Surface *drawSurface,
+                           egl::Surface *readSurface,
+                           gl::Context *context) override;
+
+  private:
+};
+
+class DisplayNULL : public DisplayImpl, public ThreadSafeDisplayNULL
 {
   public:
     DisplayNULL(const egl::DisplayState &state);
@@ -32,15 +48,7 @@ class DisplayNULL : public DisplayImpl
     egl::Error initialize(egl::Display *display) override;
     void terminate() override;
 
-    egl::Error makeCurrent(egl::Display *display,
-                           egl::Surface *drawSurface,
-                           egl::Surface *readSurface,
-                           gl::Context *context) override;
-
     egl::ConfigSet generateConfigs() override;
-
-    bool testDeviceLost() override;
-    egl::Error restoreLostDevice(const egl::Display *display) override;
 
     bool isValidNativeWindow(EGLNativeWindowType window) const override;
 
@@ -85,6 +93,8 @@ class DisplayNULL : public DisplayImpl
     ShareGroupImpl *createShareGroup(const egl::ShareGroupState &state) override;
 
     void populateFeatureList(angle::FeatureList *features) override {}
+
+    ThreadSafeDisplayImpl *getThreadSafeDisplayImpl() override { return this; }
 
   private:
     void generateExtensions(egl::DisplayExtensions *outExtensions) const override;

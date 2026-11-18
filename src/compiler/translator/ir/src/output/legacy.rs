@@ -1326,7 +1326,10 @@ impl<'options> Generator<'options> {
     // For global structs, an id of 0 is always used to make sure names match across shader
     // interfaces.
     fn struct_id_to_append(name: &Name, specialization: StructSpecialization, id: u32) -> u32 {
-        if name.name.is_empty() || specialization == StructSpecialization::InterfaceBlock {
+        if name.source == NameSource::Internal
+            || name.name.is_empty()
+            || specialization == StructSpecialization::InterfaceBlock
+        {
             SYMBOL_NAME_NO_ID
         } else if name.source == NameSource::Temporary {
             id
@@ -1946,6 +1949,16 @@ impl<'options> Generator<'options> {
         }
     }
 
+    fn field_built_in_str(built_in: BuiltIn) -> &'static str {
+        match built_in {
+            BuiltIn::Position => "gl_Position",
+            BuiltIn::PointSize => "gl_PointSize",
+            BuiltIn::ClipDistance => "gl_ClipDistance",
+            BuiltIn::CullDistance => "gl_CullDistance",
+            _ => panic!("Internal error: Invalid built-in field"),
+        }
+    }
+
     fn declare_variable(
         &self,
         variable: *mut TIntermTyped,
@@ -2025,7 +2038,11 @@ impl ast::Target for Generator<'_> {
                 let fields = fields
                     .iter()
                     .map(|field| ffi::ASTFieldInfo {
-                        name: field.name.name,
+                        name: if let Some(built_in) = field.built_in {
+                            Self::field_built_in_str(built_in)
+                        } else {
+                            field.name.name
+                        },
                         base_type: self.types[&field.type_id],
                         ast_type: Self::get_ast_type(
                             ir_meta.get_shader_type(),
@@ -2033,7 +2050,7 @@ impl ast::Target for Generator<'_> {
                             field.precision,
                             field.precise,
                             &field.decorations,
-                            None,
+                            field.built_in,
                             // AST marks fields as EvqGlobal
                             true,
                         ),
@@ -2240,7 +2257,11 @@ impl ast::Target for Generator<'_> {
             && symbol_type == ffi::ASTSymbolType::Empty
         {
             for (index, field) in fields.iter().enumerate() {
-                let field_name = field.name.name;
+                let field_name = if let Some(built_in) = field.built_in {
+                    Self::field_built_in_str(built_in)
+                } else {
+                    field.name.name
+                };
                 let field_symbol_type =
                     field_symbol_type.unwrap_or_else(|| Self::legacy_symbol_type(&field.name));
 
@@ -2763,6 +2784,7 @@ impl ast::Target for Generator<'_> {
 
     fn built_in(
         &mut self,
+        _ir_meta: &IRMeta,
         block_result: &mut *mut TIntermBlock,
         result: Option<RegisterId>,
         built_in_op: BuiltInOpCode,
@@ -2927,6 +2949,9 @@ impl ast::Target for Generator<'_> {
                 }
                 BuiltInOpCode::Saturate => {
                     (Some(ffi::built_in_saturate(self.legacy_compiler, &args)), None)
+                }
+                BuiltInOpCode::ConvertFromUniformLayout => {
+                    panic!("Internal error: Unexpected WGSL opcode for legacy AST generator")
                 }
             }
         };
@@ -3370,8 +3395,12 @@ impl ast::Target for Generator<'_> {
     }
     fn branch_loop_if(&mut self, block: &mut *mut TIntermBlock, condition: TypedId) {
         // The condition block of a loop ends in `if (!condition) break;`
-        // SAFETY: Pointers are obtained from C++ and passed back to it.
-        unsafe { ffi::branch_loop_if(*block, &self.get_expression(condition)) };
+        //
+        // No-op if the condition is `true`
+        if !matches!(condition.id, Id::Constant(CONSTANT_ID_TRUE)) {
+            // SAFETY: Pointers are obtained from C++ and passed back to it.
+            unsafe { ffi::branch_loop_if(*block, &self.get_expression(condition)) };
+        }
     }
     fn branch_switch(
         &mut self,

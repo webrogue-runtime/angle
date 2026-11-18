@@ -5,7 +5,6 @@
 """Try ANGLE builders using the angle recipe."""
 
 load("@chromium-luci//builder_config.star", "builder_config")
-load("@chromium-luci//builders.star", "os")
 load("@chromium-luci//gn_args.star", "gn_args")
 load("@chromium-luci//gpu.star", "gpu")
 load("@chromium-luci//try.star", "try_")
@@ -78,13 +77,7 @@ def angle_linux_presubmit_builder(**kwargs):
         **kwargs: The keyword arguments to use to create the trybot.
     """
     kwargs = apply_cq_builder_defaults(kwargs)
-
-    # TODO(crbug.com/543082386): Switch this to a shared helper once one is
-    # added for presubmit builders.
-    kwargs.setdefault("cores", 8)
-    kwargs.setdefault("os", os.LINUX_DEFAULT)
-    kwargs.setdefault("ssd", None)
-    try_.presubmit_builder(**kwargs)
+    gpu.try_.linux_presubmit_builder(**kwargs)
 
 ## Functional testers
 
@@ -281,6 +274,11 @@ angle_win_functional_cq_tester(
             "win_cq_x64_builder_rel",
         ],
     ),
+
+    # Limit to 1 concurrent job until the Intel bots are sorted out.  b/581469521
+    # Once the broken bots are restored, this limit can be increased, but
+    # probably not back to 4 due to limited capacity: http://crbug.com/581458341
+    max_concurrent_builds = 1,
 )
 
 angle_win_msvc_functional_cq_tester(

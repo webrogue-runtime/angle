@@ -38,7 +38,7 @@ class IOSurfaceSurfaceCGL : public SurfaceGL
                         const egl::AttributeMap &attribs);
     ~IOSurfaceSurfaceCGL() override;
 
-    egl::Error initialize(const egl::Display *display) override;
+    egl::Error initialize(const egl::ThreadSafeDisplay *display) override;
     egl::Error makeCurrent(const gl::Context *context) override;
     egl::Error unMakeCurrent(const gl::Context *context) override;
 
@@ -53,7 +53,7 @@ class IOSurfaceSurfaceCGL : public SurfaceGL
                             gl::Texture *texture,
                             EGLint buffer) override;
     egl::Error releaseTexImage(const gl::Context *context, EGLint buffer) override;
-    void setSwapInterval(const egl::Display *display, EGLint interval) override;
+    void setSwapInterval(const egl::ThreadSafeDisplay *display, EGLint interval) override;
 
     gl::Extents getSize() const override;
 
@@ -64,10 +64,8 @@ class IOSurfaceSurfaceCGL : public SurfaceGL
 
     bool hasEmulatedAlphaChannel() const override;
 
-    egl::Error attachToFramebuffer(const gl::Context *context,
-                                   gl::Framebuffer *framebuffer) override;
-    egl::Error detachFromFramebuffer(const gl::Context *context,
-                                     gl::Framebuffer *framebuffer) override;
+    void attachToFramebuffer(const gl::Context *context, gl::Framebuffer *framebuffer) override;
+    void detachFromFramebuffer(gl::Framebuffer *framebuffer) override;
 
   private:
     angle::Result initializeAlphaChannel(const gl::Context *context, GLuint texture);

@@ -589,7 +589,12 @@ angle_win_msvc_parent_builder(
     ),
     targets = targets.bundle(
         additional_compile_targets = [
-            "all",
+            "angle",
+            "angle_shader_translator",
+            "angle_static",
+            "libfeature_support",
+            "libGLESv2_capture_complement",
+            "translator_fuzzer",
         ],
     ),
     gn_args = gn_args.config(
@@ -624,7 +629,12 @@ angle_win_msvc_parent_builder(
     ),
     targets = targets.bundle(
         additional_compile_targets = [
-            "all",
+            "angle",
+            "angle_shader_translator",
+            "angle_static",
+            "libfeature_support",
+            "libGLESv2_capture_complement",
+            "translator_fuzzer",
         ],
     ),
     gn_args = gn_args.config(
@@ -718,7 +728,12 @@ angle_win_msvc_parent_builder(
     ),
     targets = targets.bundle(
         additional_compile_targets = [
-            "all",
+            "angle",
+            "angle_shader_translator",
+            "angle_static",
+            "libfeature_support",
+            "libGLESv2_capture_complement",
+            "translator_fuzzer",
         ],
     ),
     gn_args = gn_args.config(
@@ -753,7 +768,12 @@ angle_win_msvc_parent_builder(
     ),
     targets = targets.bundle(
         additional_compile_targets = [
-            "all",
+            "angle",
+            "angle_shader_translator",
+            "angle_static",
+            "libfeature_support",
+            "libGLESv2_capture_complement",
+            "translator_fuzzer",
         ],
     ),
     gn_args = gn_args.config(
@@ -824,7 +844,12 @@ angle_win_msvc_parent_builder(
     ),
     targets = targets.bundle(
         additional_compile_targets = [
-            "all",
+            "angle",
+            "angle_shader_translator",
+            "angle_static",
+            "libfeature_support",
+            "libGLESv2_capture_complement",
+            "translator_fuzzer",
         ],
     ),
     gn_args = gn_args.config(
@@ -859,7 +884,12 @@ angle_win_msvc_parent_builder(
     ),
     targets = targets.bundle(
         additional_compile_targets = [
-            "all",
+            "angle",
+            "angle_shader_translator",
+            "angle_static",
+            "libfeature_support",
+            "libGLESv2_capture_complement",
+            "translator_fuzzer",
         ],
     ),
     gn_args = gn_args.config(
@@ -1403,33 +1433,20 @@ ci.thin_tester(
         run_tests_serially = True,
     ),
     targets = targets.bundle(
-        targets = [
-            "linux_real_hardware_common_gtests",
-            "linux_nvidia_only_gtests",
-            "common_isolated_scripts",
-        ],
+        targets = [],
         mixins = [
             "linux_nvidia_gtx_1660_experimental",
         ],
-        per_test_modifications = {
-            "angle_deqp_egl_vulkan_tests": targets.mixin(
-                # TODO(crbug.com/557307486): Remove this if/when these tests
-                # have been investigated regarding performance issues.
-                args = [
-                    "--batch-size=64",
-                ],
-            ),
-        },
     ),
     targets_settings = targets.settings(
         browser_config = targets.browser_config.RELEASE,
         os_type = targets.os_type.LINUX,
     ),
     # Uncomment this entry when this experimental tester is actually in use.
-    console_view_entry = consoles.console_view_entry(
-        category = "test|linux|x64|rel|exp",
-        short_name = "1660",
-    ),
+    # console_view_entry = consoles.console_view_entry(
+    #     category = "test|linux|x64|rel|exp",
+    #     short_name = "1660",
+    # ),
     list_view = "exp",
 )
 
@@ -1500,8 +1517,12 @@ ci.thin_tester(
             "linux_nvidia_gtx_1660_stable",
         ],
         per_test_modifications = {
-            "angle_deqp_egl_vulkan_tests": targets.remove(
-                reason = "Occasionally hangs the machine http://anglebug.com/368553850",
+            "angle_deqp_egl_vulkan_tests": targets.mixin(
+                # TODO(crbug.com/557307486): Remove this if/when these tests
+                # have been investigated regarding performance issues.
+                args = [
+                    "--batch-size=64",
+                ],
             ),
         },
     ),
@@ -2237,35 +2258,20 @@ ci.thin_tester(
         run_tests_serially = True,
     ),
     targets = targets.bundle(
-        targets = [
-            "common_isolated_scripts",
-            "win_common_gtests",
-            "win_nvidia_only_gtests",
-        ],
+        targets = [],
         mixins = [
             "win10_nvidia_gtx_1660_experimental",
         ],
-        per_test_modifications = {
-            "angle_end2end_tests": targets.per_test_modification(
-                mixins = targets.mixin(
-                    args = [
-                        # anglebug.com/539554093 suspecting test timeout caused
-                        # by conflicting tests.
-                        "--max-processes=2",
-                    ],
-                ),
-            ),
-        },
     ),
     targets_settings = targets.settings(
         browser_config = targets.browser_config.RELEASE,
         os_type = targets.os_type.WINDOWS,
     ),
     # Uncomment this entry when this experimental tester is actually in use.
-    console_view_entry = consoles.console_view_entry(
-        category = "test|win|x64|rel|exp",
-        short_name = "1660",
-    ),
+    # console_view_entry = consoles.console_view_entry(
+    #     category = "test|win|x64|rel|exp",
+    #     short_name = "1660",
+    # ),
     list_view = "exp",
 )
 
@@ -2335,6 +2341,20 @@ ci.thin_tester(
         mixins = [
             "win10_nvidia_gtx_1660_stable",
         ],
+        per_test_modifications = {
+            "angle_end2end_tests": targets.per_test_modification(
+                mixins = targets.mixin(
+                    args = [
+                        # anglebug.com/539554093 suspecting test timeout caused
+                        # by conflicting tests.
+                        "--max-processes=2",
+                    ],
+                    swarming = targets.swarming(
+                        shards = 6,
+                    ),
+                ),
+            ),
+        },
     ),
     targets_settings = targets.settings(
         browser_config = targets.browser_config.RELEASE,

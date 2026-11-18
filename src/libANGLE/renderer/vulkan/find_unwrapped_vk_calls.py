@@ -21,7 +21,7 @@ from typing import List, Set
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 # Path to volk.h file containing PFN_vk* function definitions
-VOLK_H_PATH = os.path.join(ROOT_DIR, "src", "third_party", "volk", "volk.h")
+VOLK_H_PATH = os.path.join(ROOT_DIR, "src", "third_party", "volk", "src", "volk.h")
 
 # Default directory to search for source files
 DEFAULT_SEARCH_DIR = os.path.join(ROOT_DIR, "src", "libANGLE", "renderer", "vulkan")
@@ -35,7 +35,7 @@ SOURCE_FILE_EXTENSIONS = ('.h', '.cpp', '.mm')
 # Wrapper macros that indicate a Vulkan call is properly wrapped
 # Note: VK_CALL is not included because it does not look like a Vulkan call. Example:
 #       VK_CALL(vkGetDeviceQueue2, device, &queueInfo2, queue);
-WRAPPER_MACROS = {'VK_CALL_WITH_GROUP', 'VK_SECONDARY_CMD_CALL'}
+WRAPPER_MACROS = {'VK_CALL_WITH_GROUP', 'VK_CALL_WITH_API', 'VK_SECONDARY_CMD_CALL'}
 
 # Timer class that indicates Vulkan calls are being timed (also considered wrapped)
 TIMER_CLASS_NAME = 'ScopedVulkanApiPerfTimer'

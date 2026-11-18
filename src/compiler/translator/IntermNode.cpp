@@ -556,9 +556,9 @@ TIntermDeclaration::TIntermDeclaration(const TIntermDeclaration &node)
 
 bool TIntermAggregateBase::replaceChildNodeInternal(TIntermNode *original, TIntermNode *replacement)
 {
-    for (size_t ii = 0; ii < getSequence()->size(); ++ii)
+    for (TIntermNode *&child : *getSequence())
     {
-        REPLACE_IF_IS((*getSequence())[ii], getAsNode, original, replacement);
+        REPLACE_IF_IS(child, getAsNode, original, replacement);
     }
     return false;
 }
@@ -881,7 +881,7 @@ const TConstantUnion *TIntermAggregate::getConstantValue() const
         // http://crbug.com/498400132
         angle::base::CheckedNumeric<size_t> checkedArraySize = elementSize;
         checkedArraySize *= getOutermostArraySize();
-        constArray = new TConstantUnion[checkedArraySize.ValueOrDie()];
+        constArray = new TConstantUnion[static_cast<size_t>(checkedArraySize.ValueOrDie())];
 
         size_t elementOffset = 0u;
         for (TIntermNode *constructorArg : mArguments)
@@ -1930,7 +1930,17 @@ void TIntermBinary::promote()
             const TFieldList &fields = mLeft->getType().getInterfaceBlock()->fields();
             const int fieldIndex     = mRight->getAsConstantUnion()->getIConst(0);
             setType(*fields[fieldIndex]->type());
-            getTypePointer()->setQualifier(resultQualifier);
+            // Preserve clip/cull distance qualifiers so .length() isn't folded before the array
+            // size is final.
+            TQualifier fieldQualifier = fields[fieldIndex]->type()->getQualifier();
+            if (fieldQualifier == EvqClipDistance || fieldQualifier == EvqCullDistance)
+            {
+                getTypePointer()->setQualifier(fieldQualifier);
+            }
+            else
+            {
+                getTypePointer()->setQualifier(resultQualifier);
+            }
             return;
         }
         default:
@@ -3025,7 +3035,7 @@ TConstantUnion *TIntermConstantUnion::foldUnaryNonComponentWise(TOperator op)
         {
             ASSERT(getType().getBasicType() == EbtUInt);
             resultArray = new TConstantUnion[4];
-            float f[4];
+            std::array<float, 4> f;
             gl::UnpackUnorm4x8(operandArray[0].getUConst(), f);
             for (size_t i = 0; i < 4; ++i)
             {
@@ -3037,7 +3047,7 @@ TConstantUnion *TIntermConstantUnion::foldUnaryNonComponentWise(TOperator op)
         {
             ASSERT(getType().getBasicType() == EbtUInt);
             resultArray = new TConstantUnion[4];
-            float f[4];
+            std::array<float, 4> f;
             gl::UnpackSnorm4x8(operandArray[0].getUConst(), f);
             for (size_t i = 0; i < 4; ++i)
             {

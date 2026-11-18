@@ -23,7 +23,7 @@
 namespace egl
 {
 EGLint ClientWaitSyncKHR(Thread *thread,
-                         Display *display,
+                         ThreadSafeDisplay *display,
                          Sync *syncObject,
                          EGLint flags,
                          EGLTimeKHR timeout)
@@ -61,13 +61,11 @@ EGLint ClientWaitSyncKHR(Thread *thread,
 
 EGLImageKHR CreateImageKHR(Thread *thread,
                            Display *display,
-                           gl::ContextID contextID,
+                           gl::Context *context,
                            EGLenum target,
                            EGLClientBuffer buffer,
                            const AttributeMap &attributes)
 {
-    gl::Context *context = display->getContext(contextID);
-
     Image *image = nullptr;
     ANGLE_EGL_TRY_RETURN(thread, display->createImage(context, target, buffer, attributes, &image),
                          "", display, EGL_NO_IMAGE);
@@ -106,14 +104,8 @@ EGLSurface CreatePlatformWindowSurfaceEXT(Thread *thread,
 {
     Surface *surface = nullptr;
 
-    // In X11, eglCreatePlatformWindowSurfaceEXT expects the native_window argument to be a pointer
-    // to a Window while the EGLNativeWindowType for X11 is its actual value.
-    // https://www.khronos.org/registry/EGL/extensions/KHR/EGL_KHR_platform_x11.txt
-    void *actualNativeWindow =
-        display->getImplementation()->getWindowSystem() == angle::NativeWindowSystem::X11
-            ? *reinterpret_cast<void **>(native_window)
-            : native_window;
-    EGLNativeWindowType nativeWindow = reinterpret_cast<EGLNativeWindowType>(actualNativeWindow);
+    EGLNativeWindowType nativeWindow =
+        display->getNativeWindowForCreatePlatformWindowSurface(native_window);
 
     ANGLE_EGL_TRY_RETURN(
         thread, display->createWindowSurface(configPacked, nativeWindow, attributes, &surface),
@@ -133,7 +125,7 @@ EGLStreamKHR CreateStreamKHR(Thread *thread, Display *display, const AttributeMa
 }
 
 EGLSyncKHR CreateSyncKHR(Thread *thread,
-                         Display *display,
+                         ThreadSafeDisplay *display,
                          EGLenum type,
                          const AttributeMap &attributes)
 {
@@ -175,15 +167,15 @@ EGLBoolean DestroyStreamKHR(Thread *thread, Display *display, Stream *streamObje
     return EGL_TRUE;
 }
 
-EGLBoolean DestroySyncKHR(Thread *thread, Display *display, Sync *syncObject)
+EGLBoolean DestroySyncKHR(Thread *thread, ThreadSafeDisplay *display, Sync *syncObject)
 {
-    display->destroySync(syncObject);
+    display->releaseSync(syncObject);
 
     thread->setSuccess();
     return EGL_TRUE;
 }
 
-EGLint DupNativeFenceFDANDROID(Thread *thread, Display *display, Sync *syncObject)
+EGLint DupNativeFenceFDANDROID(Thread *thread, ThreadSafeDisplay *display, Sync *syncObject)
 {
     EGLint result = EGL_NO_NATIVE_FENCE_FD_ANDROID;
     ANGLE_EGL_TRY_RETURN(thread, syncObject->dupNativeFenceFD(display, &result),
@@ -228,7 +220,7 @@ EGLDisplay GetPlatformDisplayEXT(Thread *thread,
 }
 
 EGLBoolean GetSyncAttribKHR(Thread *thread,
-                            Display *display,
+                            ThreadSafeDisplay *display,
                             Sync *syncObject,
                             EGLint attribute,
                             EGLint *value)
@@ -256,19 +248,17 @@ EGLint LabelObjectKHR(Thread *thread,
 }
 
 EGLBoolean PostSubBufferNV(Thread *thread,
-                           Display *display,
-                           SurfaceID surfaceID,
+                           ThreadSafeDisplay *display,
+                           Surface *eglSurface,
                            EGLint x,
                            EGLint y,
                            EGLint width,
                            EGLint height)
 {
-    Surface *eglSurface = display->getSurface(surfaceID);
-
     Error error = eglSurface->postSubBuffer(thread->getContext(), x, y, width, height);
     if (error.isError())
     {
-        thread->setError(error, "eglPostSubBufferNV", GetSurfaceIfValid(display, surfaceID));
+        thread->setError(error, "eglPostSubBufferNV", eglSurface);
         return EGL_FALSE;
     }
 
@@ -277,85 +267,71 @@ EGLBoolean PostSubBufferNV(Thread *thread,
 }
 
 EGLBoolean PresentationTimeANDROID(Thread *thread,
-                                   Display *display,
-                                   SurfaceID surfaceID,
+                                   ThreadSafeDisplay *display,
+                                   Surface *eglSurface,
                                    EGLnsecsANDROID time)
 {
-    Surface *eglSurface = display->getSurface(surfaceID);
-
     ANGLE_EGL_TRY_RETURN(thread, eglSurface->setPresentationTime(time),
-                         "eglPresentationTimeANDROID", GetSurfaceIfValid(display, surfaceID),
-                         EGL_FALSE);
+                         "eglPresentationTimeANDROID", eglSurface, EGL_FALSE);
 
     return EGL_TRUE;
 }
 
 EGLBoolean GetCompositorTimingSupportedANDROID(Thread *thread,
-                                               Display *display,
-                                               SurfaceID surfaceID,
+                                               ThreadSafeDisplay *display,
+                                               Surface *eglSurface,
                                                CompositorTiming nameInternal)
 {
-    Surface *eglSurface = display->getSurface(surfaceID);
-
     thread->setSuccess();
     return eglSurface->getSupportedCompositorTimings().test(nameInternal);
 }
 
 EGLBoolean GetCompositorTimingANDROID(Thread *thread,
-                                      Display *display,
-                                      SurfaceID surfaceID,
+                                      ThreadSafeDisplay *display,
+                                      Surface *eglSurface,
                                       EGLint numTimestamps,
                                       const EGLint *names,
                                       EGLnsecsANDROID *values)
 {
-    Surface *eglSurface = display->getSurface(surfaceID);
-
     ANGLE_EGL_TRY_RETURN(thread, eglSurface->getCompositorTiming(numTimestamps, names, values),
-                         "eglGetCompositorTimingANDROIDD", GetSurfaceIfValid(display, surfaceID),
-                         EGL_FALSE);
+                         "eglGetCompositorTimingANDROIDD", eglSurface, EGL_FALSE);
 
     thread->setSuccess();
     return EGL_TRUE;
 }
 
 EGLBoolean GetNextFrameIdANDROID(Thread *thread,
-                                 Display *display,
-                                 SurfaceID surfaceID,
+                                 ThreadSafeDisplay *display,
+                                 Surface *eglSurface,
                                  EGLuint64KHR *frameId)
 {
-    Surface *eglSurface = display->getSurface(surfaceID);
-
     ANGLE_EGL_TRY_RETURN(thread, eglSurface->getNextFrameId(frameId), "eglGetNextFrameIdANDROID",
-                         GetSurfaceIfValid(display, surfaceID), EGL_FALSE);
+                         eglSurface, EGL_FALSE);
 
     thread->setSuccess();
     return EGL_TRUE;
 }
 
 EGLBoolean GetFrameTimestampSupportedANDROID(Thread *thread,
-                                             Display *display,
-                                             SurfaceID surfaceID,
+                                             ThreadSafeDisplay *display,
+                                             Surface *eglSurface,
                                              Timestamp timestampInternal)
 {
-    Surface *eglSurface = display->getSurface(surfaceID);
-
     thread->setSuccess();
     return eglSurface->getSupportedTimestamps().test(timestampInternal);
 }
 
 EGLBoolean GetFrameTimestampsANDROID(Thread *thread,
-                                     Display *display,
-                                     SurfaceID surfaceID,
+                                     ThreadSafeDisplay *display,
+                                     Surface *eglSurface,
                                      EGLuint64KHR frameId,
                                      EGLint numTimestamps,
                                      const EGLint *timestamps,
                                      EGLnsecsANDROID *values)
 {
-    Surface *eglSurface = display->getSurface(surfaceID);
-
-    ANGLE_EGL_TRY_RETURN(
-        thread, eglSurface->getFrameTimestamps(frameId, numTimestamps, timestamps, values),
-        "eglGetFrameTimestampsANDROID", GetSurfaceIfValid(display, surfaceID), EGL_FALSE);
+    ANGLE_EGL_TRY_RETURN(thread,
+                         eglSurface->getFrameTimestamps(frameId, numTimestamps, timestamps, values),
+                         "eglGetFrameTimestampsANDROID", eglSurface, EGL_FALSE);
 
     thread->setSuccess();
     return EGL_TRUE;
@@ -474,18 +450,15 @@ EGLBoolean QueryStreamu64KHR(Thread *thread,
 }
 
 EGLBoolean QuerySurfacePointerANGLE(Thread *thread,
-                                    Display *display,
-                                    SurfaceID surfaceID,
+                                    ThreadSafeDisplay *display,
+                                    Surface *eglSurface,
                                     EGLint attribute,
                                     void **value)
 {
-    Surface *eglSurface = display->getSurface(surfaceID);
-
     Error error = eglSurface->querySurfacePointerANGLE(attribute, value);
     if (error.isError())
     {
-        thread->setError(error, "eglQuerySurfacePointerANGLE",
-                         GetSurfaceIfValid(display, surfaceID));
+        thread->setError(error, "eglQuerySurfacePointerANGLE", eglSurface);
         return EGL_FALSE;
     }
 
@@ -502,7 +475,7 @@ void SetBlobCacheFuncsANDROID(Thread *thread,
     display->setBlobCacheFuncs(set, get);
 }
 
-EGLBoolean SignalSyncKHR(Thread *thread, Display *display, Sync *syncObject, EGLenum mode)
+EGLBoolean SignalSyncKHR(Thread *thread, ThreadSafeDisplay *display, Sync *syncObject, EGLenum mode)
 {
     gl::Context *currentContext = thread->getContext();
     ANGLE_EGL_TRY_RETURN(thread, syncObject->signal(display, currentContext, mode),
@@ -579,16 +552,13 @@ EGLBoolean StreamConsumerReleaseKHR(Thread *thread, Display *display, Stream *st
 }
 
 EGLBoolean SwapBuffersWithDamageKHR(Thread *thread,
-                                    Display *display,
-                                    SurfaceID surfaceID,
+                                    ThreadSafeDisplay *display,
+                                    Surface *eglSurface,
                                     const EGLint *rects,
                                     EGLint n_rects)
 {
-    Surface *eglSurface = display->getSurface(surfaceID);
-
     ANGLE_EGL_TRY_RETURN(thread, eglSurface->swapWithDamage(thread->getContext(), rects, n_rects),
-                         "eglSwapBuffersWithDamageKHR", GetSurfaceIfValid(display, surfaceID),
-                         EGL_FALSE);
+                         "eglSwapBuffersWithDamageKHR", eglSurface, EGL_FALSE);
 
     thread->setSuccess();
     return EGL_TRUE;
@@ -606,10 +576,8 @@ void UnlockVulkanQueueANGLE(Thread *thread, egl::Display *display)
     thread->setSuccess();
 }
 
-EGLBoolean PrepareSwapBuffersANGLE(Thread *thread, Display *display, SurfaceID surfaceID)
+EGLBoolean PrepareSwapBuffersANGLE(Thread *thread, ThreadSafeDisplay *display, Surface *eglSurface)
 {
-    Surface *eglSurface = display->getSurface(surfaceID);
-
     ANGLE_EGL_TRY_RETURN(thread, eglSurface->prepareSwap(thread->getContext()),
                          "eglPrepareSwapBuffersANGLE", eglSurface, EGL_FALSE);
 
@@ -617,11 +585,11 @@ EGLBoolean PrepareSwapBuffersANGLE(Thread *thread, Display *display, SurfaceID s
     return EGL_TRUE;
 }
 
-EGLint WaitSyncKHR(Thread *thread, Display *display, Sync *syncObject, EGLint flags)
+EGLint WaitSyncKHR(Thread *thread, ThreadSafeDisplay *display, Sync *syncObject, EGLint flags)
 {
     gl::Context *currentContext = thread->getContext();
     ANGLE_EGL_TRY_RETURN(thread, syncObject->serverWait(display, currentContext, flags),
-                         "eglWaitSync", syncObject, EGL_FALSE);
+                         "eglWaitSyncKHR", syncObject, EGL_FALSE);
 
     thread->setSuccess();
     return EGL_TRUE;
@@ -674,32 +642,27 @@ EGLBoolean StreamPostD3DTextureANGLE(Thread *thread,
 }
 
 EGLBoolean GetMscRateANGLE(Thread *thread,
-                           Display *display,
-                           SurfaceID surfaceID,
+                           ThreadSafeDisplay *display,
+                           Surface *eglSurface,
                            EGLint *numerator,
                            EGLint *denominator)
 {
-    Surface *eglSurface = display->getSurface(surfaceID);
-
     ANGLE_EGL_TRY_RETURN(thread, eglSurface->getMscRate(numerator, denominator),
-                         "eglGetMscRateANGLE", GetSurfaceIfValid(display, surfaceID), EGL_FALSE);
+                         "eglGetMscRateANGLE", eglSurface, EGL_FALSE);
 
     thread->setSuccess();
     return EGL_TRUE;
 }
 
 EGLBoolean GetSyncValuesCHROMIUM(Thread *thread,
-                                 Display *display,
-                                 SurfaceID surfaceID,
+                                 ThreadSafeDisplay *display,
+                                 Surface *eglSurface,
                                  EGLuint64KHR *ust,
                                  EGLuint64KHR *msc,
                                  EGLuint64KHR *sbc)
 {
-    Surface *eglSurface = display->getSurface(surfaceID);
-
     ANGLE_EGL_TRY_RETURN(thread, eglSurface->getSyncValues(ust, msc, sbc),
-                         "eglGetSyncValuesCHROMIUM", GetSurfaceIfValid(display, surfaceID),
-                         EGL_FALSE);
+                         "eglGetSyncValuesCHROMIUM", eglSurface, EGL_FALSE);
 
     thread->setSuccess();
     return EGL_TRUE;
@@ -750,17 +713,15 @@ const char *QueryStringiANGLE(Thread *thread, Display *display, EGLint name, EGL
     return display->queryStringi(name, index);
 }
 
-void ReleaseHighPowerGPUANGLE(Thread *thread, Display *display, gl::ContextID contextID)
+void ReleaseHighPowerGPUANGLE(Thread *thread, Display *display, gl::Context *context)
 {
-    gl::Context *context = display->getContext(contextID);
     ANGLE_EGL_TRY(thread, context->releaseHighPowerGPU(), "eglReleaseHighPowerGPUANGLE", display);
 
     thread->setSuccess();
 }
 
-void ReacquireHighPowerGPUANGLE(Thread *thread, Display *display, gl::ContextID contextID)
+void ReacquireHighPowerGPUANGLE(Thread *thread, Display *display, gl::Context *context)
 {
-    gl::Context *context = display->getContext(contextID);
     ANGLE_EGL_TRY(thread, context->reacquireHighPowerGPU(), "eglReacquireHighPowerGPUANGLE",
                   display);
 
@@ -801,39 +762,33 @@ EGLBoolean QueryDisplayAttribANGLE(Thread *thread,
 }
 
 EGLBoolean LockSurfaceKHR(Thread *thread,
-                          egl::Display *display,
-                          SurfaceID surfaceID,
+                          egl::ThreadSafeDisplay *display,
+                          Surface *surface,
                           const AttributeMap &attributes)
 {
-    Surface *surface = display->getSurface(surfaceID);
-
     ANGLE_EGL_TRY_RETURN(thread, surface->lockSurfaceKHR(display, attributes), "eglLockSurfaceKHR",
-                         GetSurfaceIfValid(display, surfaceID), EGL_FALSE);
+                         surface, EGL_FALSE);
     thread->setSuccess();
     return EGL_TRUE;
 }
 
-EGLBoolean UnlockSurfaceKHR(Thread *thread, egl::Display *display, SurfaceID surfaceID)
+EGLBoolean UnlockSurfaceKHR(Thread *thread, egl::ThreadSafeDisplay *display, Surface *surface)
 {
-    Surface *surface = display->getSurface(surfaceID);
-
     ANGLE_EGL_TRY_RETURN(thread, surface->unlockSurfaceKHR(display), "eglQuerySurface64KHR",
-                         GetSurfaceIfValid(display, surfaceID), EGL_FALSE);
+                         surface, EGL_FALSE);
     thread->setSuccess();
     return EGL_TRUE;
 }
 
 EGLBoolean QuerySurface64KHR(Thread *thread,
-                             egl::Display *display,
-                             SurfaceID surfaceID,
+                             egl::ThreadSafeDisplay *display,
+                             Surface *surface,
                              EGLint attribute,
                              EGLAttribKHR *value)
 {
-    Surface *surface = display->getSurface(surfaceID);
-
     ANGLE_EGL_TRY_RETURN(
         thread, QuerySurfaceAttrib64KHR(display, thread->getContext(), surface, attribute, value),
-        "eglQuerySurface64KHR", GetSurfaceIfValid(display, surfaceID), EGL_FALSE);
+        "eglQuerySurface64KHR", surface, EGL_FALSE);
     thread->setSuccess();
     return EGL_TRUE;
 }
@@ -854,13 +809,11 @@ EGLBoolean ExportVkImageANGLE(Thread *thread,
 }
 
 EGLBoolean SetDamageRegionKHR(Thread *thread,
-                              egl::Display *display,
-                              SurfaceID surfaceID,
+                              egl::ThreadSafeDisplay *display,
+                              Surface *surface,
                               EGLint *rects,
                               EGLint n_rects)
 {
-    Surface *surface = display->getSurface(surfaceID);
-
     surface->setDamageRegion(rects, n_rects);
 
     thread->setSuccess();
@@ -895,7 +848,7 @@ EGLBoolean QueryDmaBufModifiersEXT(Thread *thread,
     return EGL_TRUE;
 }
 
-void *CopyMetalSharedEventANGLE(Thread *thread, Display *display, Sync *syncObject)
+void *CopyMetalSharedEventANGLE(Thread *thread, ThreadSafeDisplay *display, Sync *syncObject)
 {
     void *result = nullptr;
     ANGLE_EGL_TRY_RETURN(thread, syncObject->copyMetalSharedEventANGLE(display, &result),
@@ -905,10 +858,10 @@ void *CopyMetalSharedEventANGLE(Thread *thread, Display *display, Sync *syncObje
     return result;
 }
 
-void AcquireExternalContextANGLE(Thread *thread, egl::Display *display, SurfaceID drawAndReadPacked)
+void AcquireExternalContextANGLE(Thread *thread,
+                                 egl::ThreadSafeDisplay *display,
+                                 Surface *eglSurface)
 {
-    Surface *eglSurface = display->getSurface(drawAndReadPacked);
-
     ANGLE_EGL_TRY(thread, thread->getContext()->acquireExternalContext(eglSurface),
                   "eglAcquireExternalContextANGLE", display);
 

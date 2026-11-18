@@ -17,9 +17,11 @@
 #include "common/unsafe_buffers.h"
 #include "compiler/translator/Compiler.h"
 
+#include <anglebase/sha1.h>
 #include <stdarg.h>
 #include <stdio.h>
 
+#include "common/angleutils.h"
 #include "common/mathutil.h"
 #include "common/utilities.h"
 #include "compiler/preprocessor/SourceLocation.h"
@@ -52,6 +54,11 @@ const int kWebGLMaxStructNesting = 4;
 constexpr size_t kWebGLMaxVariableSizeInBytes        = static_cast<size_t>(2) * 1024 * 1024 * 1024;
 constexpr size_t kWebGLMaxPrivateVariableSizeInBytes = static_cast<size_t>(64) * 1024;
 constexpr size_t kWebGLMaxTotalPrivateVariableSizeInBytes = static_cast<size_t>(16) * 1024 * 1024;
+
+// Limit the total number of declared variables and expanded struct/interface-block fields in a
+// shader.  Some drivers use 16-bit integers to index and serialize global variable and struct
+// member info maps, overflowing at 65536 entries.
+constexpr size_t kMaxTotalShaderVariableFields = 32768;
 
 // The 1024 character identifier limit, `-2` for the `_u`
 constexpr size_t kMaxAvailableIdentifierLength = 1022;
@@ -336,6 +343,51 @@ void MarkClipCullIndex(const TSourceLoc &line, TIntermTyped *indexExpr, ClipCull
     }
 }
 
+// Returns true if node selects a member of gl_in, e.g. gl_in[i].gl_ClipDistance. The members of
+// gl_in are sized independently of the shader's own gl_ClipDistance and gl_CullDistance.
+bool IsPerVertexInMember(TIntermTyped *node)
+{
+    TIntermBinary *fieldSelection = node->getAsBinaryNode();
+    if (fieldSelection == nullptr || fieldSelection->getOp() != EOpIndexDirectInterfaceBlock)
+    {
+        return false;
+    }
+
+    // Indexing gl_in makes the qualifier temporary, so look at the indexed block itself.
+    TIntermTyped *block = fieldSelection->getLeft();
+    while (TIntermBinary *index = block->getAsBinaryNode())
+    {
+        if (index->getOp() != EOpIndexDirect && index->getOp() != EOpIndexIndirect)
+        {
+            break;
+        }
+        block = index->getLeft();
+    }
+    return block->getQualifier() == EvqPerVertexIn;
+}
+
+// Returns true if the type of a redeclared gl_PerVertex member matches the built-in's type.
+bool IsValidPerVertexMemberType(const ImmutableString &name, const TType &type)
+{
+    if (type.getBasicType() != EbtFloat || type.getSecondarySize() != 1)
+    {
+        return false;
+    }
+    if (name == "gl_Position")
+    {
+        return type.getNominalSize() == 4 && !type.isArray();
+    }
+    if (name == "gl_PointSize")
+    {
+        return type.getNominalSize() == 1 && !type.isArray();
+    }
+    if (name == "gl_ClipDistance" || name == "gl_CullDistance")
+    {
+        return type.getNominalSize() == 1 && type.isArray() && !type.isArrayOfArrays();
+    }
+    return false;
+}
+
 void ValidateFragColorAndFragData(GLenum shaderType,
                                   int shaderVersion,
                                   const TSymbolTable &symbolTable,
@@ -435,6 +487,61 @@ angle::base::CheckedNumeric<size_t> CalculateVariableSize(const TType *type, boo
     return isStd140 ? kVec4Size : type->getNominalSize() * sizeof(float);
 }
 
+// Calculate the number of declared variable and recursively expanded struct/interface-block fields
+// contributed by a variable or field of |type|.
+angle::base::CheckedNumeric<size_t> CalculateVariableFieldCount(
+    const TType *type,
+    TMap<const TFieldListCollection *, size_t> *validatedFieldCollectionCounts)
+{
+    if (type->getBasicType() == EbtStruct || type->getBasicType() == EbtInterfaceBlock)
+    {
+        const TFieldListCollection *fieldCollection =
+            type->getBasicType() == EbtStruct
+                ? static_cast<const TFieldListCollection *>(type->getStruct())
+                : static_cast<const TFieldListCollection *>(type->getInterfaceBlock());
+
+        size_t collectionFieldCount = 0;
+        auto iter                   = validatedFieldCollectionCounts->find(fieldCollection);
+        if (iter != validatedFieldCollectionCounts->end())
+        {
+            collectionFieldCount = iter->second;
+        }
+        else
+        {
+            angle::base::CheckedNumeric<size_t> checkedCollectionFields = 1;
+            for (const TField *field : fieldCollection->fields())
+            {
+                checkedCollectionFields +=
+                    CalculateVariableFieldCount(field->type(), validatedFieldCollectionCounts);
+            }
+            collectionFieldCount =
+                checkedCollectionFields.ValueOrDefault(std::numeric_limits<size_t>::max());
+            (*validatedFieldCollectionCounts)[fieldCollection] = collectionFieldCount;
+        }
+
+        angle::base::CheckedNumeric<size_t> totalFields = collectionFieldCount;
+        for (unsigned int arraySize : type->getArraySizes())
+        {
+            totalFields *= std::max(arraySize, 1u);
+        }
+        return totalFields;
+    }
+
+    // Non-struct, non-interface-block variables (e.g. scalars, vectors, matrices, and
+    // one-dimensional arrays of basic types) count as a single variable entry.  For arrays of
+    // arrays, getArraySizes()[0] is the innermost array dimension, so multiplying only the outer
+    // dimensions counts each innermost one-dimensional array as one entry.
+    angle::base::CheckedNumeric<size_t> totalFields = 1;
+    if (type->isArrayOfArrays())
+    {
+        for (size_t i = 1; i < type->getArraySizes().size(); ++i)
+        {
+            totalFields *= std::max(type->getArraySizes()[i], 1u);
+        }
+    }
+    return totalFields;
+}
+
 unsigned int GetMaxUniformBlocksForShaderType(sh::GLenum shaderType,
                                               const ShCompileOptions &options,
                                               const ShBuiltInResources &resources)
@@ -495,23 +602,43 @@ TIntermDeclaration *RenameAndDeclareStruct(TSymbolTable *symbolTable,
     // always for simplicity.  +1 for the NUL terminator.
     //
     // If appending ID and the name is too long, cut off the end of the name.  The ID makes it
-    // unique.
+    // unique.  Where _0 is used, long names are hashed to avoid collision; any name longer than the
+    // hash length itself risks collision, if unhashed, with a hashed name.
     constexpr uint32_t kAppendExtraChars = 1 + 11;  // underscore + 32-bit number
-    const ImmutableString name(
-        structure->name().data(),
-        std::min<size_t>(structure->name().length(), kESSLMaxIdentifierLength - kAppendExtraChars));
 
-    ImmutableStringBuilder builder(structure->name().length() + kAppendExtraChars);
-    builder << name << "_"
-            << (scope == StructureOriginalScope::Global ? 0 : structure->uniqueId().get());
+    // Hash length is kSHA1Length, and every byte is written as two hex characters
+    constexpr uint32_t kHashChars = 2 * angle::base::kSHA1Length;
+    static_assert(kHashChars < kESSLMaxIdentifierLength - kAppendExtraChars);
+
+    ImmutableStringBuilder builder(std::max<size_t>(structure->name().length(), kHashChars) +
+                                   kAppendExtraChars);
+    if (scope == StructureOriginalScope::Global && structure->name().length() > kHashChars)
+    {
+        angle::base::SecureHashAlgorithm hasher;
+        hasher.Init();
+        hasher.Update(structure->name().data(), structure->name().length());
+        hasher.Final();
+        // SAFETY: The SHA1 hasher guarantees that the returned digest is kSHA1Length bytes.
+        const std::string hashed = angle::UintStreamToHexString(
+            ANGLE_UNSAFE_BUFFERS(angle::Span(hasher.Digest(), angle::base::kSHA1Length)));
+        builder << "struct" << ImmutableString(hashed.c_str(), hashed.size()) << "_0";
+    }
+    else
+    {
+        const ImmutableString name(structure->name().data(),
+                                   std::min<size_t>(structure->name().length(),
+                                                    kESSLMaxIdentifierLength - kAppendExtraChars));
+        builder << name << "_"
+                << (scope == StructureOriginalScope::Global ? 0 : structure->uniqueId().get());
+    }
     structure->setName(builder);
 
     return DeclareStruct(symbolTable, structure);
 }
 
-unsigned int GetTypeComponentCount(const TType &type)
+angle::CheckedNumeric<unsigned int> GetTypeComponentCount(const TType &type)
 {
-    unsigned int components = 0;
+    angle::CheckedNumeric<unsigned int> components = 0;
     if (type.getBasicType() == EbtInterfaceBlock)
     {
         for (const TField *field : type.getInterfaceBlock()->fields())
@@ -530,8 +657,180 @@ unsigned int GetTypeComponentCount(const TType &type)
     {
         components = static_cast<unsigned int>(type.getNominalSize()) * type.getSecondarySize();
     }
-    components *= type.getArraySizeProduct();
+    for (unsigned int arraySize : type.getArraySizes())
+    {
+        components *= arraySize;
+    }
     return components;
+}
+
+SamplerAccess GetSamplerAccess(TIntermTyped *node)
+{
+    // Ignore left-hand side of comma
+    while (node->getAsBinaryNode() && node->getAsBinaryNode()->getOp() == EOpComma)
+    {
+        node = node->getAsBinaryNode()->getRight();
+    }
+
+    // Look for |a.b[i].c| and extract |a| as well as the field indices of |b| and |c|.
+    SamplerAccess access = {};
+    TVector<uint32_t> fields;
+    while (true)
+    {
+        TIntermSymbol *asSymbol = node->getAsSymbolNode();
+        if (asSymbol != nullptr)
+        {
+            access.uniform = &asSymbol->variable();
+            break;
+        }
+
+        TIntermBinary *asBinary = node->getAsBinaryNode();
+        // In a correct shader, there should be nothing but EOpIndex* until the symbol is found, but
+        // the code cannot assert that as the shader may have errors.
+        if (asBinary != nullptr)
+        {
+            if (asBinary->getOp() == EOpIndexDirectStruct)
+            {
+                TIntermConstantUnion *field = asBinary->getRight()->getAsConstantUnion();
+                if (field != nullptr)
+                {
+                    fields.push_back(field->getIConst(0));
+                }
+            }
+            node = asBinary->getLeft();
+        }
+        else
+        {
+            // Erroneous shader
+            break;
+        }
+    }
+
+    // The fields are gathered in reverse order, which is fixed here.
+    access.fields.insert(access.fields.end(), fields.rbegin(), fields.rend());
+    return access;
+}
+
+SamplerAccess ConcatSamplerAccess(const SamplerAccess &callerAccess,
+                                  const SamplerAccess &calleeAccess)
+{
+    // If caller has var.field1 and callee has param.field2, the result is var.field1.field2.
+    SamplerAccess result = callerAccess;
+    result.fields.insert(result.fields.end(), calleeAccess.fields.begin(),
+                         calleeAccess.fields.end());
+    return result;
+}
+
+void CombineSamplerAccessToTexelFetch(
+    const SamplerAccess &callerAccess,
+    const TVector<TUnorderedSet<SamplerAccess>> &calleeParamsStaticallyUsedWithTexelFetch,
+    uint32_t calleeArgIndex,
+    TUnorderedSet<SamplerAccess> *samplersStaticallyUsedWithTexelFetch)
+{
+    if (calleeArgIndex >= calleeParamsStaticallyUsedWithTexelFetch.size())
+    {
+        return;
+    }
+
+    for (const SamplerAccess &calleeAccess :
+         calleeParamsStaticallyUsedWithTexelFetch[calleeArgIndex])
+    {
+        // uniform+fields is passed to function argument, which itself applies more fields and then
+        // uses the result in texelFetch.
+        SamplerAccess access = ConcatSamplerAccess(callerAccess, calleeAccess);
+        samplersStaticallyUsedWithTexelFetch->insert(std::move(access));
+    }
+}
+
+void CombineSamplerAccessToFunctionArg(
+    const SamplerAccess &callerAccess,
+    const TVector<TUnorderedSet<SamplerAsFunctionArg>> &calleeParamsPassedToCallee,
+    uint32_t calleeArgIndex,
+    TUnorderedSet<SamplerAsFunctionArg> *uniformsPassedToCallee)
+{
+    if (calleeArgIndex >= calleeParamsPassedToCallee.size())
+    {
+        return;
+    }
+
+    for (const SamplerAsFunctionArg &calleeParamToArg : calleeParamsPassedToCallee[calleeArgIndex])
+    {
+        // uniform+fields is passed to function argument, which itself applies more fields and then
+        // passes it to another function.
+        SamplerAsFunctionArg uniformToArg;
+        uniformToArg.access         = ConcatSamplerAccess(callerAccess, calleeParamToArg.access);
+        uniformToArg.callee         = calleeParamToArg.callee;
+        uniformToArg.calleeArgIndex = calleeParamToArg.calleeArgIndex;
+
+        // Make it such that it looks like the callee is directly passing the uniform to it's own
+        // callees.
+        uniformsPassedToCallee->insert(std::move(uniformToArg));
+    }
+}
+
+TVector<const TFunction *> GetSamplerPassingFunctionsInDAGOrder(
+    const TFunction *main,
+    const TUnorderedMap<const TFunction *, FunctionSamplerAccess> &functionsSamplerAccess)
+{
+    // The call graph is already checked for loops before this function is called.  Additionally,
+    // |main| is already verified to be present.
+    TUnorderedSet<const TFunction *> visited;
+
+    struct StackEntry
+    {
+        const TFunction *function;
+        bool postVisit;
+    };
+    TVector<StackEntry> visitStack;
+    visitStack.reserve(functionsSamplerAccess.size());
+    visitStack.push_back({main, false});
+
+    // Topological sort via DFS.
+    TVector<const TFunction *> sorted;
+    while (!visitStack.empty())
+    {
+        StackEntry &entry         = visitStack.back();
+        const TFunction *function = entry.function;
+
+        if (entry.postVisit)
+        {
+            visited.insert(function);
+            sorted.push_back(function);
+            visitStack.pop_back();
+            continue;
+        }
+
+        // If node is already visited, ignore it.
+        if (visited.find(function) != visited.end())
+        {
+            visitStack.pop_back();
+            continue;
+        }
+
+        // Leave the entry be for post-visit
+        entry.postVisit = true;
+
+        // Add the callees to the stack
+        auto functionSamplerAccess = functionsSamplerAccess.find(function);
+        if (functionSamplerAccess == functionsSamplerAccess.end())
+        {
+            continue;
+        }
+
+        for (const SamplerAsFunctionArg &arg : functionSamplerAccess->second.uniformsPassedToCallee)
+        {
+            visitStack.push_back({arg.callee, false});
+        }
+        for (const auto &paramToArg : functionSamplerAccess->second.paramsPassedToCallee)
+        {
+            for (const SamplerAsFunctionArg &arg : paramToArg)
+            {
+                visitStack.push_back({arg.callee, false});
+            }
+        }
+    }
+
+    return sorted;
 }
 }  // namespace
 
@@ -612,7 +911,7 @@ TParseContext::TParseContext(TSymbolTable &symt,
       mNumViews(-1),
       mMaxUniformBlocks(GetMaxUniformBlocksForShaderType(mShaderType, options, resources)),
       mNumUniformBlocks(0),
-      mNumOutputVaryingComponents(0),
+      mNumVaryingComponents(0),
       mDeclaringFunction(false),
       mDeclaringMain(false),
       mMainFunction(nullptr),
@@ -1433,12 +1732,25 @@ bool TParseContext::checkIsNotReserved(const TSourceLoc &line, const ImmutableSt
         }
     }
 
+    // While this is not per spec, reject user variables starting with AngleInternal_.
+    // Translation in theory should not mix up user variables with those added internally, but it
+    // currently does with AngleInternal_DrawID, AngleInternal_BaseVertex and
+    // AngleInternal_BaseInstance.
+    if (mCompileOptions.rejectWebglShadersWithUndefinedBehavior)
+    {
+        if (identifier.beginsWith("AngleInternal_"))
+        {
+            error(line, reservedErrMsg, identifier);
+            return false;
+        }
+    }
+
     // Validate that identifier names won't conflict with the name hashing done later.
     // See https://crbug.com/499176133
-    if (identifier.length() >= kMaxAvailableIdentifierLength && identifier[0] == '_' &&
+    if (identifier.length() > kMaxAvailableIdentifierLength && identifier[0] == '_' &&
         (identifier[1] == kUserVariableNamePrefix || identifier[1] == kUserBlockNamePrefix))
     {
-        std::string err = "identifiers beginning with `_` must be < " +
+        std::string err = "identifiers beginning with `_` must be <= " +
                           std::to_string(kMaxAvailableIdentifierLength) + " characters";
         error(line, err.c_str(), identifier);
         return false;
@@ -1456,6 +1768,10 @@ bool TParseContext::checkConstructorArguments(const TSourceLoc &line,
         error(line, "constructor does not have any arguments", "constructor");
         return false;
     }
+
+    // Similar to a function call, cannot use Clip/CullDistance in a constructor as a whole-array
+    // unless explicitly sized.
+    functionCallClipCullDistanceCheck(arguments);
 
     for (TIntermNode *arg : arguments)
     {
@@ -1985,7 +2301,7 @@ bool TParseContext::checkVariableSize(const TSourceLoc &line,
         mValidatedVariableTypeSizes[*type] = variableSize;
     }
 
-    if (variableSize > kWebGLMaxVariableSizeInBytes)
+    if (variableSize >= kWebGLMaxVariableSizeInBytes)
     {
         error(line, "Size of declared variable exceeds implementation-defined limit", identifier);
         return false;
@@ -2029,7 +2345,7 @@ bool TParseContext::checkVariableSize(const TSourceLoc &line,
         case EvqPerVertexIn:
         case EvqPerVertexOut:
 
-            if (variableSize > kWebGLMaxPrivateVariableSizeInBytes)
+            if (variableSize >= kWebGLMaxPrivateVariableSizeInBytes)
             {
                 error(line,
                       "Size of declared private variable exceeds implementation-defined limit",
@@ -2040,6 +2356,29 @@ bool TParseContext::checkVariableSize(const TSourceLoc &line,
             break;
         default:
             break;
+    }
+
+    return true;
+}
+
+bool TParseContext::checkVariableFieldCount(const TSourceLoc &line,
+                                            const ImmutableString &identifier,
+                                            const TType *type)
+{
+    if (!mCompileOptions.limitShaderVariableFieldsAtCompileTime)
+    {
+        return true;
+    }
+
+    const angle::base::CheckedNumeric<size_t> fieldCount =
+        CalculateVariableFieldCount(type, &mValidatedFieldCollectionCounts);
+    mTotalVariableFields += fieldCount;
+    if (mTotalVariableFields.ValueOrDefault(std::numeric_limits<size_t>::max()) >
+        kMaxTotalShaderVariableFields)
+    {
+        error(line, "Number of declared variable fields exceeds implementation-defined limit",
+              identifier);
+        return false;
     }
 
     return true;
@@ -2432,7 +2771,7 @@ bool TParseContext::declareVariable(const TSourceLoc &line,
         error(line, "redefinition", identifier);
         return false;
     }
-    addAndCheckOutputVaryings(**variable, line);
+    addAndCheckVaryings(**variable, line);
 
     if (!checkIsNonVoid(line, identifier, type->getBasicType()))
     {
@@ -2440,6 +2779,10 @@ bool TParseContext::declareVariable(const TSourceLoc &line,
     }
 
     if (!checkVariableSize(line, identifier, type))
+    {
+        return false;
+    }
+    if (sized == GeomTessArray::Sized && !checkVariableFieldCount(line, identifier, type))
     {
         return false;
     }
@@ -2464,25 +2807,16 @@ void TParseContext::declareIRVariable(const TVariable *variable, GeomTessArray s
     ASSERT(type.isTypeIdSet());
 
     ir::VariableId variableId;
-    switch (type.getQualifier())
+    if (IsPrivate(type.getQualifier()))
     {
-        case EvqTemporary:
-        case EvqGlobal:
-        case EvqConst:
-        case EvqParamIn:
-        case EvqParamOut:
-        case EvqParamInOut:
-        case EvqParamConst:
-            // Temporary variables
-            variableId = mIRBuilder.declareTempVariable(variable->name(), type.typeId(), type);
-            break;
-        default:
-            // Interface and built-in variables
-            variableId = mIRBuilder.declareInterfaceVariable(
-                variable->symbolType() == SymbolType::Empty ? kEmptyImmutableString
-                                                            : variable->name(),
-                type.typeId(), type, ir::DeclarationSource::Shader);
-            break;
+        variableId = mIRBuilder.declareTempVariable(variable->name(), type.typeId(), type);
+    }
+    else
+    {
+        // Interface and built-in variables
+        variableId = mIRBuilder.declareInterfaceVariable(
+            variable->symbolType() == SymbolType::Empty ? kEmptyImmutableString : variable->name(),
+            type.typeId(), type, ir::DeclarationSource::Shader);
     }
     mVariableToId[variable] = VariableToIdInfo{variableId, VariableToIdInfo::kNoImplicitField};
 }
@@ -3347,14 +3681,14 @@ void TParseContext::checkClipCullDistanceWholeArrayUse(const TSourceLoc &locatio
     switch (node->getQualifier())
     {
         case EvqClipDistance:
-            if (mClipDistanceInfo.size == 0)
+            if ((IsPerVertexInMember(node) ? mInputClipDistanceInfo : mClipDistanceInfo).size == 0)
             {
                 error(location, message, "gl_ClipDistance");
                 return;
             }
             break;
         case EvqCullDistance:
-            if (mCullDistanceInfo.size == 0)
+            if ((IsPerVertexInMember(node) ? mInputCullDistanceInfo : mCullDistanceInfo).size == 0)
             {
                 error(location, message, "gl_CullDistance");
                 return;
@@ -3381,17 +3715,16 @@ void TParseContext::checkClipCullDistanceWholeArrayUse(const TSourceLoc &locatio
     }
 }
 
-void TParseContext::functionCallClipCullDistanceCheck(const TFunction *fnCandidate,
-                                                      TIntermAggregate *fnCall)
+void TParseContext::functionCallClipCullDistanceCheck(const TIntermSequence &arguments)
 {
     // If clip/cull distance is not redeclared, they can't be passed to a function because their
     // size is unknown.  Per EXT_clip_cull_distance, only indexing with constants can implicitly
     // size the built-ins, passing to a function shouldn't try to size them.
-    for (size_t i = 0; i < fnCandidate->getParamCount(); ++i)
+    for (TIntermNode *argument : arguments)
     {
-        TIntermTyped *argument = (*fnCall->getSequence())[i]->getAsTyped();
-        checkClipCullDistanceWholeArrayUse(argument->getLine(), argument,
-                                           "Cannot pass to function unless it is explicitly sized");
+        checkClipCullDistanceWholeArrayUse(
+            argument->getLine(), argument->getAsTyped(),
+            "Cannot pass to function or constructor unless it is explicitly sized");
     }
 }
 
@@ -3404,7 +3737,7 @@ void TParseContext::functionCallFragDataCheck(const TFunction *fnCandidate,
         // Note: ESSL 100 does not allow arrays in ternary operator, so there is no need to check
         // for TIntermTernary here for a whole-array use of gl_FragData, only descending into
         // EOpComma nodes is sufficient.
-        if (RemoveCommaLeftHandSize(argument)->getQualifier() == EvqFragData)
+        if (RemoveCommaLeftHandSide(argument)->getQualifier() == EvqFragData)
         {
             // The whole array is passed to the function.  For validation purposes, assume all
             // indices are accessed in the function.
@@ -5933,6 +6266,7 @@ void TParseContext::sizeUnsizedArrayTypes(uint32_t arraySize)
 
     for (const TVariable *variable : mDeferredArrayVariablesToSize)
     {
+        checkVariableFieldCount(kNoSourceLoc, variable->name(), &variable->getType());
         declareIRVariable(variable, GeomTessArray::Sized);
     }
     mDeferredArrayVariablesToSize.clear();
@@ -6309,6 +6643,7 @@ TIntermFunctionDefinition *TParseContext::addFunctionDefinition(
     {
         const TVariable *param = mCurrentFunction->getParam(paramIndex);
         checkVariableSize(functionPrototype->getLine(), param->name(), &param->getType());
+        checkVariableFieldCount(functionPrototype->getLine(), param->name(), &param->getType());
     }
 
     if (functionBody == nullptr)
@@ -6639,7 +6974,6 @@ bool TParseContext::checkUnsizedArrayConstructorArgumentDimensionality(
 TIntermTyped *TParseContext::addConstructor(TFunctionLookup *fnCall, const TSourceLoc &line)
 {
     TType type = fnCall->constructorType();
-    checkVariableSize(line, ImmutableString(""), &type);
 
     TIntermSequence &arguments = fnCall->arguments();
     if (type.isUnsizedArray())
@@ -6663,6 +6997,12 @@ TIntermTyped *TParseContext::addConstructor(TFunctionLookup *fnCall, const TSour
             }
         }
         ASSERT(!type.isUnsizedArray());
+    }
+
+    checkVariableSize(line, ImmutableString(""), &type);
+    if (type.getBasicType() == EbtStruct || type.isArrayOfArrays())
+    {
+        checkVariableFieldCount(line, kEmptyImmutableString, &type);
     }
 
     if (!checkConstructorArguments(line, arguments, type))
@@ -6697,7 +7037,7 @@ TIntermDeclaration *TParseContext::addInterfaceBlock(
 
     const bool isGLPerVertex = blockName == "gl_PerVertex";
     // gl_PerVertex is allowed to be redefined and therefore not reserved
-    if (!isGLPerVertex)
+    if (!isGLPerVertex || mShaderType == GL_COMPUTE_SHADER || mShaderType == GL_FRAGMENT_SHADER)
     {
         checkIsNotReserved(nameLine, blockName);
     }
@@ -6744,7 +7084,9 @@ TIntermDeclaration *TParseContext::addInterfaceBlock(
             if (!isExtensionEnabled(TExtension::OES_shader_io_blocks) &&
                 !isExtensionEnabled(TExtension::EXT_shader_io_blocks) &&
                 !isExtensionEnabled(TExtension::OES_geometry_shader) &&
-                !isExtensionEnabled(TExtension::EXT_geometry_shader) && mShaderVersion < 320)
+                !isExtensionEnabled(TExtension::EXT_geometry_shader) &&
+                !isExtensionEnabled(TExtension::OES_tessellation_shader) &&
+                !isExtensionEnabled(TExtension::EXT_tessellation_shader) && mShaderVersion < 320)
             {
                 error(typeQualifier.line,
                       "invalid qualifier: shader IO blocks need shader io block extension",
@@ -6959,11 +7301,19 @@ TIntermDeclaration *TParseContext::addInterfaceBlock(
             case EvqNoPerspectiveSample:
             case EvqGeometryIn:
             case EvqGeometryOut:
+            case EvqTessControlIn:
+            case EvqTessControlOut:
+            case EvqTessEvaluationIn:
+            case EvqTessEvaluationOut:
                 if (!IsShaderIoBlock(typeQualifier.qualifier) &&
                     typeQualifier.qualifier != EvqPatchIn &&
                     typeQualifier.qualifier != EvqPatchOut &&
                     typeQualifier.qualifier != EvqGeometryIn &&
-                    typeQualifier.qualifier != EvqGeometryOut)
+                    typeQualifier.qualifier != EvqGeometryOut &&
+                    typeQualifier.qualifier != EvqTessControlIn &&
+                    typeQualifier.qualifier != EvqTessControlOut &&
+                    typeQualifier.qualifier != EvqTessEvaluationIn &&
+                    typeQualifier.qualifier != EvqTessEvaluationOut)
                 {
                     error(field->line(), "invalid qualifier on interface block member",
                           getQualifierString(qualifier));
@@ -7047,6 +7397,22 @@ TIntermDeclaration *TParseContext::addInterfaceBlock(
         // For per-vertex members, apply the appropriate built-in qualifiers to the members.
         if (isGLPerVertex)
         {
+            // The gl_ClipDistance and gl_CullDistance members of gl_in are sized independently of
+            // the shader's output gl_ClipDistance and gl_CullDistance.
+            const bool isPerVertexIn = IsVaryingIn(typeQualifier.qualifier);
+            if (field->name() != "gl_Position" && field->name() != "gl_PointSize" &&
+                field->name() != "gl_ClipDistance" && field->name() != "gl_CullDistance")
+            {
+                error(field->line(),
+                      "invalid member of gl_PerVertex, only gl_Position, gl_PointSize, "
+                      "gl_ClipDistance and gl_CullDistance may be redeclared",
+                      field->name());
+            }
+            else if (!IsValidPerVertexMemberType(field->name(), *field->type()))
+            {
+                error(field->line(), "redeclaration of built-in with a different type",
+                      field->name());
+            }
             if (field->name() == "gl_Position")
             {
                 fieldType->setQualifier(EvqPosition);
@@ -7058,10 +7424,38 @@ TIntermDeclaration *TParseContext::addInterfaceBlock(
             if (field->name() == "gl_ClipDistance")
             {
                 fieldType->setQualifier(EvqClipDistance);
+                if (field->type()->isArray())
+                {
+                    if (static_cast<int>(field->type()->getOutermostArraySize()) >
+                        mResources.MaxClipDistances)
+                    {
+                        error(field->line(),
+                              "array index out of range, redeclaration of gl_ClipDistance with "
+                              "size > gl_MaxClipDistances",
+                              field->name());
+                    }
+                    MarkClipCullRedeclaredSize(
+                        field->line(), field->type()->getOutermostArraySize(),
+                        isPerVertexIn ? &mInputClipDistanceInfo : &mClipDistanceInfo);
+                }
             }
             if (field->name() == "gl_CullDistance")
             {
                 fieldType->setQualifier(EvqCullDistance);
+                if (field->type()->isArray())
+                {
+                    if (static_cast<int>(field->type()->getOutermostArraySize()) >
+                        mResources.MaxCullDistances)
+                    {
+                        error(field->line(),
+                              "array index out of range, redeclaration of gl_CullDistance with "
+                              "size > gl_MaxCullDistances",
+                              field->name());
+                    }
+                    MarkClipCullRedeclaredSize(
+                        field->line(), field->type()->getOutermostArraySize(),
+                        isPerVertexIn ? &mInputCullDistanceInfo : &mCullDistanceInfo);
+                }
             }
         }
     }
@@ -7155,6 +7549,10 @@ TIntermDeclaration *TParseContext::addInterfaceBlock(
                       instanceName.empty() ? SymbolType::Empty : instanceSymbolType);
 
     checkVariableSize(nameLine, blockName, interfaceBlockType);
+    if (sized == GeomTessArray::Sized)
+    {
+        checkVariableFieldCount(nameLine, blockName, interfaceBlockType);
+    }
     checkVariableLocations(nameLine, instanceVariable);
     declareIRVariable(instanceVariable, sized);
 
@@ -7174,8 +7572,6 @@ TIntermDeclaration *TParseContext::addInterfaceBlock(
             // set parent pointer of the field variable
             fieldType->setInterfaceBlockField(interfaceBlock, memberIndex);
 
-            fieldType->setQualifier(typeQualifier.qualifier);
-
             SymbolType symbolType = SymbolType::UserDefined;
             if (field->name() == "gl_Position" || field->name() == "gl_PointSize" ||
                 field->name() == "gl_ClipDistance" || field->name() == "gl_CullDistance")
@@ -7190,6 +7586,10 @@ TIntermDeclaration *TParseContext::addInterfaceBlock(
                 }
                 symbolType = SymbolType::BuiltIn;
             }
+            else
+            {
+                fieldType->setQualifier(typeQualifier.qualifier);
+            }
             TVariable *fieldVariable =
                 new TVariable(&symbolTable, field->name(), fieldType, symbolType);
             if (!symbolTable.declare(fieldVariable))
@@ -7197,7 +7597,7 @@ TIntermDeclaration *TParseContext::addInterfaceBlock(
                 error(field->line(), "redefinition of an interface block member name",
                       field->name());
             }
-            addAndCheckOutputVaryings(*fieldVariable, field->line());
+            addAndCheckVaryings(*fieldVariable, field->line());
 
             // Don't declare variables for fields of nameless interface blocks in the IR, just
             // remember to implicitly index the instance variable when referenced.
@@ -7227,7 +7627,7 @@ TIntermDeclaration *TParseContext::addInterfaceBlock(
         {
             error(instanceLine, "redefinition of an interface block instance name", instanceName);
         }
-        addAndCheckOutputVaryings(*instanceVariable, instanceLine);
+        addAndCheckVaryings(*instanceVariable, instanceLine);
     }
 
     TIntermSymbol *blockSymbol = new TIntermSymbol(instanceVariable);
@@ -7314,7 +7714,7 @@ TIntermTyped *TParseContext::addIndexExpression(TIntermTyped *baseExpression,
         return CreateZeroNode(TType(EbtFloat, EbpHigh, EvqConst));
     }
 
-    TIntermTyped *effectivelyIndexedExpression = RemoveCommaLeftHandSize(baseExpression);
+    TIntermTyped *effectivelyIndexedExpression = RemoveCommaLeftHandSide(baseExpression);
     switch (effectivelyIndexedExpression->getQualifier())
     {
         case EvqPerVertexIn:
@@ -7326,10 +7726,16 @@ TIntermTyped *TParseContext::addIndexExpression(TIntermTyped *baseExpression,
             }
             break;
         case EvqClipDistance:
-            MarkClipCullIndex(location, indexExpression, &mClipDistanceInfo);
+            MarkClipCullIndex(location, indexExpression,
+                              IsPerVertexInMember(effectivelyIndexedExpression)
+                                  ? &mInputClipDistanceInfo
+                                  : &mClipDistanceInfo);
             break;
         case EvqCullDistance:
-            MarkClipCullIndex(location, indexExpression, &mCullDistanceInfo);
+            MarkClipCullIndex(location, indexExpression,
+                              IsPerVertexInMember(effectivelyIndexedExpression)
+                                  ? &mInputCullDistanceInfo
+                                  : &mCullDistanceInfo);
             break;
         default:
             break;
@@ -7587,9 +7993,6 @@ int TParseContext::checkIndexLessThan(bool outOfRangeIndexIsError,
     ASSERT(index >= 0);
     if (static_cast<unsigned int>(index) >= arraySize)
     {
-        std::stringstream reasonStream = sh::InitializeStream<std::stringstream>();
-        reasonStream << reason << " '" << index << "'";
-        std::string token = reasonStream.str();
         outOfRangeError(outOfRangeIndexIsError, location, reason, "[]");
         return arraySize - 1;
     }
@@ -8694,9 +9097,9 @@ TTypeSpecifierNonArray TParseContext::addStructure(const TSourceLoc &structLine,
     checkDoesNotHaveDuplicateFieldNames(fieldList, structLine);
 
     // Ensure we do not specify any storage qualifiers on the struct members
-    for (unsigned int typeListIndex = 0; typeListIndex < fieldList->size(); typeListIndex++)
+    for (TField *fieldPtr : *fieldList)
     {
-        TField &field              = *(*fieldList)[typeListIndex];
+        TField &field              = *fieldPtr;
         const TQualifier qualifier = field.type()->getQualifier();
         switch (qualifier)
         {
@@ -8854,9 +9257,9 @@ bool TParseContext::isNestedIn(ControlFlowType type) const
     // Used for validation, we need to know for example that a `continue` statement is nested
     // within a loop, etc.  Search backwards in the nested control flow info to find the closest
     // control flow of given type.
-    for (auto iter = mControlFlow.rbegin(); iter != mControlFlow.rend(); ++iter)
+    for (const ControlFlow &controlFlow : angle::Reversed(mControlFlow))
     {
-        if (iter->type == type)
+        if (controlFlow.type == type)
         {
             return true;
         }
@@ -9656,6 +10059,10 @@ TIntermBranch *TParseContext::addBranch(TOperator op,
         {
             error(loc, "function return is not matching type:", "return");
         }
+        checkClipCullDistanceWholeArrayUse(
+            expression->getLine(), expression,
+            "Cannot return from function unless it is explicitly sized");
+
         if (!mControlFlow.empty())
         {
             mControlFlow.back().hasReturn = true;
@@ -9886,6 +10293,168 @@ void TParseContext::checkSingleTextureOffset(const TSourceLoc &line,
     }
 }
 
+void TParseContext::checkTexelFetch(TIntermAggregate *functionCall)
+{
+    const TOperator op = functionCall->getOp();
+    if (op != EOpTexelFetch && op != EOpTexelFetchOffset)
+    {
+        return;
+    }
+
+    TIntermTyped *sampler = functionCall->getChildNode(0)->getAsTyped();
+    SamplerAccess access  = GetSamplerAccess(sampler);
+    if (access.uniform == nullptr)
+    {
+        // Erroneous shader
+        return;
+    }
+
+    if (access.uniform->getType().getQualifier() == EvqUniform)
+    {
+        // A uniform is passed to texelFetch directly, directly mark it as statically used with
+        // texelFetch right away.
+        mSamplersStaticallyUsedWithTexelFetch.insert(std::move(access));
+        return;
+    }
+
+    // Otherwise, it must be a function parameter that's passed to texelFetch, find out which one it
+    // is.
+    for (size_t paramIndex = 0; paramIndex < mCurrentFunction->getParamCount(); ++paramIndex)
+    {
+        if (access.uniform == mCurrentFunction->getParam(paramIndex))
+        {
+            // Keep track of how the parameter is accessed; at the end of shader the chain of calls
+            // is followed to know which uniform is statically used with texelFetch.
+            FunctionSamplerAccess &functionSamplerAccess =
+                mFunctionsSamplerAccess[mCurrentFunction];
+            if (functionSamplerAccess.paramsStaticallyUsedWithTexelFetch.empty())
+            {
+                functionSamplerAccess.paramsStaticallyUsedWithTexelFetch.resize(
+                    mCurrentFunction->getParamCount());
+            }
+            functionSamplerAccess.paramsStaticallyUsedWithTexelFetch[paramIndex].insert(
+                std::move(access));
+            break;
+        }
+    }
+}
+
+void TParseContext::trackSamplersPassedToFunction(const TFunction *fnCandidate,
+                                                  TIntermAggregate *fnCall)
+{
+    for (size_t paramIndex = 0; paramIndex < fnCandidate->getParamCount(); ++paramIndex)
+    {
+        TIntermTyped *argument = (*fnCall->getSequence())[paramIndex]->getAsTyped();
+        SamplerAccess access   = GetSamplerAccess(argument);
+        if (access.uniform == nullptr)
+        {
+            continue;
+        }
+
+        const TType &type = access.uniform->getType();
+        if (!IsSampler(type.getBasicType()) && !type.isStructureContainingSamplers())
+        {
+            continue;
+        }
+
+        // If GL_EXT_shader_non_constant_global_initializers is enabled, the function call can be at
+        // global scope.  This is not supported yet.
+        if (mCurrentFunction == nullptr)
+        {
+            error(argument->getLine(),
+                  "passing samplers to functions at global scope is currently unsupported",
+                  "sampler");
+            return;
+        }
+
+        SamplerAsFunctionArg samplerAsArg;
+        samplerAsArg.access         = std::move(access);
+        samplerAsArg.callee         = fnCandidate;
+        samplerAsArg.calleeArgIndex = static_cast<uint32_t>(paramIndex);
+
+        if (type.getQualifier() == EvqUniform)
+        {
+            // A uniform with samplers is passed to a function.  Track it as it might lead to it
+            // being used with texelFetch.
+            mFunctionsSamplerAccess[mCurrentFunction].uniformsPassedToCallee.insert(
+                std::move(samplerAsArg));
+        }
+        else
+        {
+            // Otherwise, it must be a function parameter that's passed to another function, find
+            // out which one it is.
+            for (size_t callerParamIndex = 0; callerParamIndex < mCurrentFunction->getParamCount();
+                 ++callerParamIndex)
+            {
+                if (access.uniform == mCurrentFunction->getParam(callerParamIndex))
+                {
+                    FunctionSamplerAccess &functionSamplerAccess =
+                        mFunctionsSamplerAccess[mCurrentFunction];
+                    if (functionSamplerAccess.paramsPassedToCallee.empty())
+                    {
+                        functionSamplerAccess.paramsPassedToCallee.resize(
+                            mCurrentFunction->getParamCount());
+                    }
+                    functionSamplerAccess.paramsPassedToCallee[callerParamIndex].insert(
+                        std::move(samplerAsArg));
+                    break;
+                }
+            }
+        }
+    }
+}
+
+void TParseContext::postParseTrackSamplersPassedToFunction()
+{
+    // Calculate the DAG order of calls from |main|.  Functions that are never called don't matter;
+    // if they statically used a sampler in texelFetch, it's already marked in
+    // |mSamplersStaticallyUsedWithTexelFetch|.
+    TVector<const TFunction *> sorted =
+        GetSamplerPassingFunctionsInDAGOrder(mMainFunction, mFunctionsSamplerAccess);
+
+    // Go over the functions, starting from |main|, which is the last entry in |sorted|.
+    //
+    // Assume function F is being visited, which may call function G:
+    //
+    // * uniformsPassedToCallee: That means F calls G(uniform.field1).  For G itself:
+    //   * paramsStaticallyUsedWithTexelFetch: G calls texelFetch(param.field2).
+    //     uniform.field1.field2 is derived by combining these fields, added to the global
+    //     mSamplersStaticallyUsedWithTexelFetch.
+    //   * paramsPassedToCallee: G calls H(param.field2).
+    //     uniform.field1.field2 is derived by combining these fields, added to G's
+    //     uniformsPassedToCallee.
+    // * paramsStaticallyUsedWithTexelFetch is already processed at the time of visit.  Note
+    //   that this is the empty set for |main|.
+    // * paramsPassedToCallee is also already processed at the time of visit.  Also empty for
+    //   |main|.
+    //
+    // When G is later, again only uniformsPassedToCallee need processing.  At the end, all the
+    // texelFetch static use is accumulated in mSamplersStaticallyUsedWithTexelFetch.
+    //
+    for (size_t i = 0; i < sorted.size(); ++i)
+    {
+        const TFunction *function                          = sorted[sorted.size() - i - 1];
+        const FunctionSamplerAccess &functionSamplerAccess = mFunctionsSamplerAccess[function];
+
+        for (const SamplerAsFunctionArg &arg : functionSamplerAccess.uniformsPassedToCallee)
+        {
+            FunctionSamplerAccess *calleeSamplerAccess = &mFunctionsSamplerAccess[arg.callee];
+            CombineSamplerAccessToTexelFetch(
+                arg.access, calleeSamplerAccess->paramsStaticallyUsedWithTexelFetch,
+                arg.calleeArgIndex, &mSamplersStaticallyUsedWithTexelFetch);
+            CombineSamplerAccessToFunctionArg(arg.access, calleeSamplerAccess->paramsPassedToCallee,
+                                              arg.calleeArgIndex,
+                                              &calleeSamplerAccess->uniformsPassedToCallee);
+        }
+    }
+
+    for (const SamplerAccess &access : mSamplersStaticallyUsedWithTexelFetch)
+    {
+        mIRBuilder.markTexelFetchUse(mVariableToId.at(access.uniform).id,
+                                     angle::Span(access.fields));
+    }
+}
+
 void TParseContext::checkInterpolationFS(TIntermAggregate *functionCall)
 {
     const TFunction *func = functionCall->getFunction();
@@ -10108,10 +10677,14 @@ TIntermTyped *TParseContext::addMethod(TFunctionLookup *fnCall, const TSourceLoc
         switch (thisNode->getQualifier())
         {
             case EvqClipDistance:
-                MarkClipCullArrayLengthMethodCall(loc, &mClipDistanceInfo);
+                MarkClipCullArrayLengthMethodCall(loc, IsPerVertexInMember(thisNode)
+                                                           ? &mInputClipDistanceInfo
+                                                           : &mClipDistanceInfo);
                 break;
             case EvqCullDistance:
-                MarkClipCullArrayLengthMethodCall(loc, &mCullDistanceInfo);
+                MarkClipCullArrayLengthMethodCall(loc, IsPerVertexInMember(thisNode)
+                                                           ? &mInputCullDistanceInfo
+                                                           : &mCullDistanceInfo);
                 break;
             default:
                 break;
@@ -10153,8 +10726,9 @@ TIntermTyped *TParseContext::addNonConstructorFunctionCallImpl(TFunctionLookup *
             callNode->setLine(loc);
             checkImageMemoryAccessForUserDefinedFunctions(fnCandidate, callNode);
             functionCallRValueLValueErrorCheck(fnCandidate, callNode);
-            functionCallClipCullDistanceCheck(fnCandidate, callNode);
+            functionCallClipCullDistanceCheck(*callNode->getSequence());
             functionCallFragDataCheck(fnCandidate, callNode);
+            trackSamplersPassedToFunction(fnCandidate, callNode);
 
             mCallGraph[mCurrentFunction].insert(fnCandidate);
             mIRBuilder.callFunction(mFunctionToId.at(fnCandidate));
@@ -10220,6 +10794,7 @@ TIntermTyped *TParseContext::addNonConstructorFunctionCallImpl(TFunctionLookup *
             checkAtomicMemoryBuiltinFunctions(callNode);
             checkTextureOffset(callNode);
             checkTextureGather(callNode);
+            checkTexelFetch(callNode);
             checkInterpolationFS(callNode);
             checkImageMemoryAccessForBuiltinFunctions(callNode);
 
@@ -10560,18 +11135,18 @@ void TParseContext::checkCallGraph()
 
     // Visit all the functions; even if a function is unreachable, it must still result in a compile
     // error.
-    for (auto iter : mCallGraph)
+    for (const auto &entry : mCallGraph)
     {
-        visitStack.push_back(iter.first);
+        visitStack.push_back(entry.first);
 
         // Check the callees of this function too, if any is undefined, it's an error.
-        for (const TFunction *callee : iter.second)
+        for (const TFunction *callee : entry.second)
         {
             if (mDefinedFunctions.find(callee) == mDefinedFunctions.end())
             {
                 std::stringstream errorStream = sh::InitializeStream<std::stringstream>();
                 errorStream << "Function " << callee->name() << "() called by "
-                            << iter.first->name() << "() is undefined";
+                            << entry.first->name() << "() is undefined";
                 mDiagnostics->globalError(errorStream.str().c_str());
             }
         }
@@ -10586,15 +11161,15 @@ void TParseContext::checkCallGraph()
                         << callee->name();
             if (callee != function)
             {
-                for (auto caller = visitStack.rbegin(); caller != visitStack.rend(); ++caller)
+                for (const TFunction *caller : angle::Reversed(visitStack))
                 {
-                    if (visitState[*caller].state != VisitState::Visiting)
+                    if (visitState[caller].state != VisitState::Visiting)
                     {
                         continue;
                     }
 
-                    errorStream << " <- " << (*caller)->name();
-                    if (*caller == callee)
+                    errorStream << " <- " << caller->name();
+                    if (caller == callee)
                     {
                         break;
                     }
@@ -10898,6 +11473,25 @@ bool TParseContext::postParseChecks()
         error(mClipDistanceInfo.firstEncounter, strstr.str().c_str(), "gl_ClipDistance");
     }
 
+    // The gl_in members of tessellation and geometry shaders are sized independently of the
+    // shader's outputs, so they are checked against the combined limit separately.
+    const unsigned int usedInputClipDistances = getInputClipDistanceArraySize();
+    const unsigned int usedInputCullDistances = getInputCullDistanceArraySize();
+    const unsigned int combinedInputClipAndCullDistances =
+        usedInputClipDistances > 0 && usedInputCullDistances > 0
+            ? usedInputClipDistances + usedInputCullDistances
+            : 0;
+    if (static_cast<int>(combinedInputClipAndCullDistances) >
+        mResources.MaxCombinedClipAndCullDistances)
+    {
+        std::stringstream strstr = sh::InitializeStream<std::stringstream>();
+        strstr << "The sum of 'gl_ClipDistance' and 'gl_CullDistance' size is greater than "
+                  "gl_MaxCombinedClipAndCullDistances ("
+               << combinedInputClipAndCullDistances << " > "
+               << mResources.MaxCombinedClipAndCullDistances << ")";
+        error(mInputClipDistanceInfo.firstEncounter, strstr.str().c_str(), "gl_ClipDistance");
+    }
+
     if (mClipDistanceInfo.hasArrayLengthMethodCall && usedClipDistances == 0)
     {
         error(mClipDistanceInfo.firstEncounter,
@@ -10971,17 +11565,24 @@ bool TParseContext::postParseChecks()
 
     checkCallGraph();
 
+    if (numErrors() == 0)
+    {
+        // texelFetch static use is determined at the end of parse, so that samplers passed via
+        // functions can be followed.
+        postParseTrackSamplersPassedToFunction();
+    }
+
     return numErrors() == 0;
 }
 
-void TParseContext::addAndCheckOutputVaryings(const TVariable &variable, const TSourceLoc &line)
+void TParseContext::addAndCheckVaryings(const TVariable &variable, const TSourceLoc &line)
 {
-    if (mShaderType != GL_VERTEX_SHADER)
+    if (mShaderType != GL_VERTEX_SHADER && mShaderType != GL_FRAGMENT_SHADER)
     {
         return;
     }
 
-    if (!mCompileOptions.limitOutputVaryingsTo256)
+    if (!mCompileOptions.limitVaryingsAtCompileTime)
     {
         return;
     }
@@ -10991,24 +11592,28 @@ void TParseContext::addAndCheckOutputVaryings(const TVariable &variable, const T
         return;
     }
 
-    if (!IsVaryingOut(variable.getType().getQualifier()))
+    const TQualifier qualifier = variable.getType().getQualifier();
+    const bool isVarying       = IsVaryingOut(qualifier) || IsVaryingIn(qualifier);
+    if (!isVarying)
     {
         return;
     }
 
-    angle::CheckedNumeric<unsigned int> checkedNum = mNumOutputVaryingComponents;
+    angle::CheckedNumeric<unsigned int> checkedNum = mNumVaryingComponents;
     checkedNum += GetTypeComponentCount(variable.getType());
-    mNumOutputVaryingComponents =
-        checkedNum.ValueOrDefault(std::numeric_limits<unsigned int>::max());
+    mNumVaryingComponents = checkedNum.ValueOrDefault(std::numeric_limits<unsigned int>::max());
 
-    // The cap to 256 vec4s = 1024 components seems somewhat arbitrary, but this is intended as a
-    // workaround for a specific driver bug, and this limit being much
-    // higher than the device limits (mResources.MaxVertexOutputVectors *
-    // 4), it avoids regressing both tests and applications.
-    if (mNumOutputVaryingComponents > 1024)
+    // The cap to 256 components seems somewhat arbitrary, but this is intended as a workaround for
+    // a specific driver bug, and this limit being much higher than the device limits
+    // (mResources.MaxVertexOutputVectors * 4 and mResources.MaxFragmentInputVectors * 4), it
+    // avoids regressing both tests and applications.
+    if (mNumVaryingComponents > 256)
     {
-        error(line, "Too many declared shader output varying components for this device",
-              variable.name());
+        const char *errorMessage =
+            IsVaryingOut(qualifier)
+                ? "Too many declared shader output varying components for this device"
+                : "Too many declared shader input varying components for this device";
+        error(line, errorMessage, variable.name());
     }
 }
 

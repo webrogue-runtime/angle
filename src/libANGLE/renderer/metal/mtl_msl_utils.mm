@@ -334,15 +334,15 @@ std::string updateShaderAttributes(std::string shaderSourceIn,
     }
     // Rewrite attributes
     std::string outputSource = shaderSourceIn;
-    for (auto it = attributeBindings.begin(); it != attributeBindings.end(); ++it)
+    for (auto &attributeBinding : attributeBindings)
     {
-        std::size_t attribFound = outputSource.find(it->first);
+        std::size_t attribFound = outputSource.find(attributeBinding.first);
         if (attribFound != std::string::npos)
         {
             stream.str("");
-            stream << "[[attribute(" << it->second << ")]]";
+            stream << "[[attribute(" << attributeBinding.second << ")]]";
             outputSource = outputSource.replace(
-                attribFound + it->first.length() -
+                attribFound + attributeBinding.first.length() -
                     angle::ConstStrLen(sh::kUnassignedAttributeString),
                 angle::ConstStrLen(sh::kUnassignedAttributeString), stream.str());
         }
@@ -553,7 +553,6 @@ void GenerateTransformFeedbackEmulationOutputs(
 
     for (uint32_t bufferIndex = 0; bufferIndex < bufferCount; ++bufferIndex)
     {
-        const std::string xfbBinding = Str(0);
         xfbIndices[bufferIndex]      = Str(bufferIndex);
 
         std::string bufferName = GetXfbBufferNameMtl(bufferIndex);
@@ -656,8 +655,7 @@ angle::Result MTLGetMSL(const angle::FeaturesMtl &features,
         else
         {
             ASSERT(type == gl::ShaderType::Fragment);
-            const bool defineAlpha0 = features.emulateAlphaToCoverage.enabled ||
-                                      features.generateShareableShaders.enabled;
+            const bool defineAlpha0 = features.emulateAlphaToCoverage.enabled;
             source = UpdateFragmentShaderOutputs(shaderSources[type], executable, defineAlpha0);
         }
         (*mslShaderInfoOut)[type].metalShaderSource =

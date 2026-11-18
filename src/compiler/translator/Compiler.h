@@ -19,6 +19,7 @@
 #include "common/PackedEnums.h"
 #include "common/span.h"
 #include "compiler/translator/CallDAG.h"
+#include "compiler/translator/CollectVariables.h"
 #include "compiler/translator/Diagnostics.h"
 #include "compiler/translator/ExtensionBehavior.h"
 #include "compiler/translator/HashNames.h"
@@ -208,12 +209,17 @@ class TCompiler : public TShHandleBase
 
     bool areClipDistanceOrCullDistanceUsed() const
     {
-        return mClipDistanceSize > 0 || mCullDistanceSize > 0;
+        return mClipDistanceSize > 0 || mCullDistanceSize > 0 || mInputClipDistanceSize > 0 ||
+               mInputCullDistanceSize > 0;
     }
 
     uint8_t getClipDistanceArraySize() const { return mClipDistanceSize; }
 
     uint8_t getCullDistanceArraySize() const { return mCullDistanceSize; }
+
+    uint8_t getInputClipDistanceArraySize() const { return mInputClipDistanceSize; }
+
+    uint8_t getInputCullDistanceArraySize() const { return mInputCullDistanceSize; }
 
     bool usesDerivatives() const { return mUsesDerivatives; }
 
@@ -275,7 +281,9 @@ class TCompiler : public TShHandleBase
     void tagUsedFunctions();
     void internalTagUsedFunction(size_t index);
 
-    void collectVariables(TIntermBlock *root);
+    void collectVariables(
+        TIntermBlock *root,
+        const SamplersStaticallyUsedWithTexelFetch &samplersStaticallyUsedWithTexelFetch);
     void collectInterfaceBlocks();
 
     bool sortUniforms(TIntermBlock *root);
@@ -334,6 +342,8 @@ class TCompiler : public TShHandleBase
     // Track gl_ClipDistance / gl_CullDistance usage.
     uint8_t mClipDistanceSize;
     uint8_t mCullDistanceSize;
+    uint8_t mInputClipDistanceSize;
+    uint8_t mInputCullDistanceSize;
 
     // geometry shader parameters.
     int mGeometryShaderMaxVertices;

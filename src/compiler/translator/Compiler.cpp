@@ -31,6 +31,9 @@
 #include "compiler/translator/tree_ops/DeferGlobalInitializers.h"
 #include "compiler/translator/tree_ops/EmulateGLFragColorBroadcast.h"
 #include "compiler/translator/tree_ops/EmulateMultiDrawShaderBuiltins.h"
+#include "compiler/translator/tree_ops/EnsureLoopForwardProgress.h"
+#include "compiler/translator/tree_ops/ExpandFragmentOutputsToVec4.h"
+#include "compiler/translator/tree_ops/FoldConstantSwitch.h"
 #include "compiler/translator/tree_ops/FoldExpressions.h"
 #include "compiler/translator/tree_ops/InitializeVariables.h"
 #include "compiler/translator/tree_ops/PruneEmptyCases.h"
@@ -46,10 +49,8 @@
 #include "compiler/translator/tree_ops/SplitSequenceOperator.h"
 #include "compiler/translator/tree_ops/glsl/RewriteRepeatedAssignToSwizzled.h"
 #include "compiler/translator/tree_ops/glsl/UseInterfaceBlockFields.h"
-#include "compiler/translator/tree_ops/glsl/WrapStructConstructors.h"
 #include "compiler/translator/tree_ops/glsl/apple/AddAndTrueToLoopCondition.h"
 #include "compiler/translator/tree_ops/glsl/apple/UnfoldShortCircuitAST.h"
-#include "compiler/translator/tree_ops/msl/EnsureLoopForwardProgress.h"
 #include "compiler/translator/tree_util/FindSymbolNode.h"
 #include "compiler/translator/tree_util/IntermNodePatternMatcher.h"
 #include "compiler/translator/tree_util/IntermNode_util.h"
@@ -297,6 +298,57 @@ struct UniformSortComparator
     }
 };
 
+// To make CollectVariable's recursive algorithms more efficient, turn the "(uniform, field_chain)"
+// tuples into a map of uniform to set of (nested) fields.
+SamplersStaticallyUsedWithTexelFetch PreprocessSamplersStaticallyUsedWithTexelFetch(
+    const TUnorderedSet<SamplerAccess> samplersStaticallyUsedWithTexelFetch)
+{
+    SamplersStaticallyUsedWithTexelFetch result;
+
+    for (const SamplerAccess &access : samplersStaticallyUsedWithTexelFetch)
+    {
+        SelectedFields *fields = &result[access.uniform];
+        for (uint32_t fieldIndex : access.fields)
+        {
+            auto [it, inserted] = fields->subfields.try_emplace(fieldIndex, nullptr);
+            if (inserted)
+            {
+                it->second = new SelectedFields();
+            }
+            fields = it->second;
+        }
+    }
+
+    return result;
+}
+
+// Removes the gl_PerVertex fields that are not in accessedFields from the collected varyings
+void FilterGLPerVertexFields(std::vector<ShaderVariable> *varyings,
+                             const PerVertexMemberSet &accessedFields)
+{
+    for (ShaderVariable &varying : *varyings)
+    {
+        if (varying.structOrBlockName == "gl_PerVertex" && !varying.fields.empty())
+        {
+            std::vector<ShaderVariable> filteredFields;
+            for (const ShaderVariable &field : varying.fields)
+            {
+                // Check if the specific field is used.
+                const int perVertexMemberIndex =
+                    GetPerVertexMemberIndex(ImmutableString(field.name));
+                const bool isUsed =
+                    perVertexMemberIndex >= 0 && accessedFields.test(perVertexMemberIndex);
+
+                if (isUsed)
+                {
+                    filteredFields.push_back(field);
+                }
+            }
+            varying.fields = std::move(filteredFields);
+        }
+    }
+}
+
 }  // anonymous namespace
 
 bool IsGLSL150OrNewer(ShShaderOutput output)
@@ -493,9 +545,21 @@ TIntermBlock *TCompiler::compileTreeImpl(angle::Span<const char *const> shaderSt
         ASSERT(root == nullptr);
         ir::IR ir = parseContext.getIR();
 
-        // Create an AST out of the IR while the rest of the translator is still AST based.
+        // Create an AST out of the IR while the rest of the translator is still AST based, or
+        // emit target source code directly for IR codegen backends (e.g. WGSL).
         ir::Output output = ir::GenerateAST(std::move(ir), this, compileOptions);
-        root              = output.root;
+        if (output.root != nullptr)
+        {
+            ASSERT(output.outputSource.empty());
+            root = output.root;
+        }
+        else
+        {
+            // Direct source code emission (e.g. WGSL). Since there are no compilation errors in
+            // IR, output is always generated.
+            ASSERT(!output.outputSource.empty());
+            getInfoSink().obj << output.outputSource;
+        }
 
         // Vertex shader inputs and compute shader built-ins are gathered as "inputs" in IR, but are
         // exposed as an "attributes" list.
@@ -525,7 +589,7 @@ TIntermBlock *TCompiler::compileTreeImpl(angle::Span<const char *const> shaderSt
         mVariablesCollected = true;
     }
 #endif
-    ASSERT(root != nullptr);
+    ASSERT(root != nullptr || getInfoSink().obj.size() != 0);
 
     const bool hasAnyClipCullDistance =
         parseContext.isExtensionEnabled(TExtension::ANGLE_clip_cull_distance) ||
@@ -535,6 +599,21 @@ TIntermBlock *TCompiler::compileTreeImpl(angle::Span<const char *const> shaderSt
     {
         mClipDistanceSize = static_cast<uint8_t>(parseContext.getClipDistanceArraySize());
         mCullDistanceSize = static_cast<uint8_t>(parseContext.getCullDistanceArraySize());
+        if (mShaderType == GL_FRAGMENT_SHADER)
+        {
+            // Fragment shaders have no gl_PerVertex input block. gl_ClipDistance and
+            // gl_CullDistance are themselves inputs, so the sizes tracked by parseContext are the
+            // input sizes.
+            mInputClipDistanceSize = mClipDistanceSize;
+            mInputCullDistanceSize = mCullDistanceSize;
+        }
+        else
+        {
+            mInputClipDistanceSize =
+                static_cast<uint8_t>(parseContext.getInputClipDistanceArraySize());
+            mInputCullDistanceSize =
+                static_cast<uint8_t>(parseContext.getInputCullDistanceArraySize());
+        }
         mMetadataFlags[MetadataFlags::HasClipDistance] = parseContext.isClipDistanceUsed();
     }
 
@@ -768,8 +847,8 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
         }
     }
 
-    // Fold expressions that could not be folded before validation that was done as a part of
-    // parsing.
+    // Fold expressions that could not be folded before validation or otherwise that was done as a
+    // part of parsing.
     if (!FoldExpressions(this, root, &mDiagnostics))
     {
         return false;
@@ -942,7 +1021,10 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
     // Needs to run before SimplifyLoopConditions to be able to detect |for| loops correctly.
     if (compileOptions.ensureLoopForwardProgress)
     {
-        if (!EnsureLoopForwardProgress(this, root))
+        EnsureLoopForwardProgressMode mode = mOutputType == SH_MSL_METAL_OUTPUT
+                                                 ? EnsureLoopForwardProgressMode::Volatile
+                                                 : EnsureLoopForwardProgressMode::Counter;
+        if (!EnsureLoopForwardProgress(this, root, mode))
         {
             return false;
         }
@@ -997,6 +1079,20 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
         return false;
     }
 
+    // Fold switch statements with constant expression.  Run after FoldExpressions because the
+    // switch selector may need folding.  This pass may leave dead code, so prune it again
+    // afterwards.
+    mValidateASTOptions.validateNoStatementsAfterBranch = false;
+    if (!FoldConstantSwitch(this, root, &mSymbolTable))
+    {
+        return false;
+    }
+    if (!PruneNoOps(this, root, &mSymbolTable))
+    {
+        return false;
+    }
+    mValidateASTOptions.validateNoStatementsAfterBranch = true;
+
     if (!RemoveUnreferencedVariables(this, root, &mSymbolTable))
     {
         return false;
@@ -1013,7 +1109,10 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
         return false;
     }
 
-    collectVariables(root);
+    const SamplersStaticallyUsedWithTexelFetch samplersStaticallyUsedWithTexelFetch =
+        PreprocessSamplersStaticallyUsedWithTexelFetch(
+            parseContext.getSamplersStaticallyUsedWithTexelFetch());
+    collectVariables(root, samplersStaticallyUsedWithTexelFetch);
 
     if (compileOptions.useUnusedStandardSharedBlocks)
     {
@@ -1026,14 +1125,6 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
     if (compileOptions.scalarizeVecAndMatConstructorArgs)
     {
         if (!ScalarizeVecAndMatConstructorArgs(this, root, &mSymbolTable))
-        {
-            return false;
-        }
-    }
-
-    if (compileOptions.avoidComplexExpressionsInStructConstructor)
-    {
-        if (!WrapStructConstructors(this, root, &mSymbolTable))
         {
             return false;
         }
@@ -1149,6 +1240,14 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
         }
     }
 
+    if (compileOptions.expandFragmentOutputsToVec4 && mShaderVersion >= 300)
+    {
+        if (!ExpandFragmentOutputsToVec4(this, root, &getSymbolTable()))
+        {
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -1222,14 +1321,14 @@ bool TCompiler::compile(angle::Span<const char *const> shaderStrings,
     TScopedPoolAllocator scopedAlloc;
     TIntermBlock *root = compileTreeImpl(shaderStrings, compileOptions);
 
-    if (root)
+    if (root || getInfoSink().obj.size() != 0)
     {
-        if (compileOptions.intermediateTree)
+        if (compileOptions.intermediateTree && root)
         {
             OutputTree(root, mInfoSink.info);
         }
 
-        if (compileOptions.objectCode)
+        if (compileOptions.objectCode && root)
         {
             PerformanceDiagnostics perfDiagnostics(&mDiagnostics);
             if (!translate(root, compileOptions, &perfDiagnostics))
@@ -1253,18 +1352,20 @@ bool TCompiler::compile(angle::Span<const char *const> shaderStrings,
             ASSERT(mShaderType == GL_VERTEX_SHADER);
             for (auto &uniform : mUniforms)
             {
-                if (lookForDrawID && uniform.name == "angle_DrawID" &&
-                    uniform.mappedName == "angle_DrawID")
+                if (lookForDrawID && uniform.name == "AngleInternal_DrawID" &&
+                    uniform.mappedName == "AngleInternal_DrawID")
                 {
                     uniform.name = "gl_DrawID";
                 }
-                else if (lookForBaseVertexBaseInstance && uniform.name == "angle_BaseVertex" &&
-                         uniform.mappedName == "angle_BaseVertex")
+                else if (lookForBaseVertexBaseInstance &&
+                         uniform.name == "AngleInternal_BaseVertex" &&
+                         uniform.mappedName == "AngleInternal_BaseVertex")
                 {
                     uniform.name = "gl_BaseVertex";
                 }
-                else if (lookForBaseVertexBaseInstance && uniform.name == "angle_BaseInstance" &&
-                         uniform.mappedName == "angle_BaseInstance")
+                else if (lookForBaseVertexBaseInstance &&
+                         uniform.name == "AngleInternal_BaseInstance" &&
+                         uniform.mappedName == "AngleInternal_BaseInstance")
                 {
                     uniform.name = "gl_BaseInstance";
                 }
@@ -1437,15 +1538,25 @@ void TCompiler::setResourceString()
     mBuiltInResourcesString = strstream.str();
 }
 
-void TCompiler::collectVariables(TIntermBlock *root)
+void TCompiler::collectVariables(
+    TIntermBlock *root,
+    const SamplersStaticallyUsedWithTexelFetch &samplersStaticallyUsedWithTexelFetch)
 {
     // Variable collection is done from the IR already.
     ASSERT(!mCompileOptions.useIR);
     ASSERT(!mVariablesCollected);
+    PerVertexMembersAccessed perVertexMembersAccessed;
     CollectVariables(root, &mAttributes, &mOutputVariables, &mUniforms, &mInputVaryings,
                      &mOutputVaryings, &mSharedVariables, &mUniformBlocks, &mShaderStorageBlocks,
-                     mResources.HashFunction, &mNameMap, &mSymbolTable, mShaderType,
-                     mExtensionBehavior, mCompileOptions.transformFloatUniformTo16Bits);
+                     &perVertexMembersAccessed, mResources.HashFunction, &mNameMap, &mSymbolTable,
+                     mShaderType, mExtensionBehavior, mCompileOptions.transformFloatUniformTo16Bits,
+                     samplersStaticallyUsedWithTexelFetch);
+
+    // The built-in gl_PerVertex block declares every member, but only the members the shader
+    // accesses are reported.
+    FilterGLPerVertexFields(&mInputVaryings, perVertexMembersAccessed.input);
+    FilterGLPerVertexFields(&mOutputVaryings, perVertexMembersAccessed.output);
+
     collectInterfaceBlocks();
     mVariablesCollected = true;
 }
@@ -1482,8 +1593,10 @@ void TCompiler::clearResults()
 
     mNumViews = -1;
 
-    mClipDistanceSize = 0;
-    mCullDistanceSize = 0;
+    mClipDistanceSize      = 0;
+    mCullDistanceSize      = 0;
+    mInputClipDistanceSize = 0;
+    mInputCullDistanceSize = 0;
 
     mGeometryShaderInputPrimitiveType  = EptUndefined;
     mGeometryShaderOutputPrimitiveType = EptUndefined;
@@ -1768,16 +1881,16 @@ const ShBuiltInResources &TCompiler::getResources() const
 bool TCompiler::isVaryingDefined(const char *varyingName)
 {
     ASSERT(mVariablesCollected);
-    for (size_t ii = 0; ii < mInputVaryings.size(); ++ii)
+    for (const ShaderVariable &inputVarying : mInputVaryings)
     {
-        if (mInputVaryings[ii].name == varyingName)
+        if (inputVarying.name == varyingName)
         {
             return true;
         }
     }
-    for (size_t ii = 0; ii < mOutputVaryings.size(); ++ii)
+    for (const ShaderVariable &outputVarying : mOutputVaryings)
     {
-        if (mOutputVaryings[ii].name == varyingName)
+        if (outputVarying.name == varyingName)
         {
             return true;
         }

@@ -22,7 +22,7 @@ pub fn run(ir: &mut IR, options: &Options) {
         replace_with_uniform(
             &mut ir.meta,
             BuiltIn::DrawID,
-            "angle_DrawID",
+            "AngleInternal_DrawID",
             EmulatedMultiDraw::DrawID,
         );
     }
@@ -33,13 +33,13 @@ pub fn run(ir: &mut IR, options: &Options) {
         replace_with_uniform(
             &mut ir.meta,
             BuiltIn::BaseVertex,
-            "angle_BaseVertex",
+            "AngleInternal_BaseVertex",
             EmulatedMultiDraw::BaseVertex,
         );
         replace_with_uniform(
             &mut ir.meta,
             BuiltIn::BaseInstance,
-            "angle_BaseInstance",
+            "AngleInternal_BaseInstance",
             EmulatedMultiDraw::BaseInstance,
         );
     }
@@ -64,13 +64,13 @@ fn replace_with_uniform(
 fn add_base_vertex_to_vertex_id(ir: &mut IR) {
     if let Some(vertex_id) = ir.meta.get_built_in_variable(BuiltIn::VertexID) {
         let replaced_vertex_id = TypedId::from_variable_id(&ir.meta, vertex_id);
-        let vertex_id = ir.meta.declare_cached_global_for_variable(vertex_id, "VertexID").1;
+        let vertex_id = ir.meta.declare_cached_global_for_variable(vertex_id, "VertexID", None).1;
 
         let base_vertex = ir.meta.get_or_declare_built_in_variable(BuiltIn::BaseVertex).1;
 
         // Initialize VertexID as such:
         //
-        //     VertexID = gl_VertexID + angle_BaseVertex;
+        //     VertexID = gl_VertexID + AngleInternal_BaseVertex;
         //
         // Which translates to:
         //
@@ -80,10 +80,11 @@ fn add_base_vertex_to_vertex_id(ir: &mut IR) {
         //                  Store vertex_id adjusted
 
         let mut preamble = Block::new();
-        let id = preamble.add_typed_instruction(instruction::load(&mut ir.meta, vertex_id));
-        let base = preamble.add_typed_instruction(instruction::load(&mut ir.meta, base_vertex));
-        let adjusted = preamble.add_typed_instruction(instruction::add(&mut ir.meta, id, base));
-        preamble.add_void_instruction(OpCode::Store(replaced_vertex_id, adjusted));
+        let mut builder = instruction::Builder::<&mut Block>::new(&mut preamble);
+        let id = builder.load(&mut ir.meta, vertex_id);
+        let base = builder.load(&mut ir.meta, base_vertex);
+        let adjusted = builder.add(&mut ir.meta, id, base);
+        builder.store(&mut ir.meta, replaced_vertex_id, adjusted);
 
         ir.prepend_to_main(preamble);
     }

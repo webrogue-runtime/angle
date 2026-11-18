@@ -11,6 +11,7 @@
 
 #include <string.h>
 #include <algorithm>
+#include <functional>
 #include <limits>
 
 #include "anglebase/numerics/safe_conversions.h"
@@ -41,6 +42,9 @@ namespace rx
 
 namespace
 {
+
+constexpr size_t kMaxDeferredDeletedBuffers     = 128;
+constexpr size_t kMaxDeferredDeletedBuffersSize = 128 * 1024 * 1024;
 
 inline void SetGLBoolState(const FunctionsGL *functions, GLenum name, bool value)
 {
@@ -416,7 +420,7 @@ struct ScopedBindVAO
 };
 
 void QueryContextStateGL(const FunctionsGL *functions,
-                         GLuint framebufferWithStencilBits,
+                         std::function<GLuint(void)> framebufferWithStencilBitsGetter,
                          ContextStateGL *state)
 {
     GetHelper(functions, GL_CURRENT_PROGRAM, &state->program);
@@ -581,7 +585,8 @@ void QueryContextStateGL(const FunctionsGL *functions,
     // Bind a framebuffer with stencil bits for the rest of the queries. Many queries related to
     // stencil will mask with the number of bits in the current stencil buffer.
     ScopedBindDrawFramebuffer scopedFramebufferWithStencil(
-        functions, state->framebuffers[angle::FramebufferBindingDraw], framebufferWithStencilBits);
+        functions, state->framebuffers[angle::FramebufferBindingDraw],
+        framebufferWithStencilBitsGetter());
 
     GetHelper(functions, GL_RENDERBUFFER_BINDING, &state->renderbuffer);
 
@@ -811,6 +816,7 @@ bool VertexAttribCurrentValuesEqual(const gl::VertexAttribCurrentValueData &a,
                                     const gl::VertexAttribCurrentValueData &b)
 {
     // When comparing vertex attribute current values, only compare the data, not the type.
+    // SAFETY: this is the exact comparison done in operator== for gl::VertexAttribCurrentValueData.
     return ANGLE_UNSAFE_BUFFERS(
                memcmp(&a.Values, &b.Values, sizeof(gl::VertexAttribCurrentValueData::Values))) == 0;
 }
@@ -959,10 +965,10 @@ void SetDirtyBitExtIfStateDifferent(const T &a,
     SetDirtyBitIfStateDifferent(a.clipDepthMode, b.clipDepthMode, bits,
                                 gl::state::DIRTY_BIT_CLIP_CONTROL);
     SetDirtyBitIfStateDifferent(a.blendColor, b.blendColor, bits, gl::state::DIRTY_BIT_BLEND_COLOR);
-    SetDirtyBitIfStateDifferent(a.blendState.getAllEnabledMask(), b.blendState.getAllEnabledMask(),
-                                bits, gl::state::DIRTY_BIT_COLOR_MASK);
+    SetDirtyBitIfStateDifferent(a.blendState.getEnabledMask(), b.blendState.getEnabledMask(), bits,
+                                gl::state::DIRTY_BIT_BLEND_ENABLED);
     SetDirtyBitIfStateDifferent(a.blendState.getColorMaskBits(), b.blendState.getColorMaskBits(),
-                                bits, gl::state::DIRTY_BIT_BLEND_ENABLED);
+                                bits, gl::state::DIRTY_BIT_COLOR_MASK);
     SetDirtyBitIfStateDifferent(a.blendState.getSrcColorBits(), b.blendState.getSrcColorBits(),
                                 bits, gl::state::DIRTY_BIT_BLEND_FUNCS);
     SetDirtyBitIfStateDifferent(a.blendState.getDstColorBits(), b.blendState.getDstColorBits(),
@@ -1629,17 +1635,29 @@ StateManagerGL::StateManagerGL(const FunctionsGL *functions,
 
 StateManagerGL::~StateManagerGL()
 {
-    if (mPlaceholderFbo != 0)
+    if (!mDeferredBufferDeletions.empty())
     {
-        deleteFramebuffer(mPlaceholderFbo);
+        mFunctions->finish();
+        onFinish();
     }
-    if (mPlaceholderFboColorRenderbuffer != 0)
+
+    // When ensurePreviousFramebufferNotDeleted is enabled, the placeholder framebuffer must
+    // outlive every other framebuffer deletion on this context.  Skip deleting it and let it be
+    // reclaimed when the native context is destroyed.
+    if (!mFeatures.ensurePreviousFramebufferNotDeleted.enabled)
     {
-        deleteRenderbuffer(mPlaceholderFboColorRenderbuffer);
-    }
-    if (mPlaceholderFboDepthStencilRenderbuffer != 0)
-    {
-        deleteRenderbuffer(mPlaceholderFboDepthStencilRenderbuffer);
+        if (mPlaceholderFbo != 0)
+        {
+            deleteFramebuffer(mPlaceholderFbo);
+        }
+        if (mPlaceholderFboColorRenderbuffer != 0)
+        {
+            deleteRenderbuffer(mPlaceholderFboColorRenderbuffer);
+        }
+        if (mPlaceholderFboDepthStencilRenderbuffer != 0)
+        {
+            deleteRenderbuffer(mPlaceholderFboDepthStencilRenderbuffer);
+        }
     }
 
     if (mDefaultVAO != 0)
@@ -1720,7 +1738,7 @@ void StateManagerGL::deleteSampler(GLuint sampler)
     }
 }
 
-void StateManagerGL::deleteBuffer(GLuint buffer)
+void StateManagerGL::deleteBuffer(GLuint buffer, size_t clientSpecifiedSize, bool isHardenedContext)
 {
     if (buffer == 0)
     {
@@ -1731,7 +1749,7 @@ void StateManagerGL::deleteBuffer(GLuint buffer)
     {
         if (mState.buffers[target] == buffer)
         {
-            bindBuffer(target, 0);
+            bindBuffer(target, 0, isHardenedContext);
         }
 
         auto &indexedTarget = mState.indexedBuffers[target];
@@ -1762,7 +1780,29 @@ void StateManagerGL::deleteBuffer(GLuint buffer)
         }
     }
 
-    mFunctions->deleteBuffers(1, &buffer);
+    if (!isHardenedContext || !mFeatures.deferGlDeleteBuffers.enabled)
+    {
+        mFunctions->deleteBuffers(1, &buffer);
+    }
+    else
+    {
+        bool hasBeenBoundAsElementArrayBuffer = mElementArrayBuffers.erase(buffer) > 0;
+        if (mDeferredBufferDeletions.empty() ||
+            mDeferredBufferDeletions.back().serial != mCurrentSerial)
+        {
+            mDeferredBufferDeletions.push_back({mCurrentSerial, {}, 0});
+        }
+        DeferredBufferDeletions &deletions = mDeferredBufferDeletions.back();
+        deletions.buffers.push_back(buffer);
+        deletions.size += clientSpecifiedSize;
+        ++mDeferredBufferDeletionsCount;
+        mDeferredBufferDeletionsTotalSize += clientSpecifiedSize;
+        if (hasBeenBoundAsElementArrayBuffer)
+        {
+            mDeferredBufferDeletionsNeedFinish = true;
+        }
+        maybeDrainDeferredBuffers();
+    }
 }
 
 void StateManagerGL::deleteFramebuffer(GLuint fbo)
@@ -1844,6 +1884,12 @@ void StateManagerGL::useProgram(GLuint program)
 
 void StateManagerGL::forceUseProgram(GLuint program)
 {
+    // glUseProgram generates GL_INVALID_OPERATION while the current transform feedback is active
+    // and not paused, which would leave mState.program out of sync with the native state.  Pause
+    // it first; syncTransformFeedbackState() resumes it on the next draw if it is still unpaused
+    // in the frontend.
+    pauseTransformFeedback();
+
     mState.program = program;
     mFunctions->useProgram(program);
     mLocalDirtyBits.set(gl::state::DIRTY_BIT_PROGRAM_BINDING);
@@ -1870,7 +1916,7 @@ void StateManagerGL::forceBindVertexArray(GLuint vao)
     mLocalDirtyBits.set(gl::state::DIRTY_BIT_VERTEX_ARRAY_BINDING);
 }
 
-void StateManagerGL::bindBuffer(gl::BufferBinding target, GLuint buffer)
+void StateManagerGL::bindBuffer(gl::BufferBinding target, GLuint buffer, bool isHardenedContext)
 {
     // GL drivers differ in whether the transform feedback bind point is modified when
     // glBindTransformFeedback is called. To avoid these behavior differences we shouldn't try to
@@ -1888,6 +1934,10 @@ void StateManagerGL::bindBuffer(gl::BufferBinding target, GLuint buffer)
             if (vaoState)
             {
                 vaoState->elementArrayBuffer = buffer;
+            }
+            if (isHardenedContext && mFeatures.deferGlDeleteBuffers.enabled && buffer != 0)
+            {
+                mElementArrayBuffers.insert(buffer);
             }
         }
     }
@@ -2047,7 +2097,7 @@ angle::Result StateManagerGL::setPixelUnpackBuffer(const gl::Context *context,
     {
         bufferID = GetImplAs<BufferGL>(pixelBuffer)->getBufferID();
     }
-    bindBuffer(gl::BufferBinding::PixelUnpack, bufferID);
+    bindBuffer(gl::BufferBinding::PixelUnpack, bufferID, context->isHardenedContext());
 
     return angle::Result::Continue;
 }
@@ -2094,13 +2144,34 @@ angle::Result StateManagerGL::setPixelPackBuffer(const gl::Context *context,
     {
         bufferID = GetImplAs<BufferGL>(pixelBuffer)->getBufferID();
     }
-    bindBuffer(gl::BufferBinding::PixelPack, bufferID);
+    bindBuffer(gl::BufferBinding::PixelPack, bufferID, context->isHardenedContext());
 
     return angle::Result::Continue;
 }
 
+void StateManagerGL::bindFramebufferNative(GLenum type, GLuint framebuffer)
+{
+    if (mFeatures.ensurePreviousFramebufferNotDeleted.enabled)
+    {
+        // Bind the placeholder framebuffer in between framebuffer binds so that the driver's
+        // reference to the previously bound complete framebuffer is always a framebuffer that
+        // outlives all other framebuffers.
+        ensurePlaceholderFramebuffer();
+        mFunctions->bindFramebuffer(type, mPlaceholderFbo);
+    }
+    mFunctions->bindFramebuffer(type, framebuffer);
+}
+
 void StateManagerGL::bindFramebuffer(GLenum type, GLuint framebuffer)
 {
+    if (type != GL_READ_FRAMEBUFFER && mState.framebuffers[angle::FramebufferBindingDraw] != 0 &&
+        mState.framebuffers[angle::FramebufferBindingDraw] != framebuffer &&
+        mFeatures.flushBeforeDrawFramebufferChange.enabled)
+    {
+        // Flush pending rendering on the outgoing draw framebuffer while still bound.
+        forcefullyFlush();
+    }
+
     bool framebufferChanged = false;
     switch (type)
     {
@@ -2110,7 +2181,7 @@ void StateManagerGL::bindFramebuffer(GLenum type, GLuint framebuffer)
             {
                 mState.framebuffers[angle::FramebufferBindingRead] = framebuffer;
                 mState.framebuffers[angle::FramebufferBindingDraw] = framebuffer;
-                mFunctions->bindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+                bindFramebufferNative(GL_FRAMEBUFFER, framebuffer);
 
                 mLocalDirtyBits.set(gl::state::DIRTY_BIT_READ_FRAMEBUFFER_BINDING);
                 mLocalDirtyBits.set(gl::state::DIRTY_BIT_DRAW_FRAMEBUFFER_BINDING);
@@ -2124,7 +2195,7 @@ void StateManagerGL::bindFramebuffer(GLenum type, GLuint framebuffer)
             if (mState.framebuffers[angle::FramebufferBindingRead] != framebuffer)
             {
                 mState.framebuffers[angle::FramebufferBindingRead] = framebuffer;
-                mFunctions->bindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
+                bindFramebufferNative(GL_READ_FRAMEBUFFER, framebuffer);
 
                 mLocalDirtyBits.set(gl::state::DIRTY_BIT_READ_FRAMEBUFFER_BINDING);
 
@@ -2137,7 +2208,7 @@ void StateManagerGL::bindFramebuffer(GLenum type, GLuint framebuffer)
             if (mState.framebuffers[angle::FramebufferBindingDraw] != framebuffer)
             {
                 mState.framebuffers[angle::FramebufferBindingDraw] = framebuffer;
-                mFunctions->bindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
+                bindFramebufferNative(GL_DRAW_FRAMEBUFFER, framebuffer);
 
                 mLocalDirtyBits.set(gl::state::DIRTY_BIT_DRAW_FRAMEBUFFER_BINDING);
 
@@ -2168,6 +2239,68 @@ void StateManagerGL::onSyncedFlushOrFinish()
     mHasUnflushedQueries = false;
 }
 
+void StateManagerGL::onFinish()
+{
+    if (mFeatures.deferGlDeleteBuffers.enabled)
+    {
+        mDeferredBufferDeletionsNeedFinish = false;
+        ExecutionSerial serial             = mCurrentSerial++;
+        onSerialCompleted(serial);
+    }
+}
+
+StateManagerGL::ExecutionSerial StateManagerGL::onFenceSync()
+{
+    return mCurrentSerial++;
+}
+
+StateManagerGL::ExecutionSerial StateManagerGL::onBeginQuery()
+{
+    return mCurrentSerial++;
+}
+
+void StateManagerGL::onSerialCompleted(ExecutionSerial serial)
+{
+    if (!mFeatures.deferGlDeleteBuffers.enabled)
+    {
+        return;
+    }
+
+    if (mDeferredBufferDeletions.empty() || mDeferredBufferDeletions.front().serial > serial)
+    {
+        return;
+    }
+
+    if (mDeferredBufferDeletionsNeedFinish)
+    {
+        mFunctions->finish();
+        mDeferredBufferDeletionsNeedFinish = false;
+        serial                             = mCurrentSerial++;
+    }
+
+    while (!mDeferredBufferDeletions.empty() && mDeferredBufferDeletions.front().serial <= serial)
+    {
+        DeferredBufferDeletions &deletions = mDeferredBufferDeletions.front();
+        mFunctions->deleteBuffers(static_cast<GLsizei>(deletions.buffers.size()),
+                                  deletions.buffers.data());
+        ASSERT(mDeferredBufferDeletionsCount >= deletions.buffers.size());
+        mDeferredBufferDeletionsCount -= deletions.buffers.size();
+        ASSERT(mDeferredBufferDeletionsTotalSize >= deletions.size);
+        mDeferredBufferDeletionsTotalSize -= deletions.size;
+        mDeferredBufferDeletions.pop_front();
+    }
+}
+
+void StateManagerGL::maybeDrainDeferredBuffers()
+{
+    if (mDeferredBufferDeletionsCount > kMaxDeferredDeletedBuffers ||
+        mDeferredBufferDeletionsTotalSize > kMaxDeferredDeletedBuffersSize)
+    {
+        mFunctions->finish();
+        onFinish();
+    }
+}
+
 void StateManagerGL::forcefullyFlush()
 {
     if (mFunctions->fenceSync != nullptr && mFunctions->clientWaitSync != nullptr &&
@@ -2186,6 +2319,7 @@ void StateManagerGL::forcefullyFlush()
     // Sync creation not supported or failed; fall back to finish()
     mFunctions->finish();
     onSyncedFlushOrFinish();
+    onFinish();
 }
 
 void StateManagerGL::bindRenderbuffer(GLenum type, GLuint renderbuffer)
@@ -2266,7 +2400,8 @@ void StateManagerGL::updateDrawIndirectBufferBinding(const gl::Context *context)
     if (drawIndirectBuffer != nullptr)
     {
         const BufferGL *bufferGL = GetImplAs<BufferGL>(drawIndirectBuffer);
-        bindBuffer(gl::BufferBinding::DrawIndirect, bufferGL->getBufferID());
+        bindBuffer(gl::BufferBinding::DrawIndirect, bufferGL->getBufferID(),
+                   context->isHardenedContext());
     }
 }
 
@@ -2277,15 +2412,15 @@ void StateManagerGL::updateDispatchIndirectBufferBinding(const gl::Context *cont
     if (dispatchIndirectBuffer != nullptr)
     {
         const BufferGL *bufferGL = GetImplAs<BufferGL>(dispatchIndirectBuffer);
-        bindBuffer(gl::BufferBinding::DispatchIndirect, bufferGL->getBufferID());
+        bindBuffer(gl::BufferBinding::DispatchIndirect, bufferGL->getBufferID(),
+                   context->isHardenedContext());
     }
 }
 
 void StateManagerGL::pauseTransformFeedback()
 {
-    if (mCurrentTransformFeedback != nullptr)
+    if (mCurrentTransformFeedback != nullptr && mCurrentTransformFeedback->syncPausedState(true))
     {
-        mCurrentTransformFeedback->syncPausedState(true);
         onTransformFeedbackStateChange();
     }
 }
@@ -2554,9 +2689,17 @@ void StateManagerGL::updateProgramImageBindings(const gl::Context *context)
         const TextureGL *textureGL     = SafeGetImplAs<TextureGL>(imageUnit.texture.get());
         if (textureGL)
         {
-            // Do not set layer parameters for non-layered texture types to avoid driver bugs.
-            const bool layered = IsLayeredTextureType(textureGL->getType());
-            bindImageTexture(imageUnitIndex, textureGL->getTextureID(), imageUnit.level,
+            gl::TextureTarget target =
+                textureGL->getType() == gl::TextureType::CubeMap
+                    ? gl::CubeFaceIndexToTextureTarget(imageUnit.layered ? 0 : imageUnit.layer)
+                    : gl::NonCubeTextureTypeToTarget(textureGL->getType());
+            TextureGL::NativeLevelTarget nativeTarget =
+                textureGL->getNativeLevelTarget(target, imageUnit.level);
+            // Do not set layer parameters for non-layered texture types (including an unmerged
+            // cube map face stored in a 2D companion texture when virtualizeBaseLevelAndMipchain
+            // is enabled) to avoid driver bugs.
+            const bool layered = IsLayeredTextureType(gl::TextureTargetToType(nativeTarget.target));
+            bindImageTexture(imageUnitIndex, nativeTarget.textureID, nativeTarget.level,
                              layered && imageUnit.layered, layered ? imageUnit.layer : 0,
                              imageUnit.access, imageUnit.format);
         }
@@ -4165,7 +4308,7 @@ void StateManagerGL::updateMultiviewBaseViewLayerIndexUniformImpl(
         executableGL->enableLayeredRenderingPath(drawFramebufferState.getBaseViewIndex());
     }
 }
-void StateManagerGL::setDefaultVAOState(const VertexArrayStateGL &state)
+void StateManagerGL::setDefaultVAOState(const VertexArrayStateGL &state, bool isHardenedContext)
 {
     if (mState.defaultVAOState == state)
     {
@@ -4177,7 +4320,7 @@ void StateManagerGL::setDefaultVAOState(const VertexArrayStateGL &state)
     const bool supportsBindings = nativegl::SupportsVertexAttributeBindings(mFunctions);
     const bool supportsInstancing = nativegl::SupportsInstancing(mFunctions);
 
-    bindBuffer(gl::BufferBinding::ElementArray, state.elementArrayBuffer);
+    bindBuffer(gl::BufferBinding::ElementArray, state.elementArrayBuffer, isHardenedContext);
     for (GLint i = 0; i < mCaps.maxVertexAttributes; i++)
     {
         VertexAttributeGL &curAttrib       = mState.defaultVAOState.attributes[i];
@@ -4217,7 +4360,7 @@ void StateManagerGL::setDefaultVAOState(const VertexArrayStateGL &state)
             if (curAttrib.format != newAttrib.format || curAttrib.pointer != newAttrib.pointer ||
                 curBinding.buffer != newBinding.buffer || curBinding.stride != newBinding.stride)
             {
-                bindBuffer(gl::BufferBinding::Array, newBinding.buffer);
+                bindBuffer(gl::BufferBinding::Array, newBinding.buffer, isHardenedContext);
                 mFunctions->vertexAttribPointer(i, newAttrib.format->channelCount,
                                                 gl::ToGLenum(newAttrib.format->vertexAttribType),
                                                 newAttrib.format->isNorm(), newBinding.stride,
@@ -4284,8 +4427,9 @@ void StateManagerGL::setDefaultVAOState(const VertexArrayStateGL &state)
 angle::Result StateManagerGL::setState(const gl::Context *context, const ContextStateGL &state)
 {
     useProgram(state.program);
-    setDefaultVAOState(
-        state.defaultVAOState);  // Set default VAO state before binding the target vao
+    setDefaultVAOState(state.defaultVAOState,
+                       context->isHardenedContext());  // Set default VAO state before binding the
+                                                       // target vao
     bindVertexArray(state.vao);
     for (size_t attribIndex = 0; attribIndex < state.vertexAttribCurrentValues.size();
          attribIndex++)
@@ -4316,7 +4460,7 @@ angle::Result StateManagerGL::setState(const gl::Context *context, const Context
             }
         }
 
-        bindBuffer(bufferBinding, state.buffers[bufferBinding]);
+        bindBuffer(bufferBinding, state.buffers[bufferBinding], context->isHardenedContext());
     }
     for (size_t textureUnit = 0; textureUnit < gl::IMPLEMENTATION_MAX_ACTIVE_TEXTURES;
          textureUnit++)
@@ -4528,10 +4672,9 @@ VertexArrayStateGL *StateManagerGL::getCurrentVAOState()
 
 void StateManagerGL::validateState()
 {
-    ensurePlaceholderFramebuffer();
-
     ContextStateGL queriedState(mCaps);
-    QueryContextStateGL(mFunctions, mPlaceholderFbo, &queriedState);
+    QueryContextStateGL(
+        mFunctions, [this]() { return ensurePlaceholderFramebuffer(); }, &queriedState);
     if (mState != queriedState)
     {
         std::ostringstream msg;
@@ -4561,10 +4704,9 @@ angle::Result StateManagerGL::syncFromNativeContext(const gl::Context *context,
     auto *platform   = ANGLEPlatformCurrent();
     double startTime = platform->currentTime(platform);
 
-    ensurePlaceholderFramebuffer();
-
     // Query the current driver state into outNativeContextState so that it can be restored later.
-    QueryContextStateGL(mFunctions, mPlaceholderFbo, outNativeContextState);
+    QueryContextStateGL(
+        mFunctions, [this]() { return ensurePlaceholderFramebuffer(); }, outNativeContextState);
 
     // Compute the dirty bits between the currently tracked state and the queried state in
     // outNativeContextState. This will ensure that all frontend states will be re-applied in the
@@ -4592,11 +4734,11 @@ angle::Result StateManagerGL::restoreNativeContext(const gl::Context *context,
     return angle::Result::Continue;
 }
 
-void StateManagerGL::ensurePlaceholderFramebuffer()
+GLuint StateManagerGL::ensurePlaceholderFramebuffer()
 {
     if (mPlaceholderFbo)
     {
-        return;
+        return mPlaceholderFbo;
     }
 
     GLenum framebufferBinding =
@@ -4623,6 +4765,8 @@ void StateManagerGL::ensurePlaceholderFramebuffer()
     mFunctions->bindFramebuffer(framebufferBinding,
                                 mState.framebuffers[angle::FramebufferBindingDraw]);
     mFunctions->bindRenderbuffer(GL_RENDERBUFFER, mState.renderbuffer);
+
+    return mPlaceholderFbo;
 }
 
 }  // namespace rx

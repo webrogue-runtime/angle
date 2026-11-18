@@ -245,12 +245,12 @@ bool RenderPipelineDesc::setDepthFunc(WGPUCompareFunction compareFunc)
 
 bool RenderPipelineDesc::setDepthWriteEnabled(bool enabled)
 {
-    const uint32_t packed = enabled ? 1u : 0u;
-    if (mDepthStencilState.depthWriteEnabled == packed)
+    uint32_t uintEnabled = enabled ? 1 : 0;
+    if (mDepthStencilState.depthWriteEnabled == uintEnabled)
     {
         return false;
     }
-    mDepthStencilState.depthWriteEnabled = packed;
+    mDepthStencilState.depthWriteEnabled = uintEnabled;
     return true;
 }
 

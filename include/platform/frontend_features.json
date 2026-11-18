@@ -23,6 +23,14 @@
             ]
         },
         {
+            "name": "disallow_non_zero_base_level_and_incompatible_levels_on_hardened_contexts",
+            "category": "Workarounds",
+            "description": [
+                "On hardened contexts, disallow redeclaring mutable texture levels incompatibly and changing ",
+                "the base level to something other than zero"
+            ]
+        },
+        {
             "name": "disable_program_caching_for_transform_feedback",
             "category": "Workarounds",
             "description": [
@@ -88,6 +96,14 @@
             "description": [
                 "Force-enable shader variable initialization"
             ]
+        },
+        {
+            "name": "ensure_loop_forward_progress",
+            "category": "Features",
+            "description": [
+                "Inject statements into loop bodies when needed to ensure infinite loops are not optimized out."
+            ],
+            "issue": "http://crbug.com/41486305"
         },
         {
             "name": "enable_program_binary_for_capture",
@@ -264,6 +280,14 @@
                 "Force every context into debug mode as if EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR was used."
             ],
             "issue": "https://anglebug.com/423956139"
+        },
+        {
+            "name": "retain_shader_debug_info",
+            "category": "Features",
+            "description": [
+                "Retain debug info in text-based compiler output."
+            ],
+            "issue": "http://anglebug.com/579047131"
         },
         {
             "name": "limit_max_buffer_bytes_to_1MB",

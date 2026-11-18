@@ -206,11 +206,9 @@ class Framebuffer final : public angle::ObserverInterface,
     ~Framebuffer() override;
     void onDestroy(const Context *context);
 
-    egl::Error setSurfaces(const Context *context,
-                           egl::Surface *surface,
-                           egl::Surface *readSurface);
+    void setSurfaces(const Context *context, egl::Surface *surface, egl::Surface *readSurface);
     void setReadSurface(const Context *context, egl::Surface *readSurface);
-    egl::Error unsetSurfaces(const Context *context);
+    void unsetSurfaces(const Context *context);
     angle::Result setLabel(const Context *context, const std::string &label) override;
     const std::string &getLabel() const override;
 
@@ -354,6 +352,8 @@ class Framebuffer final : public angle::ObserverInterface,
     {
         return checkStatus(context).isComplete();
     }
+
+    FramebufferStatus checkStatusWithGLFrontEnd(const Context *context) const;
 
     bool hasValidDepthStencil() const;
 
@@ -499,7 +499,6 @@ class Framebuffer final : public angle::ObserverInterface,
                                   FramebufferAttachment *attachment,
                                   GLenum matchType,
                                   GLuint matchId);
-    FramebufferStatus checkStatusWithGLFrontEnd(const Context *context) const;
     const FramebufferStatus &checkStatusImpl(const Context *context) const;
     void setAttachment(const Context *context,
                        GLenum type,

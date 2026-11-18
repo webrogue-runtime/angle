@@ -17,7 +17,7 @@
 #include "compiler/translator/tree_ops/MonomorphizeUnsupportedFunctions.h"
 #include "compiler/translator/tree_ops/RecordConstantPrecision.h"
 #include "compiler/translator/tree_ops/RemoveDynamicIndexing.h"
-#include "compiler/translator/tree_ops/glsl/ExpandFragmentOutputsToVec4.h"
+#include "compiler/translator/tree_ops/glsl/WrapStructConstructors.h"
 #include "compiler/translator/tree_util/FindSymbolNode.h"
 #include "compiler/translator/tree_util/ReplaceClipCullDistanceVariable.h"
 #include "compiler/translator/tree_util/RunAtTheEndOfShader.h"
@@ -111,6 +111,14 @@ bool TranslatorESSL::translate(TIntermBlock *root,
             return false;
         }
 
+        if (compileOptions.avoidComplexExpressionsInStructConstructor)
+        {
+            if (!WrapStructConstructors(this, root, &getSymbolTable()))
+            {
+                return false;
+            }
+        }
+
         // anglebug.com/42265954: The ESSL spec has a bug with images as function arguments. The
         // recommended workaround is to inline functions that accept image arguments.
         if (shaderVer >= 310 && !MonomorphizeUnsupportedFunctions(
@@ -124,13 +132,6 @@ bool TranslatorESSL::translate(TIntermBlock *root,
     if (compileOptions.removeDynamicIndexingOfSwizzledVector)
     {
         if (!RemoveDynamicIndexingOfSwizzledVector(this, root, &getSymbolTable(), nullptr))
-        {
-            return false;
-        }
-    }
-    if (compileOptions.expandFragmentOutputsToVec4)
-    {
-        if (!ExpandFragmentOutputsToVec4(this, root, &getSymbolTable()))
         {
             return false;
         }

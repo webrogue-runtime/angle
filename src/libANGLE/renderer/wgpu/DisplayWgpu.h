@@ -28,7 +28,23 @@ class ShareGroupWgpu : public ShareGroupImpl
 
 class AllocationTrackerWgpu;
 
-class DisplayWgpu : public DisplayImpl
+class ThreadSafeDisplayWgpu : public ThreadSafeDisplayImpl
+{
+  public:
+    ThreadSafeDisplayWgpu()           = default;
+    ~ThreadSafeDisplayWgpu() override = default;
+
+    bool testDeviceLost() override final;
+    egl::Error restoreLostDevice(const egl::ThreadSafeDisplay *display) override final;
+
+    egl::Error makeCurrent(egl::Surface *drawSurface,
+                           egl::Surface *readSurface,
+                           gl::Context *context) override;
+
+  private:
+};
+
+class DisplayWgpu : public DisplayImpl, public ThreadSafeDisplayWgpu
 {
   public:
     DisplayWgpu(const egl::DisplayState &state);
@@ -37,15 +53,7 @@ class DisplayWgpu : public DisplayImpl
     egl::Error initialize(egl::Display *display) override;
     void terminate() override;
 
-    egl::Error makeCurrent(egl::Display *display,
-                           egl::Surface *drawSurface,
-                           egl::Surface *readSurface,
-                           gl::Context *context) override;
-
     egl::ConfigSet generateConfigs() override;
-
-    bool testDeviceLost() override;
-    egl::Error restoreLostDevice(const egl::Display *display) override;
 
     egl::Error validateClientBuffer(const egl::Config *configuration,
                                     EGLenum buftype,
@@ -128,6 +136,8 @@ class DisplayWgpu : public DisplayImpl
 
     const webgpu::Format *getFormatForImportedTexture(const egl::AttributeMap &attribs,
                                                       WGPUTextureFormat wgpuFormat) const;
+
+    ThreadSafeDisplayImpl *getThreadSafeDisplayImpl() override { return this; }
 
   private:
     egl::Error validateExternalWebGPUTexture(EGLClientBuffer buffer,
