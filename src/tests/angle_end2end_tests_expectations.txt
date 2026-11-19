@@ -212,7 +212,6 @@
 448658624 WIN INTEL VULKAN : GLSLTestLoops.ForContinueInSwitchComplex/* = SKIP
 448658624 WIN INTEL VULKAN : GLSLTest_ES31.ConstantPrecisionPropagation/* = SKIP
 452159379 WIN INTEL VULKAN : ProgramBinaryTest.ReturnedBinaryTwiceShouldMatch/* = SKIP
-574115585 WIN INTEL VULKAN : VertexAttributeTestES3.RedefineAttributeBufferAsLargeNoData/* = SKIP
 519062400 WIN INTEL OPENGL : CopyTextureTestES3.ChangeBaseLevel/* = SKIP
 561613775 WIN INTEL OPENGL : CopyTextureTestES3.IncompleteLevelDoesNotSyncFromStorage/* = SKIP
 523371282 WIN INTEL OPENGL : TransformFeedbackTest.RenderOnceChangeXfbBufferRenderAgain/* = SKIP
@@ -296,6 +295,7 @@
 40644896 WIN INTEL OPENGL : ViewportTest.DoubleWindowCentered/* = SKIP
 42266866 WIN INTEL OPENGL : GLSLTest_ES3.LargeInterfaceBlockArray/* = SKIP
 42266866 WIN INTEL OPENGL : GLSLTest_ES3.LargeInterfaceBlockNestedArray/* = SKIP
+587036339 WIN INTEL OPENGL : GLSLTest_ES3.LotsOfFieldsInStruct/* = SKIP
 463961767 WIN INTEL OPENGL : EGLSurfacelessContextTest.Switcheroo/* = SKIP
 494350632 WIN INTEL OPENGL : MipmapTestES3.MismatchingLevelFormats/* = SKIP
 355607623 WIN INTEL OPENGL : WebGL2GLSLTest.BasicInfiniteLoop/* = SKIP
@@ -307,6 +307,8 @@
 // Failures on Intel Comet Lake S UHD Graphics 630 (8086:9bc5-31.0.101.2127)
 543664599 WIN INTEL OPENGL : FramebufferTestWithFormatFallback.R4G4B4A4_NonZeroBaseLevelStagedImageReformat/* = SKIP
 556564149 WIN INTEL VULKAN : GLSLTest_ES3.InterpolantArrayReferencedWithoutIndex/* = SKIP
+// Takes ~38s executing 536M instances on the Windows Intel OpenGL driver.
+587034865 WIN INTEL OPENGL : RobustBufferAccessBehaviorTest.DynamicBufferCrash/* = SKIP
 
 // Failures on Intel Alder Lake S UHD Graphics 770 (8086:4680-31.0.101.5333)
 352085732 WIN INTEL OPENGL : GeometryShaderTest.LayeredFramebufferClear2DArrayColor/* = SKIP
@@ -475,8 +477,6 @@
 537235696 LINUX INTEL OPENGL : ClipDistance*.ThreeClipDistancesRedeclaredAndPassedToFunction/* = SKIP
 582944923 LINUX INTEL OPENGL : StateChangeTestES3.DrawBuffersWithAdvancedBlend/* = SKIP
 582944923 LINUX INTEL OPENGL : StateChangeTestES3.BlendFunciBlendEquationiAdvanced/* = SKIP
-// Uninitialized vertex buffer data fed into gl_Position clips the point when non-zero (b/574115585)
-574115585 LINUX INTEL OPENGL : VertexAttributeTestES3.RedefineAttributeBufferAsLargeNoData/* = SKIP
 
 //Angle has bugs for sampler validation
 401546698 : TextureCubeTest.CubeMapBug2/* = SKIP
@@ -2563,10 +2563,6 @@
 42266649 MALIG710 VULKAN : VulkanPerformanceCounterTest_DepthStencilLoadStoreOps.RenderToTextureUninitializedAndUnusedDepthStencil/* = SKIP
 42266649 MALIG710 VULKAN : WebGLCompatibilityTest.FramebufferFloatColorAttachmentMRT/* = SKIP
 
-42266807 VULKAN : Texture2DBaseMaxTestES3.NotColorRenderableWithColorRenderableBeyondMaxLevel/* = SKIP
-42266807 VULKAN : Texture2DBaseMaxTestES3.DepthRenderableWithColorRenderableBeyondMaxLevel/* = SKIP
-42266807 VULKAN : Texture2DBaseMaxTestES3.NotColorRenderableAfterColorRenderableBelowBaseLevel/* = SKIP
-42266807 VULKAN : Texture2DBaseMaxTestES3.DepthRenderableAfterColorRenderableBelowBaseLevel/* = SKIP
 42266807 WIN INTEL OPENGL : Texture2DBaseMaxTestES3.NotColorRenderableAfterColorRenderableBelowBaseLevel/* = SKIP
 42266807 WIN INTEL OPENGL : Texture2DBaseMaxTestES3.DepthRenderableAfterColorRenderableBelowBaseLevel/* = SKIP
 
@@ -3126,6 +3122,7 @@
 // Timeout on Intel/Vulkan
 517981272 WIN INTEL VULKAN : EGLMultiContextTest.RepeatedEglInitAndTerminate/* = SKIP
 585321308 WIN INTEL VULKAN : VulkanPerformanceCounterTest.DrawThenBlitThenDrawWithXFB/* = SKIP
+587034708 WIN INTEL VULKAN : VertexAttributeTestES3.ClientAttribAfterDynamicBufferGrowthAndRebindDuringTransformFeedback/* = SKIP
 
 // This test fails because of incorrect GLX MakeCurrent calls in other tests
 520248049 LINUX OPENGL : EGLSurfacelessContextTest.CheckFramebufferStatus/* = SKIP
@@ -3175,6 +3172,7 @@
 558250724 WIN INTEL OPENGL : Texture2DTestES3RobustInit.CopyTexImagePartiallyOutOfBoundsAcrossMips/* = SKIP
 42263392 WIN INTEL OPENGL : Texture2DTestES3RobustInit.CopyTexImageMip1ToMip0Redefine/* = SKIP
 42263392 WIN INTEL OPENGL : Texture2DTestES3RobustInit.CopyTexImageCubeMapRedefineSelf/* = SKIP
+557480846 WIN INTEL OPENGL : Texture2DTestES3RobustInit.StorageReleaseDoesNotOverwriteDirtyStagingImage/* = SKIP
 42263389 NVIDIA OPENGL : Texture2DTestES3RobustInit.CopyTexImageMip1ToMip0Redefine/* = SKIP
 42263389 NVIDIA GLES : Texture2DTestES3RobustInit.CopyTexImageMip1ToMip0Redefine/* = SKIP
 42263389 NVIDIA OPENGL : Texture2DTestES3RobustInit.CopyTexImageCubeMapRedefineSelf/* = SKIP
@@ -3270,7 +3268,6 @@
 523470135 WIN INTEL OPENGL : RobustResourceInitTestES3.CubeMapCopySubImageMismatchedFaceRedefine/* = SKIP
 
 566108153 WIN NVIDIA VULKAN : RobustResourceInitWithInvalidationTest.InvalidateAfterDrawAndClearZeroStencil/* = SKIP
-580842459 WIN NVIDIA VULKAN : Texture2DBaseMaxTestES3WithFormatFallback.BaseLevelRoundTripWithRenderableFallback/ES3_Vulkan_ForceRenderableFallbackFormat = SKIP
 
 568338695 VULKAN : ClearTestES3.DrawClearInvalidateClear/* = SKIP
 568338695 ARM GLES : ClearTestES3.DrawClearInvalidateClear/* = SKIP
@@ -3469,8 +3466,6 @@
 // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 // Slow tests, should appear last in this file
 // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-42263645 : GLSLTest.VerifyMaxVertexUniformVectors* = TIMEOUT
-42263645 : GLSLTest.VerifyMaxFragmentUniformVectors* = TIMEOUT
 42264781 : MultithreadingTest* = TIMEOUT
 // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 // Please do not add expectations below this line,
