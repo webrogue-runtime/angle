@@ -6,6 +6,9 @@
 // DisplayVkWebrogue.h:
 //    Defines the class interface for DisplayVkWebrogue, implementing DisplayVk for Windows.
 //
+// [WR-14] Vulkan WebRogue display. WebGPU is the default backend (WR-16); this
+// display is used only when Vulkan is requested explicitly.
+//
 
 #ifndef LIBANGLE_RENDERER_VULKAN_WEBROGUE_DISPLAYVKWEBROGUE_H_
 #define LIBANGLE_RENDERER_VULKAN_WEBROGUE_DISPLAYVKWEBROGUE_H_

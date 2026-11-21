@@ -102,7 +102,8 @@ struct PackedDepthStencilState final
 constexpr size_t kPackedDepthStencilStateSize = sizeof(PackedDepthStencilState);
 static_assert(kPackedDepthStencilStateSize == 24, "Size mismatch");
 
-constexpr uint32_t kVertexFormatBitCount = 5;
+// [WR-29] 6 bits are needed for the full WebGPU vertex format enum.
+constexpr uint32_t kVertexFormatBitCount = 6;
 
 // A maximum offset of 4096 covers almost every Vulkan driver on desktop (80%) and mobile (99%). The
 // next highest values to meet native drivers are 16 bits or 32 bits.
@@ -118,7 +119,8 @@ struct PackedVertexAttribute final
     uint16_t offset : kAttributeOffsetMaxBits;
     uint16_t enabled : 1;
     uint8_t format : kVertexFormatBitCount;
-    uint8_t pad1 : 3;
+    // [WR-29] Padding shrunk to keep the struct layout when format grew to 6 bits.
+    uint8_t pad1 : 2;
     uint8_t shaderLocation;
     uint16_t stride : kVertexAttributeStrideBits;
 };
@@ -138,7 +140,8 @@ class RenderPipelineDesc final
 
     bool setPrimitiveMode(gl::PrimitiveMode primitiveMode, gl::DrawElementsType indexTypeOrInvalid);
 
-    void setFrontFace(GLenum frontFace);
+    // [WR-28] yFlip is needed to compensate for WebGPU's framebuffer y-down winding.
+    void setFrontFace(GLenum frontFace, bool yFlip);
     void setCullMode(gl::CullFaceMode cullMode, bool cullFaceEnabled);
     bool setColorWriteMask(size_t colorIndex, bool r, bool g, bool b, bool a);
 
@@ -151,6 +154,12 @@ class RenderPipelineDesc final
     bool setBlendEquations(size_t colorIndex, WGPUBlendOperation rgb, WGPUBlendOperation alpha);
 
     bool setVertexAttribute(size_t attribIndex, PackedVertexAttribute &newAttrib);
+    // [WR-29] Attributes present in the pipeline's vertex state. Every one of
+    // them must have a vertex buffer bound at draw time.
+    gl::AttributesMask getEnabledAttributeMask() const;
+    // [WR-29] WebGPU vertex buffer slot of an enabled attribute in the pipeline's
+    // vertex state.
+    size_t getVertexBufferSlot(size_t attribIndex) const;
     bool setColorAttachmentFormat(size_t colorIndex, WGPUTextureFormat format);
     bool setDepthStencilAttachmentFormat(WGPUTextureFormat format);
     bool setDepthFunc(WGPUCompareFunction compareFunc);

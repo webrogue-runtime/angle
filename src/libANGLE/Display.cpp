@@ -514,6 +514,7 @@ EGLAttrib GetDisplayTypeFromEnvironment()
 #elif defined(ANGLE_ENABLE_METAL)
     return EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE;
 #elif defined(ANGLE_PLATFORM_WEBROGUE) && defined(ANGLE_ENABLE_WGPU)
+    // [WR-16] WebGPU is the default backend on WebRogue.
     return EGL_PLATFORM_ANGLE_TYPE_WEBGPU_ANGLE;
 #elif defined(ANGLE_ENABLE_VULKAN)
     return EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE;
@@ -811,6 +812,7 @@ rx::DisplayImpl *CreateDisplayFromAttribs(EGLAttrib displayType,
             }
             break;
 #    elif defined(ANGLE_PLATFORM_WEBROGUE)
+            // [WR-16] Explicit Vulkan requests use the WebRogue Vulkan display.
             if (rx::IsVulkanWebrogueDisplayAvailable())
             {
                 impl = rx::CreateVulkanWebrogueDisplay(state);

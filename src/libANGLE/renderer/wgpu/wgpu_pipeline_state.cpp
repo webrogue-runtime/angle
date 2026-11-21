@@ -64,7 +64,7 @@ RenderPipelineDesc::RenderPipelineDesc()
         std::numeric_limits<decltype(mDepthStencilState.stencilReadMask)>::max();
     mDepthStencilState.stencilWriteMask =
         std::numeric_limits<decltype(mDepthStencilState.stencilWriteMask)>::max();
-    // GL initializes the depth mask to enabled.
+    // [WR-27] GL initializes the depth mask to enabled.
     mDepthStencilState.depthWriteEnabled = 1;
 }
 
@@ -176,9 +176,18 @@ bool RenderPipelineDesc::setBlendEquations(size_t colorIndex,
     return changed;
 }
 
-void RenderPipelineDesc::setFrontFace(GLenum frontFace)
+void RenderPipelineDesc::setFrontFace(GLenum frontFace, bool yFlip)
 {
-    SetBitField(mPrimitiveState.frontFace, PackFrontFace(gl_wgpu::GetFrontFace(frontFace)));
+    // [WR-28] WebGPU determines winding in framebuffer coordinates, whose y axis
+    // points down, while GL uses y-up. The vertex shader flips gl_Position.y only
+    // for the default framebuffer, so swap the front face for other render targets.
+    WGPUFrontFace wgpuFrontFace = gl_wgpu::GetFrontFace(frontFace);
+    if (!yFlip)
+    {
+        wgpuFrontFace = (wgpuFrontFace == WGPUFrontFace_CCW) ? WGPUFrontFace_CW
+                                                            : WGPUFrontFace_CCW;
+    }
+    SetBitField(mPrimitiveState.frontFace, PackFrontFace(wgpuFrontFace));
 }
 
 void RenderPipelineDesc::setCullMode(gl::CullFaceMode cullMode, bool cullFaceEnabled)
@@ -209,6 +218,35 @@ bool RenderPipelineDesc::setVertexAttribute(size_t attribIndex, PackedVertexAttr
 
     ANGLE_UNSAFE_TODO(memcpy(&currentAttrib, &newAttrib, sizeof(PackedVertexAttribute)));
     return true;
+}
+
+// [WR-29] Mask of attributes present in the pipeline's vertex state.
+gl::AttributesMask RenderPipelineDesc::getEnabledAttributeMask() const
+{
+    gl::AttributesMask mask;
+    for (size_t attribIndex = 0; attribIndex < mVertexAttributes.size(); ++attribIndex)
+    {
+        mask.set(attribIndex, mVertexAttributes[attribIndex].enabled);
+    }
+    return mask;
+}
+
+// [WR-29] WebGPU buffer slot of an enabled attribute (compacted in index order).
+size_t RenderPipelineDesc::getVertexBufferSlot(size_t attribIndex) const
+{
+    // The pipeline's vertex state packs the enabled attributes in attribute index order, so the
+    // WebGPU buffer slot of an attribute is the number of enabled attributes before it. This keeps
+    // the number of used vertex buffers independent of the attribute indices, which WebGPU limits
+    // to 8.
+    size_t slot = 0;
+    for (size_t index = 0; index < attribIndex; ++index)
+    {
+        if (mVertexAttributes[index].enabled)
+        {
+            slot++;
+        }
+    }
+    return slot;
 }
 
 bool RenderPipelineDesc::setColorAttachmentFormat(size_t colorIndex, WGPUTextureFormat format)

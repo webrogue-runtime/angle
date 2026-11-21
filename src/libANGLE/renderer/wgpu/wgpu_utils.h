@@ -64,7 +64,7 @@
     PROC(Sync)
 
 #if defined(ANGLE_PLATFORM_WEBROGUE)
-// The standard webgpu.h does not define the Dawn-only shared memory objects.
+// [WR-21] The standard webgpu.h does not define the Dawn-only shared memory objects.
 #    define ANGLE_WGPU_OBJECTS_X(PROC)             \
         PROC(Adapter, adapter)                     \
         PROC(BindGroup, bindGroup)                 \
@@ -497,6 +497,7 @@ PackedRenderPassDepthStencilAttachment CreateNewDepthStencilAttachment(
 bool IsWgpuError(WGPUWaitStatus waitStatus);
 bool IsWgpuError(WGPUMapAsyncStatus mapAsyncStatus);
 
+// [WR-22] Decodes a WGPUStringView, honouring the WGPU_STRLEN sentinel.
 // Decodes a WGPUStringView into a std::string, honouring the WGPU_STRLEN
 // sentinel: {NULL, WGPU_STRLEN} is the null value and {data, WGPU_STRLEN} is a
 // null-terminated string. Passing WGPU_STRLEN to std::string's length would

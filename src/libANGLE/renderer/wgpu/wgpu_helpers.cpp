@@ -924,6 +924,20 @@ bool BufferHelper::isMappedForWrite() const
     return mMappedState.has_value() && (mMappedState->mode & WGPUMapMode_Write);
 }
 
+// [WR-31] Check the aligned mapped range, which is what getMapWritePointer() needs.
+bool BufferHelper::coversMapRange(size_t offset, size_t size) const
+{
+    if (!isMappedForWrite())
+    {
+        return false;
+    }
+
+    const size_t safeOffset = GetSafeBufferMapOffset(offset);
+    const size_t safeSize   = GetSafeBufferMapSize(offset, size);
+    return mMappedState->offset <= safeOffset &&
+           mMappedState->offset + mMappedState->size >= safeOffset + safeSize;
+}
+
 webgpu::BufferHandle BufferHelper::getBuffer() const
 {
     return mBuffer;

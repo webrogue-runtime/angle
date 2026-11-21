@@ -51,6 +51,7 @@ const char *GetSharedLibraryExtension()
 double GetCurrentSystemTime()
 {
     struct timespec currentTime;
+    // [WR-04] WASI libc has no CLOCK_MONOTONIC_RAW.
 #ifdef __wasi__
     clock_gettime(CLOCK_MONOTONIC, &currentTime);
 #else
@@ -62,6 +63,7 @@ double GetCurrentSystemTime()
 uint64_t GetCurrentSystemTimeNs()
 {
     struct timespec currentTime;
+    // [WR-04] WASI libc has no CLOCK_MONOTONIC_RAW.
 #ifdef __wasi__
     clock_gettime(CLOCK_MONOTONIC, &currentTime);
 #else
@@ -75,6 +77,7 @@ void SetCurrentThreadName(const char *name)
     // There's a 15-character (16 including '\0') limit.  If the name is too big (and ERANGE is
     // returned), name will be ignored.
     ASSERT(strlen(name) < 16);
+    // [WR-04] pthread_setname_np is not available on WASI.
 #ifdef __wasi__
     // __builtin_unreachable();
 #else

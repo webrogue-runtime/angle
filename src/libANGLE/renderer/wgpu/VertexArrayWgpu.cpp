@@ -16,6 +16,9 @@
 #include "common/PackedEnums.h"
 #include "common/debug.h"
 #include "libANGLE/Error.h"
+// [WR-30] Needed for GetCurrentValueFormatID() and angle::Format.
+#include "libANGLE/formatutils.h"
+#include "libANGLE/renderer/Format.h"
 #include "libANGLE/renderer/wgpu/ContextWgpu.h"
 #include "libANGLE/renderer/wgpu/wgpu_utils.h"
 
@@ -452,11 +455,59 @@ angle::Result VertexArrayWgpu::syncDirtyAttrib(ContextWgpu *contextWgpu,
     }
     else
     {
-        ANGLE_UNSAFE_TODO(
-            memset(&mCurrentAttribs[attribIndex], 0, sizeof(webgpu::PackedVertexAttribute)));
-        mCurrentArrayBuffers[attribIndex].buffer = nullptr;
-        mCurrentArrayBuffers[attribIndex].offset = 0;
+        const gl::ProgramExecutable *executable = contextWgpu->getState().getProgramExecutable();
+        if (executable && executable->getActiveAttribLocationsMask()[attribIndex])
+        {
+            // [WR-30] The shader reads this attribute even though the application
+            // disabled it, so emulate the GL "current value" with a constant
+            // vertex buffer.
+            ANGLE_TRY(ensureDefaultAttrib(contextWgpu, attribIndex));
+        }
+        else
+        {
+            ANGLE_UNSAFE_TODO(
+                memset(&mCurrentAttribs[attribIndex], 0, sizeof(webgpu::PackedVertexAttribute)));
+            mCurrentArrayBuffers[attribIndex].buffer = nullptr;
+            mCurrentArrayBuffers[attribIndex].offset = 0;
+        }
     }
+
+    return angle::Result::Continue;
+}
+
+// [WR-30] Upload the GL current value into a one-element vertex buffer.
+angle::Result VertexArrayWgpu::ensureDefaultAttrib(ContextWgpu *contextWgpu, size_t attribIndex)
+{
+    const gl::State &state = contextWgpu->getState();
+    const gl::VertexAttribCurrentValueData &defaultValue =
+        state.getVertexAttribCurrentValues()[attribIndex];
+
+    const angle::FormatID formatID     = GetCurrentValueFormatID(defaultValue.Type);
+    const angle::Format &angleFormat   = angle::Format::Get(formatID);
+    const webgpu::Format &webgpuFormat = contextWgpu->getFormat(angleFormat.glInternalFormat);
+    constexpr size_t kDefaultValueSize = sizeof(gl::VertexAttribCurrentValueData::Values);
+
+    webgpu::BufferHelper &buffer = mDefaultArrayBuffers[attribIndex];
+    ANGLE_TRY(buffer.initBuffer(contextWgpu->getProcs(), contextWgpu->getDevice(),
+                                kDefaultValueSize,
+                                WGPUBufferUsage_CopyDst | WGPUBufferUsage_Vertex,
+                                webgpu::MapAtCreation::Yes));
+    ANGLE_UNSAFE_TODO(memcpy(buffer.getMapWritePointer(0, kDefaultValueSize),
+                             &defaultValue.Values, kDefaultValueSize));
+    ANGLE_TRY(buffer.unmap());
+
+    SetBitField(mCurrentAttribs[attribIndex].enabled, true);
+    SetBitField(mCurrentAttribs[attribIndex].format, webgpuFormat.getActualWgpuVertexFormat());
+    SetBitField(mCurrentAttribs[attribIndex].offset, 0);
+    SetBitField(mCurrentAttribs[attribIndex].stride, 0);
+    mCurrentAttribs[attribIndex].shaderLocation = static_cast<uint8_t>(attribIndex);
+
+    mCurrentArrayBuffers[attribIndex].buffer = &buffer;
+    mCurrentArrayBuffers[attribIndex].offset = 0;
+
+    // Keep the pipeline description in sync when this is called outside the
+    // vertex array's sync path (see handleDirtyRenderPipelineDesc).
+    contextWgpu->setVertexAttribute(attribIndex, mCurrentAttribs[attribIndex]);
 
     return angle::Result::Continue;
 }

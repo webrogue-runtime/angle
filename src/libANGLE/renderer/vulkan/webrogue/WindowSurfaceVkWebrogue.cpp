@@ -6,6 +6,8 @@
 // WindowSurfaceVkWebrogue.cpp:
 //    Implements the class methods for WindowSurfaceVkWebrogue.
 //
+// [WR-15] Vulkan WebRogue window surface backed by VK_WEBROGUE_surface.
+//
 
 #include "libANGLE/renderer/vulkan/webrogue/WindowSurfaceVkWebrogue.h"
 

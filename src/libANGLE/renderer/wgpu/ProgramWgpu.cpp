@@ -10,6 +10,7 @@
 #include "libANGLE/renderer/wgpu/ProgramWgpu.h"
 #include "common/unsafe_buffers.h"
 
+// [WR-13] WASI libc++ does not include <iostream> transitively for std::cout.
 #include <iostream>
 
 #include "GLES2/gl2.h"
@@ -95,6 +96,7 @@ std::string FormatWGPUCompilationMessage(const WGPUCompilationMessage &message)
 {
     std::ostringstream oss;
     oss << message.lineNum << ":" << message.linePos << ": "
+        // [WR-23] Decode the compilation message with WGPU_STRLEN handling (WR-22).
         << webgpu::WgpuStringViewToString(message.message);
     return oss.str();
 }

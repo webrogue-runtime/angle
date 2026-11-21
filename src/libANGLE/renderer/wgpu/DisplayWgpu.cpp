@@ -477,6 +477,7 @@ egl::Error DisplayWgpu::createWgpuDevice()
 
         result->status  = status;
         result->adapter = webgpu::AdapterHandle::Acquire(wgpu, adapter);
+        // [WR-23] Decode the string view with WGPU_STRLEN handling (WR-22).
         result->message = webgpu::WgpuStringViewToString(message);
     };
     requestAdapterCallback.userdata1 = &adapterResult;
@@ -506,6 +507,7 @@ egl::Error DisplayWgpu::createWgpuDevice()
            void *userdata1, void *userdata2) {
             ASSERT(userdata1 == nullptr);
             ASSERT(userdata2 == nullptr);
+            // [WR-23] Decode the string view with WGPU_STRLEN handling (WR-22).
             ERR() << "Error: " << static_cast<std::underlying_type<WGPUErrorType>::type>(type)
                   << " - message: " << webgpu::WgpuStringViewToString(message);
         };
@@ -528,6 +530,7 @@ egl::Error DisplayWgpu::createWgpuDevice()
 
         result->status  = status;
         result->device  = webgpu::DeviceHandle::Acquire(wgpu, device);
+        // [WR-23] Decode the string view with WGPU_STRLEN handling (WR-22).
         result->message = webgpu::WgpuStringViewToString(message);
     };
     requestDeviceCallback.userdata1 = &deviceResult;

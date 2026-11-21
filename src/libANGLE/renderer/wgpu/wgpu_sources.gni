@@ -96,6 +96,7 @@ if (angle_use_wayland) {
 }
 
 if (is_wasi) {
+  # [WR-19] WebRogue WebGPU window surface (WR-24).
   wgpu_backend_sources += [
     "webrogue/WindowSurfaceWgpuWebrogue.cpp",
     "webrogue/WindowSurfaceWgpuWebrogue.h",

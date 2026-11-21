@@ -524,6 +524,7 @@ angle::Result SyncHelperNativeFence::clientWait(ErrorContext *context,
 
 angle::Result SyncHelperNativeFence::serverWait(ContextVk *contextVk)
 {
+    // [WR-12] Native fence fds do not exist on WASI.
 #ifdef __wasi__
     ANGLE_VK_UNREACHABLE(contextVk);
     return angle::Result::Stop;
@@ -576,6 +577,7 @@ angle::Result SyncHelperNativeFence::getStatus(ErrorContext *context,
 
 angle::Result SyncHelperNativeFence::dupNativeFenceFD(ErrorContext *context, int *fdOut) const
 {
+    // [WR-12] Native fence fds do not exist on WASI.
 #ifdef __wasi__
     return angle::Result::Stop;
 #else

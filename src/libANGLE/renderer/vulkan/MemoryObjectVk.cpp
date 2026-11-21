@@ -47,6 +47,7 @@ void CloseZirconVmo(zx_handle_t handle)
 #endif
 }
 
+// [WR-11] Zircon VMO helpers are unavailable on WASI.
 #ifndef __wasi__
 angle::Result DuplicateZirconVmo(ContextVk *contextVk, zx_handle_t handle, zx_handle_t *duplicate)
 {
@@ -132,6 +133,7 @@ angle::Result MemoryObjectVk::importZirconHandle(gl::Context *context,
                                                  gl::HandleType handleType,
                                                  GLuint handle)
 {
+    // [WR-11] Zircon handle import is unavailable on WASI.
 #ifdef __wasi__
     UNREACHABLE();
     return angle::Result::Stop;
@@ -161,6 +163,7 @@ angle::Result MemoryObjectVk::importOpaqueFd(ContextVk *contextVk, GLuint64 size
     return angle::Result::Continue;
 }
 
+// [WR-11] Zircon VMO import is unavailable on WASI.
 #ifndef __wasi__
 angle::Result MemoryObjectVk::importZirconVmo(ContextVk *contextVk, GLuint64 size, GLuint handle)
 {
@@ -187,6 +190,7 @@ angle::Result MemoryObjectVk::createImage(
     vk::ImageFormatReinterpretability formatReinterpretability,
     const void *imageCreateInfoPNext)
 {
+    // [WR-11] External-memory image creation is unavailable on WASI.
 #ifdef __wasi__
     ANGLE_VK_UNREACHABLE(contextVk);
     return angle::Result::Stop;

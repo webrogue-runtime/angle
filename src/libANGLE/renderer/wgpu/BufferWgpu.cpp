@@ -103,8 +103,10 @@ angle::Result BufferWgpu::setData(const gl::Context *context,
     {
         ASSERT(mBuffer.canMapForWrite());
 
-        if (!mBuffer.getMappedState().has_value())
+        // [WR-31] Remap if the existing mapping does not cover this range.
+        if (!mBuffer.coversMapRange(0, size))
         {
+            ANGLE_TRY(mBuffer.unmap());
             ANGLE_TRY(mBuffer.mapImmediate(contextWgpu, WGPUMapMode_Write, 0, size));
         }
 
@@ -127,8 +129,11 @@ angle::Result BufferWgpu::setSubData(const gl::Context *context,
     ASSERT(mBuffer.valid());
     if (mBuffer.canMapForWrite())
     {
-        if (!mBuffer.getMappedState().has_value())
+        // [WR-31] The mapping is created for the range of the first write. Later writes to a different
+        // range need a new mapping that covers them.
+        if (!mBuffer.coversMapRange(offset, size))
         {
+            ANGLE_TRY(mBuffer.unmap());
             ANGLE_TRY(mBuffer.mapImmediate(contextWgpu, WGPUMapMode_Write, offset, size));
         }
 

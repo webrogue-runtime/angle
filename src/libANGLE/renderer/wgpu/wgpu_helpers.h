@@ -270,6 +270,11 @@ class BufferHelper : public angle::NonCopyable
     bool canMapForRead() const;
     bool canMapForWrite() const;
 
+    // [WR-31] True if the buffer is currently mapped for writing and the mapping covers the range that
+    // getMapWritePointer() would ask for. The mapped range is aligned, so the check is done on the
+    // aligned range.
+    bool coversMapRange(size_t offset, size_t size) const;
+
     bool isMappedForRead() const;
     bool isMappedForWrite() const;
 

@@ -138,6 +138,7 @@ bool IsWgpuError(WGPUMapAsyncStatus mapAsyncStatus)
     return mapAsyncStatus != WGPUMapAsyncStatus_Success;
 }
 
+// [WR-22] Honour WGPU_STRLEN; passing it to std::string's length would throw.
 std::string WgpuStringViewToString(WGPUStringView view)
 {
     if (view.data == nullptr)
@@ -314,8 +315,6 @@ void GenerateCaps(const WGPULimits &limitsWgpu,
     glCaps->maxServerWaitTimeout   = 0;
 
     glCaps->maxVertexAttribRelativeOffset = (1u << kAttributeOffsetMaxBits) - 1;
-    glCaps->maxVertexAttribBindings =
-        rx::LimitToInt(std::min(limitsWgpu.maxVertexBuffers, limitsWgpu.maxVertexAttributes));
     glCaps->maxVertexAttribStride =
         rx::LimitToInt(std::min(limitsWgpu.maxVertexBufferArrayStride,
                                 static_cast<uint32_t>(std::numeric_limits<uint16_t>::max())));
@@ -369,10 +368,20 @@ void GenerateCaps(const WGPULimits &limitsWgpu,
 
     const GLint maxVaryingComponents = rx::LimitToInt(limitsWgpu.maxInterStageShaderVariables * 4);
 
+    // [WR-29] Attribute indices are limited by maxVertexAttributes; the backend
+    // packs the enabled attributes into the available vertex buffers.
     glCaps->maxVertexAttributes = rx::LimitToInt(
-        limitsWgpu.maxVertexBuffers);  // WebGPU has maxVertexBuffers and maxVertexAttributes but
-                                       // since each vertex attribute can use a unique buffer, we
-                                       // are limited by the total number of vertex buffers
+        limitsWgpu.maxVertexAttributes);  // WebGPU has maxVertexBuffers and maxVertexAttributes but
+                                          // since each vertex attribute can use a unique buffer, we
+                                          // are limited by the total number of vertex buffers. The
+                                          // number of attributes that can be enabled at the same
+                                          // time is maxVertexBuffers, but attribute indices are not
+                                          // restricted to that range: the pipeline packs the enabled
+                                          // attributes into the available buffers.
+    // The backend packs enabled attributes into WebGPU vertex buffer slots, so the GL-level binding
+    // count is not limited by maxVertexBuffers.  ANGLE's core requires
+    // maxVertexAttribBindings >= maxVertexAttributes.
+    glCaps->maxVertexAttribBindings = glCaps->maxVertexAttributes;
     glCaps->maxVertexUniformVectors =
         maxUniformVectors;  // Uniforms are implemented using a uniform buffer, so the max number of
                             // uniforms we can support is the max buffer range divided by the size
@@ -526,6 +535,7 @@ angle::Result ErrorScope::PopScope(ContextWgpu *context,
         {
             ASSERT(ctx->file);
             ASSERT(ctx->function);
+            // [WR-22] Decode with WGPUStringViewToString (WGPU_STRLEN aware).
             std::string msgStr = WgpuStringViewToString(message);
             ctx->context->handleError(GL_INVALID_OPERATION, msgStr.c_str(), ctx->file,
                                       ctx->function, ctx->line);
@@ -533,6 +543,7 @@ angle::Result ErrorScope::PopScope(ContextWgpu *context,
         }
         else
         {
+            // [WR-22] Decode with WgpuStringViewToString (WGPU_STRLEN aware).
             ERR() << "Unhandled WebGPU error: " << WgpuStringViewToString(message);
         }
     };

@@ -209,6 +209,7 @@ if (angle_use_wayland) {
 }
 
 if (is_wasi) {
+  # [WR-09] Vulkan WebRogue display and window surface.
   vulkan_backend_sources += [
     "webrogue/DisplayVkWebrogue.cpp",
     "webrogue/DisplayVkWebrogue.h",

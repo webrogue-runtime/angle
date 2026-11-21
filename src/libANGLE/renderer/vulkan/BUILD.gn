@@ -147,6 +147,7 @@ template("angle_vulkan_backend_template") {
       deps += [ "$angle_root:angle_version_info" ]
     }
 
+    # [WR-08] Initialise so the WASI include path below can be appended.
     include_dirs = []
     # OpenCL on ANGLE needs both spirv-tools and clspv for compiler
     if (angle_enable_cl) {
@@ -208,6 +209,7 @@ template("angle_vulkan_backend_template") {
     }
 
     if (is_wasi) {
+      # [WR-08] WebRogue host API (window id, physical size, Vulkan surface).
       include_dirs += [
         "//third_party/libwr4c/include",
       ]

@@ -194,7 +194,10 @@ void ContextWgpu::setVertexAttribute(size_t attribIndex, webgpu::PackedVertexAtt
 
 void ContextWgpu::invalidateVertexBuffer(size_t slot)
 {
-    if (mCurrentRenderPipelineAllAttributes[slot])
+    // [WR-29] Invalidate based on the attributes present in the pipeline, not on
+    // the program's active attributes.
+    const gl::AttributesMask attributeMask = mRenderPipelineDesc.getEnabledAttributeMask();
+    if (attributeMask[slot])
     {
         mDirtyBits.set(DIRTY_BIT_VERTEX_BUFFERS);
         mDirtyVertexBuffers.set(slot);
@@ -204,7 +207,8 @@ void ContextWgpu::invalidateVertexBuffer(size_t slot)
 void ContextWgpu::invalidateVertexBuffers()
 {
     mDirtyBits.set(DIRTY_BIT_VERTEX_BUFFERS);
-    mDirtyVertexBuffers = mCurrentRenderPipelineAllAttributes;
+    // [WR-29] Same mask as above; every pipeline attribute needs a buffer.
+    mDirtyVertexBuffers = mRenderPipelineDesc.getEnabledAttributeMask();
 }
 
 void ContextWgpu::invalidateIndexBuffer()
@@ -651,6 +655,12 @@ angle::Result ContextWgpu::syncState(const gl::Context *context,
                 setColorAttachmentFormats(framebufferWgpu->getCurrentColorAttachmentFormats());
                 setDepthStencilFormat(framebufferWgpu->getCurrentDepthStencilAttachmentFormat());
 
+                // [WR-28] The front face depends on whether the draw framebuffer applies the y-flip,
+                // so it has to be recomputed for the new draw framebuffer.
+                mRenderPipelineDesc.setFrontFace(mState.getRasterizerState().frontFace,
+                                                 framebufferWgpu->flipY());
+                invalidateCurrentRenderPipeline();
+
                 // May modify framebuffer size, so invalidate driver uniforms which contain the
                 // framebuffer size.
                 invalidateDriverUniforms();
@@ -853,9 +863,15 @@ angle::Result ContextWgpu::syncState(const gl::Context *context,
                 invalidateCurrentRenderPipeline();
                 break;
             case gl::state::DIRTY_BIT_FRONT_FACE:
-                mRenderPipelineDesc.setFrontFace(glState.getRasterizerState().frontFace);
+            {
+                // [WR-28] Recompute the WebGPU front face using the draw framebuffer's y-flip.
+                const FramebufferWgpu *drawFramebufferWgpu =
+                    webgpu::GetImpl(mState.getDrawFramebuffer());
+                mRenderPipelineDesc.setFrontFace(glState.getRasterizerState().frontFace,
+                                                 drawFramebufferWgpu->flipY());
                 invalidateCurrentRenderPipeline();
                 break;
+            }
             case gl::state::DIRTY_BIT_POLYGON_OFFSET_FILL_ENABLED:
                 break;
             case gl::state::DIRTY_BIT_POLYGON_OFFSET:
@@ -1354,14 +1370,37 @@ angle::Result ContextWgpu::handleDirtyRenderPipelineDesc(DirtyBits::Iterator *di
     ProgramExecutableWgpu *executable = webgpu::GetImpl(mState.getProgramExecutable());
     ASSERT(executable);
 
+    // [WR-30] Make sure every attribute the program reads is part of the pipeline.
+    // Disabled attributes are normally handled by the vertex array's sync
+    // path, but the program's active attribute set can change without a
+    // vertex array dirty bit.
+    VertexArrayWgpu *vertexArrayWgpu = GetImplAs<VertexArrayWgpu>(mState.getVertexArray());
+    const gl::AttributesMask activeMask =
+        executable->getExecutable()->getActiveAttribLocationsMask();
+    const gl::AttributesMask pipelineMask = mRenderPipelineDesc.getEnabledAttributeMask();
+    for (size_t slot : activeMask)
+    {
+        if (!pipelineMask[slot] && !mState.getVertexArray()->getVertexAttribute(slot).enabled)
+        {
+            ANGLE_TRY(vertexArrayWgpu->ensureDefaultAttrib(this, slot));
+        }
+    }
+
     webgpu::RenderPipelineHandle previousPipeline = std::move(mCurrentGraphicsPipeline);
     ANGLE_TRY(executable->getRenderPipeline(this, mRenderPipelineDesc, &mCurrentGraphicsPipeline));
     if (mCurrentGraphicsPipeline != previousPipeline)
     {
         dirtyBitsIterator->setLaterBit(DIRTY_BIT_RENDER_PIPELINE_BINDING);
     }
-    mCurrentRenderPipelineAllAttributes =
-        executable->getExecutable()->getActiveAttribLocationsMask();
+    // [WR-29] Every attribute in the pipeline's vertex state needs a vertex buffer
+    // bound, including disabled attributes emulated with a default buffer.
+    const gl::AttributesMask attributeMask = mRenderPipelineDesc.getEnabledAttributeMask();
+    if (attributeMask != mCurrentRenderPipelineAllAttributes)
+    {
+        mCurrentRenderPipelineAllAttributes = attributeMask;
+        mDirtyVertexBuffers |= attributeMask;
+        dirtyBitsIterator->setLaterBit(DIRTY_BIT_VERTEX_BUFFERS);
+    }
 
     return angle::Result::Continue;
 }
@@ -1498,7 +1537,8 @@ angle::Result ContextWgpu::handleDirtyRenderPass(DirtyBits::Iterator *dirtyBitsI
     FramebufferWgpu *drawFramebufferWgpu = webgpu::GetImpl(mState.getDrawFramebuffer());
     ANGLE_TRY(drawFramebufferWgpu->startNewRenderPass(this));
     dirtyBitsIterator->setLaterBits(mNewRenderPassDirtyBits);
-    mDirtyVertexBuffers = mCurrentRenderPipelineAllAttributes;
+    // [WR-29] Re-bind every pipeline attribute's buffer in the new render pass.
+    mDirtyVertexBuffers = mRenderPipelineDesc.getEnabledAttributeMask();
     return angle::Result::Continue;
 }
 
@@ -1508,11 +1548,17 @@ angle::Result ContextWgpu::handleDirtyVertexBuffers(const gl::AttributesMask &sl
     VertexArrayWgpu *vertexArrayWgpu = GetImplAs<VertexArrayWgpu>(mState.getVertexArray());
     for (size_t slot : slots)
     {
-        const VertexBufferWithOffset &buffer = vertexArrayWgpu->getVertexBuffer(slot);
+        VertexBufferWithOffset buffer = vertexArrayWgpu->getVertexBuffer(slot);
         if (!buffer.buffer)
         {
-            // Missing default attribute support
-            ASSERT(!mState.getVertexArray()->getVertexAttribute(slot).enabled);
+            // [WR-30] A disabled attribute that the shader still reads. WebGPU has no
+            // current-value attributes, so emulate the GL generic value with
+            // a one-element vertex buffer.
+            ANGLE_TRY(vertexArrayWgpu->ensureDefaultAttrib(this, slot));
+            buffer = vertexArrayWgpu->getVertexBuffer(slot);
+        }
+        if (!buffer.buffer)
+        {
             UNIMPLEMENTED();
             continue;
         }
@@ -1520,8 +1566,10 @@ angle::Result ContextWgpu::handleDirtyVertexBuffers(const gl::AttributesMask &sl
         {
             ANGLE_TRY(buffer.buffer->unmap());
         }
-        mCommandBuffer.setVertexBuffer(static_cast<uint32_t>(slot), buffer.buffer->getBuffer(),
-                                       buffer.offset, WGPU_WHOLE_SIZE);
+        // [WR-29] Bind to the compacted WebGPU slot, not the GL attribute index.
+        mCommandBuffer.setVertexBuffer(
+            static_cast<uint32_t>(mRenderPipelineDesc.getVertexBufferSlot(slot)),
+            buffer.buffer->getBuffer(), buffer.offset, WGPU_WHOLE_SIZE);
     }
     return angle::Result::Continue;
 }

@@ -59,6 +59,7 @@ DisplayImpl *CreateVulkanMacDisplay(const egl::DisplayState &state);
 #endif  // defined(ANGLE_PLATFORM_APPLE)
 
 #if defined(ANGLE_PLATFORM_WEBROGUE)
+// [WR-17] Vulkan WebRogue display factory declarations.
 bool IsVulkanWebrogueDisplayAvailable();
 DisplayImpl *CreateVulkanWebrogueDisplay(const egl::DisplayState &state);
 #endif  // defined(ANGLE_PLATFORM_WEBROGUE)

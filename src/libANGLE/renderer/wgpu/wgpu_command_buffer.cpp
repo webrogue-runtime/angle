@@ -5,6 +5,8 @@
 //
 
 #include "libANGLE/renderer/wgpu/wgpu_command_buffer.h"
+// [WR-34] ANGLE_LOG is declared in common/debug.h; WASI does not include it transitively.
+#include "common/debug.h"
 #include "common/unsafe_buffers.h"
 
 namespace rx

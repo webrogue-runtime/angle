@@ -6,6 +6,8 @@
 // WindowSurfaceWgpuWebrogue.cpp:
 //    Implements the class methods for WindowSurfaceWgpuWebrogue.
 //
+// [WR-24] WebGPU window surface backed by libwr4c (WR-25).
+//
 
 #include "libANGLE/renderer/wgpu/webrogue/WindowSurfaceWgpuWebrogue.h"
 

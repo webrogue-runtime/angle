@@ -6,6 +6,7 @@
 
 #include "compiler/translator/wgsl/RewritePipelineVariables.h"
 
+// [WR-13] WASI libc++ does not include <iostream> transitively for std::cout.
 #include <iostream>
 #include <string>
 #include <utility>

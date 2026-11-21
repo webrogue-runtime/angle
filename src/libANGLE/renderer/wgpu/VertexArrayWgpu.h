@@ -55,6 +55,12 @@ class VertexArrayWgpu : public VertexArrayImpl
     }
     webgpu::BufferHelper *getIndexBuffer() const { return mCurrentIndexBuffer; }
 
+    // [WR-30] Uploads the current generic value of a disabled attribute into a
+    // one-element buffer and makes it the attribute's vertex buffer. WebGPU
+    // has no "current value" attributes, so shaders that read an attribute
+    // which the application disabled need this.
+    angle::Result ensureDefaultAttrib(ContextWgpu *contextWgpu, size_t attribIndex);
+
     angle::Result syncClientArrays(const gl::Context *context,
                                    const gl::AttributesMask &activeAttributesMask,
                                    gl::PrimitiveMode mode,
@@ -147,6 +153,8 @@ class VertexArrayWgpu : public VertexArrayImpl
 
     gl::AttribArray<webgpu::PackedVertexAttribute> mCurrentAttribs;
     gl::AttribArray<webgpu::BufferHelper> mStreamingArrayBuffers;
+    // [WR-30] Constant buffers for disabled attributes read by the shader.
+    gl::AttribArray<webgpu::BufferHelper> mDefaultArrayBuffers;
     gl::AttribArray<VertexBufferWithOffset> mCurrentArrayBuffers;
 
     // Attributes that need to be streamed due to incompatibilities

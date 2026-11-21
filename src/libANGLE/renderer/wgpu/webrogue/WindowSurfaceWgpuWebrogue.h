@@ -7,6 +7,8 @@
 //    Defines the class interface for WindowSurfaceWgpuWebrogue, implementing
 //    WindowSurfaceWgpu for Webrogue windows.
 //
+// [WR-24] WebGPU window surface backed by libwr4c (WR-25).
+//
 
 #ifndef LIBANGLE_RENDERER_WGPU_WEBROGUE_WINDOWSURFACEWGPUWEBROGUE_H_
 #define LIBANGLE_RENDERER_WGPU_WEBROGUE_WINDOWSURFACEWGPUWEBROGUE_H_

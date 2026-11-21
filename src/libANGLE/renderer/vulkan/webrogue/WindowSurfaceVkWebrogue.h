@@ -6,6 +6,8 @@
 // WindowSurfaceVkWebrogue.h:
 //    Defines the class interface for WindowSurfaceVkWebrogue, implementing WindowSurfaceVk.
 //
+// [WR-15] Vulkan WebRogue window surface backed by VK_WEBROGUE_surface.
+//
 
 #ifndef LIBANGLE_RENDERER_VULKAN_WEBROGUE_WINDOWSURFACEVKWEBROGUE_H_
 #define LIBANGLE_RENDERER_VULKAN_WEBROGUE_WINDOWSURFACEVKWEBROGUE_H_

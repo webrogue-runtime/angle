@@ -3,6 +3,10 @@
 # found in the LICENSE file.
 #
 # This file houses the build configuration for the ANGLE Wgpu back-end.
+#
+# [WR-18] On WASI the backend does not use a Dawn checkout: the
+# dawn_features.gni import and the angle_dawn_dir assert are omitted, and
+# libwr4c supplies the headers and process table instead.
 
 import("../../../../gni/angle.gni")
 import("wgpu_sources.gni")
@@ -29,7 +33,7 @@ angle_source_set("angle_wgpu_backend") {
   ]
 
   if (is_wasi) {
-    # Webrogue supplies the Dawn-compatible headers, the DawnProcTable and the
+    # [WR-18] Webrogue supplies the Dawn-compatible headers, the DawnProcTable and the
     # WebGPU C API through libwr4c instead of a Dawn checkout.
     include_dirs = [ "//third_party/libwr4c/include" ]
   } else {

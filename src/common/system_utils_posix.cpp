@@ -6,6 +6,10 @@
 
 // system_utils_posix.cpp: Implementation of POSIX OS-specific functions.
 
+// [WR-05] WASI has no dynamic loading, working-directory access, process CPU
+// accounting, temporary files, memory protection or page-fault handlers. Every
+// `__wasi__` guard in this file stubs out one of those POSIX APIs.
+
 #include "common/debug.h"
 #include "common/unsafe_buffers.h"
 #include "system_utils.h"

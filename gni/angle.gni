@@ -154,7 +154,8 @@ declare_args() {
     angle_64bit_current_cpu = true
   } else if (current_cpu == "arm" || current_cpu == "x86" ||
              current_cpu == "mipsel" || current_cpu == "s390" ||
-             current_cpu == "ppc" || current_cpu == "loong32" || 
+             current_cpu == "ppc" || current_cpu == "loong32" ||
+             # [WR-01] wasm32 is a 32-bit target.
              current_cpu == "wasm32") {
     angle_64bit_current_cpu = false
   } else {
@@ -345,6 +346,7 @@ if (!defined(checkout_angle_mesa)) {
 declare_args() {
   # Currently SwiftShader's Vulkan front-end doesn't build on Android.
   # Disabled by default on MSVC because of compiler warnings/errors.
+  # [WR-01] SwiftShader needs a native Vulkan/CPU stack; disable it on WASI.
   angle_enable_swiftshader = angle_enable_vulkan && !is_android && !is_wasi && is_clang
 
   # Translator backend support:
@@ -355,6 +357,7 @@ declare_args() {
   angle_enable_trace = false
   angle_enable_trace_android_logcat = false
   angle_enable_trace_events = false
+  # [WR-01] The Perfetto client is not built for WASI.
   angle_enable_perfetto = defined(angle_perfetto_cpp_dir) && angle_has_build &&
                           (build_with_chromium || is_clang) && !is_wasi
   angle_dump_pipeline_cache_graph = false

@@ -7,6 +7,9 @@
 //
 // wgpu_format_table_autogen.cpp:
 //   Queries for full WebGPU format information based on GL format.
+//
+// [WR-26] Hand-edited: A8/L8/L8A8 map to R8G8B8A8_UNORM (no swizzle in WebGPU).
+// Keep in sync with wgpu_format_map.json.
 
 #include "libANGLE/renderer/wgpu/wgpu_format_utils.h"
 
@@ -105,7 +108,7 @@ void Format::initialize(const angle::Format &angleFormat)
 
         case angle::FormatID::A8_UNORM:
             mIntendedGLFormat         = GL_ALPHA8_EXT;
-            mActualImageFormatID      = angle::FormatID::R8_UNORM;
+            mActualImageFormatID      = angle::FormatID::R8G8B8A8_UNORM;
             mImageInitializerFunction = nullptr;
             mIsRenderable             = true;
 
@@ -963,7 +966,7 @@ void Format::initialize(const angle::Format &angleFormat)
 
         case angle::FormatID::L8A8_UNORM:
             mIntendedGLFormat         = GL_LUMINANCE8_ALPHA8_EXT;
-            mActualImageFormatID      = angle::FormatID::R8G8_UNORM;
+            mActualImageFormatID      = angle::FormatID::R8G8B8A8_UNORM;
             mImageInitializerFunction = nullptr;
             mIsRenderable             = true;
 
@@ -971,7 +974,7 @@ void Format::initialize(const angle::Format &angleFormat)
 
         case angle::FormatID::L8_UNORM:
             mIntendedGLFormat         = GL_LUMINANCE8_EXT;
-            mActualImageFormatID      = angle::FormatID::R8_UNORM;
+            mActualImageFormatID      = angle::FormatID::R8G8B8A8_UNORM;
             mImageInitializerFunction = nullptr;
             mIsRenderable             = true;
 

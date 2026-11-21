@@ -181,7 +181,7 @@
         "image": "R32_FLOAT"
         },
       "A8_UNORM": {
-        "image": "R8_UNORM"
+        "image": "R8G8B8A8_UNORM"
         },
       "ASTC_10x10_SRGB_BLOCK": {
         "image": "R8G8B8A8_UNORM_SRGB"
@@ -309,10 +309,10 @@
         "image": "R32G32_FLOAT"
         },
       "L8_UNORM": {
-        "image": "R8_UNORM"
+        "image": "R8G8B8A8_UNORM"
         },
       "L8A8_UNORM": {
-        "image": "R8G8_UNORM"
+        "image": "R8G8B8A8_UNORM"
         },
       "PALETTE4_R4G4B4A4_UNORM": {
         "image": "R8G8B8A8_UNORM"

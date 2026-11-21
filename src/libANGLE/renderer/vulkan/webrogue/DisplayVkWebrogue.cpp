@@ -6,6 +6,8 @@
 // DisplayVkWebrogue.cpp:
 //    Implements the class methods for DisplayVkWebrogue.
 //
+// [WR-14] Vulkan WebRogue display; see DisplayVkWebrogue.h.
+//
 
 #ifdef UNSAFE_BUFFERS_BUILD
 #    pragma allow_unsafe_buffers

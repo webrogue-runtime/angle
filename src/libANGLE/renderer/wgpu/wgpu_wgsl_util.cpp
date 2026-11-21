@@ -6,6 +6,7 @@
 
 #include "libANGLE/renderer/wgpu/wgpu_wgsl_util.h"
 
+// [WR-13] WASI libc++ does not include <iostream> transitively for std::cout.
 #include <iostream>
 #include <sstream>
 #include <string>

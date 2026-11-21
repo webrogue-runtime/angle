@@ -223,11 +223,14 @@ egl::Error WindowSurfaceWgpu::initialize(const egl::ThreadSafeDisplay *display)
 
 void WindowSurfaceWgpu::destroy(const egl::ThreadSafeDisplay *display)
 {
-    mSurface   = nullptr;
+    // [WR-32] Release the surface textures before dropping the surface. wgpu-hal
+    // panics if a swapchain is destroyed while a SurfaceTexture that holds one
+    // of its acquire semaphores is still alive.
     mColorAttachment.renderTarget.reset();
     mColorAttachment.texture.resetImage();
     mDepthStencilAttachment.renderTarget.reset();
     mDepthStencilAttachment.texture.resetImage();
+    mSurface = nullptr;
 }
 
 egl::Error WindowSurfaceWgpu::swap(const gl::Context *context, SurfaceSwapFeedback *feedback)
@@ -261,8 +264,8 @@ gl::Extents WindowSurfaceWgpu::getSize() const
 
 EGLint WindowSurfaceWgpu::getSwapBehavior() const
 {
-    UNIMPLEMENTED();
-    return 0;
+    // [WR-33] WebGPU surface contents are not preserved across presentation.
+    return EGL_BUFFER_DESTROYED;
 }
 
 angle::Result WindowSurfaceWgpu::initializeContents(const gl::Context *context,
@@ -395,6 +398,14 @@ angle::Result WindowSurfaceWgpu::configureSurface(const egl::Display *display,
     webgpu::DeviceHandle device = displayWgpu->getDevice();
 
     ASSERT(mSurfaceTextureFormat != nullptr);
+
+    // [WR-32] `surfaceConfigure` recreates the swapchain, so release the surface
+    // texture acquired from the previous configuration first. It holds a
+    // swapchain acquire semaphore that must not outlive the swapchain.
+    mColorAttachment.renderTarget.reset();
+    mColorAttachment.texture.resetImage();
+    mDepthStencilAttachment.renderTarget.reset();
+    mDepthStencilAttachment.texture.resetImage();
 
     WGPUSurfaceConfiguration surfaceConfig   = WGPU_SURFACE_CONFIGURATION_INIT;
     surfaceConfig.device                     = device.get();

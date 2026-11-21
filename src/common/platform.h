@@ -28,6 +28,7 @@
     defined(__QNX__) || defined(__Fuchsia__) || defined(__HAIKU__)
 #    define ANGLE_PLATFORM_POSIX 1
 #elif defined(__wasi__)
+// [WR-03] WASI provides a POSIX surface; also identify the WebRogue platform.
 #    define ANGLE_PLATFORM_POSIX 1
 #    define ANGLE_PLATFORM_WEBROGUE 1
 #else

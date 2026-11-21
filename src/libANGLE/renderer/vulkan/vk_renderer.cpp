@@ -2580,6 +2580,7 @@ angle::Result Renderer::enableInstanceExtensions(vk::ErrorContext *context,
 }
 
 #if defined(__wasi__)
+// [WR-10] No libvulkan to dlopen on WASI; use the host-provided ICD entry point.
 extern "C" PFN_vkVoidFunction vk_icdGetInstanceProcAddr(
     VkInstance                                  instance,
     const char*                                 pName
@@ -2614,6 +2615,7 @@ angle::Result Renderer::initialize(vk::ErrorContext *context,
     {
         ANGLE_SCOPED_DISABLE_MSAN();
 #ifdef __wasi__
+        // [WR-10] Use the ICD entry point directly instead of loading libvulkan.
         PFN_vkGetInstanceProcAddr vulkanLoaderGetInstanceProcAddr = vk_icdGetInstanceProcAddr;
 #else
         mLibVulkanLibrary = angle::vk::OpenLibVulkan();

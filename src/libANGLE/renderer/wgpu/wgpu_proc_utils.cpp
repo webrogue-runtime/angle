@@ -9,6 +9,8 @@
 // On Webrogue the table is supplied by libwr4c, which implements the standard
 // WebGPU C API on top of the wasi:webgpu interface.
 //
+// [WR-20] Replaces dawn::native::GetProcs() with wr4c_get_dawn_proc_table().
+//
 
 #include "libANGLE/renderer/wgpu/wgpu_proc_utils.h"
 
